@@ -1,0 +1,40 @@
+[package]
+name = "daidori-manager-tauri"
+version = "0.1.0"
+description = "漫画の台割管理・入稿データ生成ツール"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "daidori_manager_tauri_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 画像処理
+image = { version = "0.25", features = ["jpeg", "png", "tiff"] }
+psd = "0.3"
+
+# ファイル操作
+walkdir = "2"
+md5 = "0.7"
+dirs = "5"
+natord = "1.0"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+
+# 非同期処理
+tokio = { version = "1", features = ["full"] }
+
+# エラーハンドリング
+thiserror = "1"
+anyhow = "1"
