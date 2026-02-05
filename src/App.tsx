@@ -1755,7 +1755,7 @@ function App() {
     } else if (pendingAction === 'open' && pendingOpenPath) {
       await handleOpenProject(pendingOpenPath);
     } else if (pendingAction === 'close') {
-      await getCurrentWindow().close();
+      await getCurrentWindow().destroy();
     }
 
     setPendingAction(null);
