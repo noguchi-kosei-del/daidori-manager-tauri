@@ -40,6 +40,16 @@ import {
   FileValidationResult,
   RecentFile,
 } from './types';
+import {
+  FileIcon,
+  FolderIcon,
+  PlusIcon,
+  BookOpenIcon,
+  AlertTriangleIcon,
+  BooksIcon,
+  SunIcon,
+  MoonIcon,
+} from './icons';
 
 // サムネイル生成キュー（並列処理版）
 const thumbnailQueue: { pageId: string; filePath: string; modifiedTime: number }[] = [];
@@ -433,9 +443,9 @@ function ThumbnailCard({
         {renderThumbnail()}
       </div>
       <div className="thumbnail-info">
-        <span className="thumbnail-number">{globalIndex + 1}</span>
+        <span className="thumbnail-number">{globalIndex + 1}P</span>
         <span className="thumbnail-filename" title={displayName}>
-          {displayName}
+          {displayName.length > 15 ? displayName.slice(0, 15) + '…' : displayName}
         </span>
       </div>
     </div>
@@ -484,7 +494,7 @@ function DragOverlayThumbnail({
         )}
       </div>
       <div className="thumbnail-info">
-        <span className="thumbnail-filename">{displayName}</span>
+        <span className="thumbnail-filename">{displayName.length > 15 ? displayName.slice(0, 15) + '…' : displayName}</span>
       </div>
     </div>
   );
@@ -507,7 +517,7 @@ function DragOverlaySidebarItem({ page }: { page: Page }) {
           {PAGE_TYPE_LABELS[page.pageType]}
         </span>
       ) : (
-        <span className="sidebar-drag-icon">📄</span>
+        <span className="sidebar-drag-icon"><FileIcon size={14} /></span>
       )}
       <span className="sidebar-drag-name">{displayName}</span>
     </div>
@@ -560,7 +570,7 @@ function NewChapterDropZone({ isActive, isDragging, position = 'end' }: { isActi
       className={`new-chapter-drop-zone ${position} ${isActive || isOver ? 'active' : ''}`}
     >
       <div className="new-chapter-drop-content">
-        <span className="new-chapter-icon">➕</span>
+        <span className="new-chapter-icon"><PlusIcon size={16} /></span>
         <span className="new-chapter-text">
           {position === 'start' ? '先頭に新しいチャプターを作成' : 'ここにドロップで新しいチャプターを作成'}
         </span>
@@ -582,7 +592,7 @@ function SidebarNewChapterDropZone({ isDragging, position = 'end' }: { isDraggin
       ref={setNodeRef}
       className={`sidebar-new-chapter-zone ${position} ${isOver ? 'active' : ''}`}
     >
-      <span className="sidebar-new-chapter-icon">➕</span>
+      <span className="sidebar-new-chapter-icon"><PlusIcon size={14} /></span>
       <span className="sidebar-new-chapter-text">
         {position === 'start' ? '先頭にチャプターを作成' : '新しいチャプターを作成'}
       </span>
@@ -698,7 +708,7 @@ function SortablePageItem({
                   onPointerDown={(e) => e.stopPropagation()}
                   title={hasFile ? 'ファイルを変更' : 'ファイルを選択'}
                 >
-                  📁
+                  <FolderIcon size={12} />
                 </button>
               )}
               <button
@@ -893,7 +903,7 @@ function ChapterItem({
                       setShowAddMenu(false);
                     }}
                   >
-                    📄 ファイルを選択
+                    <FileIcon size={14} /> ファイルを選択
                   </button>
                   <button
                     onClick={(e) => {
@@ -902,7 +912,7 @@ function ChapterItem({
                       setShowAddMenu(false);
                     }}
                   >
-                    📁 フォルダを選択
+                    <FolderIcon size={14} /> フォルダを選択
                   </button>
                 </div>
               </>
@@ -1437,12 +1447,20 @@ function App() {
     markAsSaved,
     resetProject,
     loadProjectState,
+    setProjectName,
   } = useStore();
 
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeDragType, setActiveDragType] = useState<'chapter' | 'page' | null>(null);
   const [previewMode, setPreviewMode] = useState<'grid' | 'spread'>('grid');
+  const [isToolbarCollapsed, setIsToolbarCollapsed] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    // 初期状態をlocalStorageから復元（デフォルトはダークモード）
+    const saved = localStorage.getItem('daidori_dark_mode');
+    return saved !== 'false'; // 明示的にfalseでない限りダークモード
+  });
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   // サイドバーD&D用のドロップターゲット
   const [dropTarget, setDropTarget] = useState<{
@@ -1458,6 +1476,11 @@ function App() {
   // プレビューエリアのチャプター折りたたみ状態（チャプターID -> 折りたたみ状態）
   const [previewCollapsedChapters, setPreviewCollapsedChapters] = useState<Set<string>>(new Set());
 
+  // プロジェクト名編集
+  const [isEditingProjectName, setIsEditingProjectName] = useState(false);
+  const [editingProjectName, setEditingProjectName] = useState('');
+  const projectNameInputRef = useRef<HTMLInputElement>(null);
+
   // プレビューエリアのチャプター折りたたみをトグル
   const togglePreviewChapterCollapse = (chapterId: string) => {
     setPreviewCollapsedChapters(prev => {
@@ -1471,6 +1494,35 @@ function App() {
     });
   };
 
+  // プロジェクト名編集の開始
+  const startEditingProjectName = () => {
+    setEditingProjectName(projectName);
+    setIsEditingProjectName(true);
+    setIsProjectMenuOpen(false);
+  };
+
+  // プロジェクト名編集の確定
+  const confirmProjectNameEdit = () => {
+    const trimmedName = editingProjectName.trim();
+    if (trimmedName && trimmedName !== projectName) {
+      setProjectName(trimmedName);
+    }
+    setIsEditingProjectName(false);
+  };
+
+  // プロジェクト名編集のキャンセル
+  const cancelProjectNameEdit = () => {
+    setIsEditingProjectName(false);
+  };
+
+  // プロジェクト名編集時にinputにフォーカス
+  useEffect(() => {
+    if (isEditingProjectName && projectNameInputRef.current) {
+      projectNameInputRef.current.focus();
+      projectNameInputRef.current.select();
+    }
+  }, [isEditingProjectName]);
+
   // プロジェクト関連のstate
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
   const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
@@ -1480,6 +1532,12 @@ function App() {
   const [missingFiles, setMissingFiles] = useState<FileValidationResult[]>([]);
   const [showMissingFilesDialog, setShowMissingFilesDialog] = useState(false);
   const projectMenuRef = useRef<HTMLDivElement>(null);
+  const isModifiedRef = useRef(isModified);
+
+  // isModifiedRefを常に最新に保つ
+  useEffect(() => {
+    isModifiedRef.current = isModified;
+  }, [isModified]);
 
   // chaptersからallPagesを計算（リアクティブに更新される）
   const allPages = useMemo(() => {
@@ -1714,24 +1772,57 @@ function App() {
     loadRecentFiles();
   }, []);
 
-  // ウィンドウ終了ハンドラ
+  // ダークモード切替の適用
   useEffect(() => {
+    if (isDarkMode) {
+      document.body.classList.remove('light-mode');
+    } else {
+      document.body.classList.add('light-mode');
+    }
+    localStorage.setItem('daidori_dark_mode', isDarkMode ? 'true' : 'false');
+  }, [isDarkMode]);
+
+  // ダークモードトグル
+  const toggleDarkMode = () => {
+    setIsDarkMode(!isDarkMode);
+  };
+
+  // ウィンドウ終了ハンドラ（一度だけ登録、isModifiedはrefで参照）
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let isMounted = true;
+
     const setupCloseHandler = async () => {
-      const unlisten = await getCurrentWindow().onCloseRequested(async (event) => {
-        if (isModified) {
+      console.log('Setting up close handler...');
+      const appWindow = getCurrentWindow();
+      unlisten = await appWindow.onCloseRequested(async (event) => {
+        console.log('Close requested, isModified:', isModifiedRef.current);
+        if (isModifiedRef.current) {
+          console.log('Preventing close, showing dialog');
           event.preventDefault();
           setPendingAction('close');
           setShowUnsavedDialog(true);
+        } else {
+          console.log('Allowing close');
+          // 明示的にウィンドウを閉じる
+          await appWindow.destroy();
         }
       });
-      return unlisten;
+      if (isMounted) {
+        console.log('Close handler setup complete');
+      }
     };
 
-    const unlistenPromise = setupCloseHandler();
+    setupCloseHandler();
+
     return () => {
-      unlistenPromise.then(unlisten => unlisten());
+      isMounted = false;
+      console.log('Cleaning up close handler');
+      if (unlisten) {
+        unlisten();
+      }
     };
-  }, [isModified]);
+  }, []); // 空の依存配列で一度だけ登録
 
   // プロジェクトメニューの外側クリックで閉じる
   useEffect(() => {
@@ -2664,71 +2755,16 @@ function App() {
       onDragEnd={handleDragEnd}
     >
       <div className="app">
-        <aside className="sidebar">
+        <aside className={`sidebar ${isSidebarCollapsed ? 'collapsed' : ''}`}>
           <div className="sidebar-header">
-            <div className="project-menu-container" ref={projectMenuRef}>
-              <button
-                className="project-menu-trigger"
-                onClick={() => setIsProjectMenuOpen(!isProjectMenuOpen)}
-              >
-                <span className="project-name-display">
-                  {isModified && <span className="modified-indicator">●</span>}
-                  {projectName}
-                </span>
-                <svg className="project-menu-chevron" width="12" height="12" viewBox="0 0 12 12">
-                  <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" fill="none"/>
-                </svg>
-              </button>
-
-              {isProjectMenuOpen && (
-                <div className="project-menu-dropdown">
-                  <button onClick={() => { handleNewProject(); setIsProjectMenuOpen(false); }}>
-                    <span>新規プロジェクト</span>
-                    <kbd>Ctrl+N</kbd>
-                  </button>
-                  <button onClick={() => {
-                    if (isModified) {
-                      setPendingAction('open');
-                      setShowUnsavedDialog(true);
-                    } else {
-                      handleOpenProject();
-                    }
-                    setIsProjectMenuOpen(false);
-                  }}>
-                    <span>開く...</span>
-                    <kbd>Ctrl+O</kbd>
-                  </button>
-                  {recentFiles.length > 0 && (
-                    <div className="project-menu-submenu">
-                      <button className="submenu-trigger">
-                        <span>最近使ったファイル</span>
-                        <svg width="12" height="12" viewBox="0 0 12 12">
-                          <path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" strokeWidth="1.5" fill="none"/>
-                        </svg>
-                      </button>
-                      <div className="submenu-content">
-                        {recentFiles.map(file => (
-                          <button key={file.path} onClick={() => handleOpenRecentFile(file.path)}>
-                            {file.name}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  <div className="project-menu-divider" />
-                  <button onClick={() => { handleSaveProject(); setIsProjectMenuOpen(false); }}>
-                    <span>保存</span>
-                    <kbd>Ctrl+S</kbd>
-                  </button>
-                  <button onClick={() => { handleSaveProject(true); setIsProjectMenuOpen(false); }}>
-                    <span>名前を付けて保存...</span>
-                    <kbd>Ctrl+Shift+S</kbd>
-                  </button>
-                </div>
-              )}
-            </div>
+            <button
+              className="sidebar-toggle-btn"
+              onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+              title={isSidebarCollapsed ? 'サイドバーを展開' : 'サイドバーを折り畳む'}
+            >
+              {isSidebarCollapsed ? '»' : '«'}
+            </button>
           </div>
-
           <div className="sidebar-content">
             <div className="chapter-actions-bar">
               <button
@@ -2814,71 +2850,178 @@ function App() {
         </aside>
 
         <main className="main-area">
-          <div className="toolbar">
-            {selectedPageIds.length > 1 ? (
-              <div className="selection-bar">
-                <span className="selection-count">{selectedPageIds.length}件選択中</span>
-                <button
-                  className="btn-secondary btn-small"
-                  onClick={clearPageSelection}
-                >
-                  選択解除
-                </button>
-                <button
-                  className="btn-primary btn-small btn-danger"
-                  onClick={removeSelectedPages}
-                >
-                  削除
-                </button>
-              </div>
-            ) : (
-              <div className="view-mode-toggle">
-                <button
-                  className={`view-mode-btn ${viewMode === 'all' ? 'active' : ''}`}
-                  onClick={() => setViewMode('all')}
-                >
-                  全体
-                </button>
-                <button
-                  className={`view-mode-btn ${viewMode === 'selection' ? 'active' : ''}`}
-                  onClick={() => setViewMode('selection')}
-                  disabled={!selectedChapterId}
-                >
-                  選択中
-                </button>
-              </div>
-            )}
+          <div className={`main-header ${isToolbarCollapsed ? 'collapsed' : ''}`}>
+            <div className="main-header-row">
+              <div className="project-menu-container" ref={projectMenuRef}>
+                {isEditingProjectName ? (
+                  <div className="project-name-edit">
+                    <input
+                      ref={projectNameInputRef}
+                      type="text"
+                      value={editingProjectName}
+                      onChange={(e) => setEditingProjectName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          confirmProjectNameEdit();
+                        } else if (e.key === 'Escape') {
+                          cancelProjectNameEdit();
+                        }
+                      }}
+                      onBlur={confirmProjectNameEdit}
+                      className="project-name-input"
+                    />
+                  </div>
+                ) : (
+                  <button
+                    className="project-menu-trigger"
+                    onClick={() => setIsProjectMenuOpen(!isProjectMenuOpen)}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      startEditingProjectName();
+                    }}
+                  >
+                    <span className="project-name-display">
+                      {isModified && <span className="modified-indicator">●</span>}
+                      {projectName}
+                    </span>
+                  </button>
+                )}
 
-            <div className="preview-mode-toggle">
-              <button
-                className={`view-mode-btn ${previewMode === 'grid' ? 'active' : ''}`}
-                onClick={() => setPreviewMode('grid')}
-                title="グリッド表示"
-              >
-                ⊞ グリッド
-              </button>
-              <button
-                className={`view-mode-btn ${previewMode === 'spread' ? 'active' : ''}`}
-                onClick={() => setPreviewMode('spread')}
-                title="見開き表示"
-              >
-                📖 見開き
-              </button>
+                {isProjectMenuOpen && !isEditingProjectName && (
+                  <div className="project-menu-dropdown">
+                    <button onClick={() => { handleNewProject(); setIsProjectMenuOpen(false); }}>
+                      <span>新規プロジェクト</span>
+                      <kbd>Ctrl+N</kbd>
+                    </button>
+                    <button onClick={() => {
+                      if (isModified) {
+                        setPendingAction('open');
+                        setShowUnsavedDialog(true);
+                      } else {
+                        handleOpenProject();
+                      }
+                      setIsProjectMenuOpen(false);
+                    }}>
+                      <span>開く...</span>
+                      <kbd>Ctrl+O</kbd>
+                    </button>
+                    {recentFiles.length > 0 && (
+                      <div className="project-menu-submenu">
+                        <button className="submenu-trigger">
+                          <span>最近使ったファイル</span>
+                          <svg width="12" height="12" viewBox="0 0 12 12">
+                            <path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" strokeWidth="1.5" fill="none"/>
+                          </svg>
+                        </button>
+                        <div className="submenu-content">
+                          {recentFiles.map(file => (
+                            <button key={file.path} onClick={() => handleOpenRecentFile(file.path)}>
+                              {file.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="project-menu-divider" />
+                    <button onClick={() => { handleSaveProject(); setIsProjectMenuOpen(false); }}>
+                      <span>保存</span>
+                      <kbd>Ctrl+S</kbd>
+                    </button>
+                    <button onClick={() => { handleSaveProject(true); setIsProjectMenuOpen(false); }}>
+                      <span>名前を付けて保存...</span>
+                      <kbd>Ctrl+Shift+S</kbd>
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="main-header-actions">
+                <button
+                  className="theme-toggle-btn"
+                  onClick={toggleDarkMode}
+                  title={isDarkMode ? 'ライトモードに切り替え' : 'ダークモードに切り替え'}
+                >
+                  {isDarkMode ? <MoonIcon size={18} /> : <SunIcon size={18} />}
+                </button>
+
+                <button
+                  className="toolbar-collapse-btn"
+                  onClick={() => setIsToolbarCollapsed(!isToolbarCollapsed)}
+                  title={isToolbarCollapsed ? 'ツールバーを展開' : 'ツールバーを折りたたむ'}
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16" className={`collapse-icon ${isToolbarCollapsed ? 'collapsed' : ''}`}>
+                    <path d="M4 6L8 10L12 6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </button>
+              </div>
             </div>
 
-            {previewMode === 'grid' && (
-              <div className="thumbnail-size-selector">
-                {(Object.keys(THUMBNAIL_SIZES) as ThumbnailSize[]).map((size) => (
+            <div className={`toolbar-content ${isToolbarCollapsed ? 'collapsed' : ''}`}>
+              {selectedPageIds.length > 1 ? (
+                <div className="selection-bar">
+                  <span className="selection-count">{selectedPageIds.length}件選択中</span>
                   <button
-                    key={size}
-                    className={`size-btn ${thumbnailSize === size ? 'active' : ''}`}
-                    onClick={() => setThumbnailSize(size)}
+                    className="btn-secondary btn-small"
+                    onClick={clearPageSelection}
                   >
-                    {THUMBNAIL_SIZES[size].label}
+                    選択解除
                   </button>
-                ))}
+                  <button
+                    className="btn-primary btn-small btn-danger"
+                    onClick={removeSelectedPages}
+                  >
+                    削除
+                  </button>
+                </div>
+              ) : (
+                <div className="view-mode-toggle">
+                  <button
+                    className={`view-mode-btn ${viewMode === 'all' ? 'active' : ''}`}
+                    onClick={() => setViewMode('all')}
+                  >
+                    全体
+                  </button>
+                  <button
+                    className={`view-mode-btn ${viewMode === 'selection' ? 'active' : ''}`}
+                    onClick={() => setViewMode('selection')}
+                    disabled={!selectedChapterId}
+                  >
+                    選択中
+                  </button>
+                </div>
+              )}
+
+              <div className="preview-mode-toggle">
+                <button
+                  className={`view-mode-btn ${previewMode === 'grid' ? 'active' : ''}`}
+                  onClick={() => setPreviewMode('grid')}
+                  title="グリッド表示"
+                >
+                  ⊞ グリッド
+                </button>
+                <button
+                  className={`view-mode-btn ${previewMode === 'spread' ? 'active' : ''}`}
+                  onClick={() => setPreviewMode('spread')}
+                  title="見開き表示"
+                >
+                  <BookOpenIcon size={14} /> 見開き
+                </button>
               </div>
-            )}
+
+              {previewMode === 'grid' && (
+                <div className="thumbnail-size-selector">
+                  {(Object.keys(THUMBNAIL_SIZES) as ThumbnailSize[]).map((size) => (
+                    <button
+                      key={size}
+                      className={`size-btn ${thumbnailSize === size ? 'active' : ''}`}
+                      onClick={() => setThumbnailSize(size)}
+                    >
+                      {THUMBNAIL_SIZES[size].label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="preview-area" ref={previewAreaRef}>
@@ -2909,7 +3052,7 @@ function App() {
                       {isDraggingFiles && (
                         <div className={`new-chapter-drop-zone start ${fileDropMode === 'new-chapter-start' ? 'active' : ''}`}>
                           <div className="new-chapter-drop-content">
-                            <span className="new-chapter-icon">➕</span>
+                            <span className="new-chapter-icon"><PlusIcon size={16} /></span>
                             <span className="new-chapter-text">先頭に新しいチャプターを作成</span>
                           </div>
                         </div>
@@ -3071,7 +3214,7 @@ function App() {
                       {isDraggingFiles && (
                         <div className={`new-chapter-drop-zone end ${fileDropMode === 'new-chapter' ? 'active' : ''}`}>
                           <div className="new-chapter-drop-content">
-                            <span className="new-chapter-icon">➕</span>
+                            <span className="new-chapter-icon"><PlusIcon size={16} /></span>
                             <span className="new-chapter-text">末尾に新しいチャプターを作成</span>
                           </div>
                         </div>
@@ -3200,7 +3343,7 @@ function App() {
             <div className="missing-files-list">
               {missingFiles.map(file => (
                 <div key={file.pageId} className="missing-file-item">
-                  <span className="missing-file-icon">⚠️</span>
+                  <span className="missing-file-icon"><AlertTriangleIcon size={16} /></span>
                   <span className="missing-file-path">{file.originalPath}</span>
                 </div>
               ))}
@@ -3219,7 +3362,7 @@ function App() {
         <div className={`drop-indicator-bar ${isDraggingFiles ? 'file-drop' : 'internal-drop'}`}>
           <div className="drop-indicator-content">
             <span className="drop-indicator-icon">
-              {isDraggingFiles ? '📁' : (activeDragType === 'chapter' ? '📚' : '📄')}
+              {isDraggingFiles ? <FolderIcon size={18} /> : (activeDragType === 'chapter' ? <BooksIcon size={18} /> : <FileIcon size={18} />)}
             </span>
             <span className="drop-indicator-text">
               {isDraggingFiles ? (

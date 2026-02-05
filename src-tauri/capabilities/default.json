@@ -6,6 +6,8 @@
   "permissions": [
     "core:default",
     "core:event:default",
+    "core:window:allow-destroy",
+    "core:window:allow-close",
     "opener:default",
     "dialog:default",
     "dialog:allow-open",
