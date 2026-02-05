@@ -1,6 +1,6 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { open, save, ask } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
 import { desktopDir, join } from '@tauri-apps/api/path';
 import {
@@ -49,6 +49,8 @@ import {
   BooksIcon,
   SunIcon,
   MoonIcon,
+  HomeIcon,
+  ExportIcon,
 } from './icons';
 
 // サムネイル生成キュー（並列処理版）
@@ -413,7 +415,7 @@ function ThumbnailCard({
 
   const displayName = isSpecialPage
     ? (hasFile ? `${PAGE_TYPE_LABELS[page.pageType]}: ${page.fileName}` : (page.label || PAGE_TYPE_LABELS[page.pageType]))
-    : page.fileName;
+    : (page.fileName || '');
 
   return (
     <div
@@ -445,7 +447,10 @@ function ThumbnailCard({
       <div className="thumbnail-info">
         <span className="thumbnail-number">{globalIndex + 1}P</span>
         <span className="thumbnail-filename" title={displayName}>
-          {displayName.length > 15 ? displayName.slice(0, 15) + '…' : displayName}
+          {(() => {
+            const maxLength = thumbnailSize <= 100 ? 10 : 15;
+            return displayName.length > maxLength ? displayName.slice(0, maxLength) + '…' : displayName;
+          })()}
         </span>
       </div>
     </div>
@@ -463,7 +468,7 @@ function DragOverlayThumbnail({
   const isSpecialPage = page.pageType !== 'file';
   const displayName = isSpecialPage
     ? (page.label || PAGE_TYPE_LABELS[page.pageType])
-    : page.fileName;
+    : (page.fileName || '');
 
   return (
     <div
@@ -505,7 +510,7 @@ function DragOverlaySidebarItem({ page }: { page: Page }) {
   const isSpecialPage = page.pageType !== 'file';
   const displayName = isSpecialPage
     ? (page.label || PAGE_TYPE_LABELS[page.pageType])
-    : page.fileName;
+    : (page.fileName || '');
 
   return (
     <div className="sidebar-drag-overlay">
@@ -1450,6 +1455,8 @@ function App() {
     setProjectName,
   } = useStore();
 
+  // TODO: ホーム画面とエディター画面の切り替えに使用
+  const [_currentView, setCurrentView] = useState<'home' | 'editor'>('home');
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeDragType, setActiveDragType] = useState<'chapter' | 'page' | null>(null);
@@ -2118,9 +2125,10 @@ function App() {
 
   const handleDragStart = (event: DragStartEvent) => {
     const { active } = event;
-    setActiveId(active.id as string);
+    const activeIdStr = active.id as string;
+    setActiveId(activeIdStr);
 
-    const isChapter = chapters.some((c) => c.id === active.id);
+    const isChapter = chapters.some((c) => c.id === activeIdStr);
     setActiveDragType(isChapter ? 'chapter' : 'page');
   };
 
@@ -2144,14 +2152,16 @@ function App() {
         setDropTarget({ type: 'chapter-after', chapterId: chapters[chapters.length - 1]?.id || '' });
         return;
       }
-      // チャプター上にホバー
+
+      // チャプター上にホバー（サイドバー）
       const isChapterId = chapters.some(c => c.id === overIdStr);
       if (isChapterId) {
-        // マウス位置に基づいて挿入位置を決定
+        // マウス位置に基づいて挿入位置を決定（ドラッグ中の現在位置）
         const overRect = over.rect;
-        const pointerY = (event.activatorEvent as PointerEvent)?.clientY ?? 0;
+        const startY = (event.activatorEvent as PointerEvent)?.clientY ?? 0;
+        const currentY = startY + (event.delta?.y ?? 0);
         const overCenterY = overRect.top + overRect.height / 2;
-        const insertType = pointerY < overCenterY ? 'chapter-before' : 'chapter-after';
+        const insertType = currentY < overCenterY ? 'chapter-before' : 'chapter-after';
         setDropTarget({ type: insertType, chapterId: overIdStr });
       } else {
         setDropTarget(null);
@@ -2215,7 +2225,9 @@ function App() {
 
     // チャプターの並べ替え
     if (activeDragType === 'chapter') {
-      const oldIndex = chapters.findIndex((c) => c.id === active.id);
+      const activeIdStr = String(active.id);
+
+      const oldIndex = chapters.findIndex((c) => c.id === activeIdStr);
       if (oldIndex === -1) {
         setActiveId(null);
         setActiveDragType(null);
@@ -2225,11 +2237,14 @@ function App() {
 
       if (dropTarget.type === 'chapter-before' || dropTarget.type === 'chapter-after') {
         const targetIndex = chapters.findIndex((c) => c.id === dropTarget.chapterId);
-        if (targetIndex !== -1 && oldIndex !== targetIndex) {
+        if (targetIndex !== -1) {
           const newIndex = dropTarget.type === 'chapter-after' ? targetIndex + 1 : targetIndex;
           // 自分より後ろに移動する場合は、自分が抜けた分を考慮
           const adjustedIndex = newIndex > oldIndex ? newIndex - 1 : newIndex;
-          reorderChapters(oldIndex, adjustedIndex);
+          // 実際に位置が変わる場合のみ移動
+          if (adjustedIndex !== oldIndex) {
+            reorderChapters(oldIndex, adjustedIndex);
+          }
         }
       }
 
@@ -2755,100 +2770,6 @@ function App() {
       onDragEnd={handleDragEnd}
     >
       <div className="app">
-        <aside className={`sidebar ${isSidebarCollapsed ? 'collapsed' : ''}`}>
-          <div className="sidebar-header">
-            <button
-              className="sidebar-toggle-btn"
-              onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-              title={isSidebarCollapsed ? 'サイドバーを展開' : 'サイドバーを折り畳む'}
-            >
-              {isSidebarCollapsed ? '»' : '«'}
-            </button>
-          </div>
-          <div className="sidebar-content">
-            <div className="chapter-actions-bar">
-              <button
-                className="btn-secondary btn-small"
-                onClick={() => handleAddChapter('chapter')}
-              >
-                +話
-              </button>
-              <button
-                className="btn-secondary btn-small"
-                onClick={() => handleAddChapter('cover')}
-              >
-                +表紙
-              </button>
-              <button
-                className="btn-secondary btn-small"
-                onClick={() => handleAddChapter('blank')}
-              >
-                +白紙
-              </button>
-              <button
-                className="btn-secondary btn-small"
-                onClick={() => handleAddChapter('intermission')}
-              >
-                +幕間
-              </button>
-              <button
-                className="btn-secondary btn-small"
-                onClick={() => handleAddChapter('colophon')}
-              >
-                +奥付
-              </button>
-            </div>
-
-            <div className="chapter-list">
-              {/* サイドバー用の新規チャプター作成ゾーン（先頭） */}
-              <SidebarNewChapterDropZone isDragging={activeDragType === 'page'} position="start" />
-              {/* サイドバー用のチャプター並べ替えゾーン（先頭） */}
-              <SidebarChapterReorderDropZone isDragging={activeDragType === 'chapter'} position="start" />
-              <SortableContext
-                items={chapters.map((c) => c.id)}
-                strategy={verticalListSortingStrategy}
-              >
-                {chapters.map((chapter) => (
-                  <ChapterItem
-                    key={chapter.id}
-                    chapter={chapter}
-                    isSelected={chapter.id === selectedChapterId}
-                    selectedPageId={selectedPageId}
-                    onSelect={() => {
-                      selectChapter(chapter.id);
-                      selectPage(null);
-                    }}
-                    onSelectPage={(pageId) => {
-                      selectChapter(chapter.id);
-                      selectPage(pageId);
-                    }}
-                    onToggle={() => toggleChapterCollapsed(chapter.id)}
-                    onRename={(name) => renameChapter(chapter.id, name)}
-                    onDelete={() => removeChapter(chapter.id)}
-                    onAddFiles={() => handleAddPages(chapter.id)}
-                    onAddFolder={() => handleAddFolder(chapter.id)}
-                    onAddSpecialPage={(pageType, afterPageId) => addSpecialPage(chapter.id, pageType, afterPageId)}
-                    onSelectFile={handleSelectFile}
-                    dropTarget={dropTarget}
-                  />
-                ))}
-              </SortableContext>
-              {/* サイドバー用のチャプター並べ替えゾーン（末尾） */}
-              <SidebarChapterReorderDropZone isDragging={activeDragType === 'chapter'} position="end" />
-              {/* サイドバー用の新規チャプター作成ゾーン（末尾） */}
-              <SidebarNewChapterDropZone isDragging={activeDragType === 'page'} position="end" />
-            </div>
-          </div>
-
-          <div className="sidebar-footer">
-            <div className="footer-stats">
-              <span className="stats-label">合計</span>
-              <span className="stats-value">{allPages.length}</span>
-              <span className="stats-unit">ページ</span>
-            </div>
-          </div>
-        </aside>
-
         <main className="main-area">
           <div className={`main-header ${isToolbarCollapsed ? 'collapsed' : ''}`}>
             <div className="main-header-row">
@@ -2937,6 +2858,33 @@ function App() {
 
               <div className="main-header-actions">
                 <button
+                  className="export-btn"
+                  onClick={() => setIsExportModalOpen(true)}
+                  title="エクスポート"
+                  disabled={allPages.length === 0}
+                >
+                  <ExportIcon size={18} />
+                </button>
+
+                <button
+                  className="home-btn"
+                  onClick={async () => {
+                    const confirmed = await ask('プロジェクトがリセットされます。よろしいですか？', {
+                      title: '確認',
+                      kind: 'warning',
+                    });
+                    if (confirmed) {
+                      resetProject();
+                      setCurrentView('home');
+                    }
+                  }}
+                  title="ホーム画面に戻る"
+                  disabled={chapters.length === 0}
+                >
+                  <HomeIcon size={18} />
+                </button>
+
+                <button
                   className="theme-toggle-btn"
                   onClick={toggleDarkMode}
                   title={isDarkMode ? 'ライトモードに切り替え' : 'ダークモードに切り替え'}
@@ -3024,13 +2972,108 @@ function App() {
             </div>
           </div>
 
-          <div className="preview-area" ref={previewAreaRef}>
-            {displayPages.length === 0 ? (
-              <div className="empty-state">
-                <p>ページがありません</p>
-                <p>左のパネルからチャプターを追加し、ページを読み込んでください</p>
+          <div className="preview-container">
+            <aside className={`sidebar ${isSidebarCollapsed ? 'collapsed' : ''}`}>
+              <div className="sidebar-header">
+                <button
+                  className="sidebar-toggle-btn"
+                  onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+                  title={isSidebarCollapsed ? 'サイドバーを展開' : 'サイドバーを折り畳む'}
+                >
+                  {isSidebarCollapsed ? '»' : '«'}
+                </button>
               </div>
-            ) : previewMode === 'spread' ? (
+              <div className="sidebar-content">
+                <div className="chapter-actions-bar">
+                  <button
+                    className="btn-secondary btn-small"
+                    onClick={() => handleAddChapter('chapter')}
+                  >
+                    +話
+                  </button>
+                  <button
+                    className="btn-secondary btn-small"
+                    onClick={() => handleAddChapter('cover')}
+                  >
+                    +表紙
+                  </button>
+                  <button
+                    className="btn-secondary btn-small"
+                    onClick={() => handleAddChapter('blank')}
+                  >
+                    +白紙
+                  </button>
+                  <button
+                    className="btn-secondary btn-small"
+                    onClick={() => handleAddChapter('intermission')}
+                  >
+                    +幕間
+                  </button>
+                  <button
+                    className="btn-secondary btn-small"
+                    onClick={() => handleAddChapter('colophon')}
+                  >
+                    +奥付
+                  </button>
+                </div>
+
+                <div className="chapter-list">
+                  {/* サイドバー用の新規チャプター作成ゾーン（先頭） */}
+                  <SidebarNewChapterDropZone isDragging={activeDragType === 'page'} position="start" />
+                  {/* サイドバー用のチャプター並べ替えゾーン（先頭） */}
+                  <SidebarChapterReorderDropZone isDragging={activeDragType === 'chapter'} position="start" />
+                  <SortableContext
+                    items={chapters.map((c) => c.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {chapters.map((chapter) => (
+                      <ChapterItem
+                        key={chapter.id}
+                        chapter={chapter}
+                        isSelected={chapter.id === selectedChapterId}
+                        selectedPageId={selectedPageId}
+                        onSelect={() => {
+                          selectChapter(chapter.id);
+                          selectPage(null);
+                        }}
+                        onSelectPage={(pageId) => {
+                          selectChapter(chapter.id);
+                          selectPage(pageId);
+                        }}
+                        onToggle={() => toggleChapterCollapsed(chapter.id)}
+                        onRename={(name) => renameChapter(chapter.id, name)}
+                        onDelete={() => removeChapter(chapter.id)}
+                        onAddFiles={() => handleAddPages(chapter.id)}
+                        onAddFolder={() => handleAddFolder(chapter.id)}
+                        onAddSpecialPage={(pageType, afterPageId) => addSpecialPage(chapter.id, pageType, afterPageId)}
+                        onSelectFile={handleSelectFile}
+                        dropTarget={dropTarget}
+                      />
+                    ))}
+                  </SortableContext>
+                  {/* サイドバー用のチャプター並べ替えゾーン（末尾） */}
+                  <SidebarChapterReorderDropZone isDragging={activeDragType === 'chapter'} position="end" />
+                  {/* サイドバー用の新規チャプター作成ゾーン（末尾） */}
+                  <SidebarNewChapterDropZone isDragging={activeDragType === 'page'} position="end" />
+                </div>
+              </div>
+
+              <div className="sidebar-footer">
+                <div className="footer-stats">
+                  <span className="stats-label">合計</span>
+                  <span className="stats-value">{allPages.length}</span>
+                  <span className="stats-unit">ページ</span>
+                </div>
+              </div>
+            </aside>
+
+            <div className="preview-area" ref={previewAreaRef}>
+              {displayPages.length === 0 ? (
+                <div className="empty-state">
+                  <p>ページがありません</p>
+                  <p>左のパネルからチャプターを追加し、ページを読み込んでください</p>
+                </div>
+              ) : previewMode === 'spread' ? (
               <SpreadViewer
                 key={displayPages.map(p => p.page.id).join(',')}
                 pages={displayPages}
@@ -3065,16 +3108,11 @@ function App() {
                       />
                       <div className="thumbnail-grid-continuous">
                         {(() => {
-                          // チャプターごとにグループ化
-                          const chapterGroups: { chapter: Chapter; pages: typeof displayPages }[] = [];
-                          displayPages.forEach((item) => {
-                            const lastGroup = chapterGroups[chapterGroups.length - 1];
-                            if (lastGroup && lastGroup.chapter.id === item.chapter.id) {
-                              lastGroup.pages.push(item);
-                            } else {
-                              chapterGroups.push({ chapter: item.chapter, pages: [item] });
-                            }
-                          });
+                          // チャプターごとにグループ化（空のチャプターも含む）
+                          const chapterGroups: { chapter: Chapter; pages: typeof displayPages }[] = chapters.map(chapter => ({
+                            chapter,
+                            pages: displayPages.filter(item => item.chapter.id === chapter.id)
+                          }));
 
                           return (
                             <>
@@ -3115,9 +3153,17 @@ function App() {
                                         <span className="chapter-block-name">{group.chapter.name}</span>
                                         <span className="chapter-block-count">{group.pages.length}P</span>
                                       </div>
-                                      {/* ページ表示（折りたたみ時は先頭のみ、展開時は全て） */}
+                                      {/* ページ表示（折りたたみ時は先頭のみ、展開時は全て、空の場合はプレースホルダー） */}
                                       <div className="chapter-block-pages">
-                                        {isExpanded ? (
+                                        {group.pages.length === 0 ? (
+                                          // 空のチャプター：プレースホルダー表示
+                                          <div
+                                            className="chapter-block-empty"
+                                            style={{ width: thumbnailSizeValue, height: thumbnailSizeValue * 1.4 }}
+                                          >
+                                            <span>ページなし</span>
+                                          </div>
+                                        ) : isExpanded ? (
                                           // 展開時：全ページを表示
                                           group.pages.map((item) => (
                                             <div key={item.page.id} className="thumbnail-wrapper-with-indicator">
@@ -3269,22 +3315,9 @@ function App() {
                 </SortableContext>
               </div>
             )}
+            </div>
           </div>
 
-          {/* フローティングエクスポートボタン */}
-          <button
-            className="btn-export-floating"
-            onClick={() => setIsExportModalOpen(true)}
-            disabled={allPages.length === 0}
-          >
-            <svg className="export-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="7 10 12 15 17 10" />
-              <line x1="12" y1="15" x2="12" y2="3" />
-            </svg>
-            <span className="export-label">エクスポート</span>
-            <span className="export-count">{allPages.length}P</span>
-          </button>
         </main>
       </div>
 
@@ -3292,7 +3325,8 @@ function App() {
         {activeId && activeDragType === 'chapter' ? (
           (() => {
             const chapter = chapters.find((c) => c.id === activeId);
-            return chapter ? <DragOverlayChapterItem chapter={chapter} /> : null;
+            if (!chapter) return null;
+            return <DragOverlayChapterItem chapter={chapter} />;
           })()
         ) : activeId && activePageData && activeDragType === 'page' ? (
           activeId.startsWith(SIDEBAR_PREFIX) ? (
@@ -3357,8 +3391,8 @@ function App() {
         </div>
       )}
 
-      {/* ドロップインジケーターバー（外部ファイル・内部ドラッグ両対応） */}
-      {(isDraggingFiles || activeDragType) && (
+      {/* ドロップインジケーターバー（外部ファイル・ページドラッグのみ、チャプタードラッグは除外） */}
+      {(isDraggingFiles || (activeDragType && activeDragType !== 'chapter')) && (
         <div className={`drop-indicator-bar ${isDraggingFiles ? 'file-drop' : 'internal-drop'}`}>
           <div className="drop-indicator-content">
             <span className="drop-indicator-icon">

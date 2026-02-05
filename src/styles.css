@@ -132,7 +132,7 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
   background: var(--color-glass-bg);
   backdrop-filter: blur(12px);
   position: relative;
-  z-index: 100;
+  z-index: 1;
   display: flex;
   justify-content: flex-end;
 }
@@ -257,12 +257,15 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
 }
 
 .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--color-bg-primary); position: relative; }
+.preview-container { flex: 1; display: flex; overflow: hidden; position: relative; z-index: 1; }
 .main-header {
   display: flex;
   flex-direction: column;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-glass-bg);
   backdrop-filter: blur(12px);
+  position: relative;
+  z-index: 100;
   transition: all var(--transition-base);
 }
 .main-header-row {
@@ -299,6 +302,50 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
   display: flex;
   align-items: center;
   gap: var(--spacing-xs);
+}
+.export-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--border-radius);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.export-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  color: var(--color-accent);
+}
+.export-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.home-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--border-radius);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.home-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.home-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 .theme-toggle-btn {
   display: flex;
@@ -1035,6 +1082,49 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
   border-radius: var(--border-radius);
 }
 
+/* チャプターブロックのドラッグオーバーレイ（プレビューエリア） */
+.chapter-block-drag-overlay {
+  display: flex;
+  flex-direction: column;
+  padding: var(--spacing-sm);
+  background: linear-gradient(135deg, rgba(92, 156, 255, 0.2) 0%, rgba(30, 30, 60, 0.95) 100%);
+  border: 2px solid var(--color-accent);
+  border-radius: var(--border-radius-lg);
+  box-shadow: var(--shadow-xl), 0 0 20px var(--color-accent-glow);
+  min-width: 120px;
+  transform: rotate(-2deg) scale(1.02);
+  animation: chapterBlockDragAppear 200ms ease-out;
+}
+.chapter-block-drag-overlay .chapter-block-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs);
+}
+.chapter-block-drag-overlay .chapter-block-badge {
+  padding: 2px 8px;
+  border-radius: var(--border-radius);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: white;
+}
+.chapter-block-drag-overlay .chapter-block-name {
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.chapter-block-drag-overlay .chapter-block-count {
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-family: var(--font-family-mono);
+}
+
+@keyframes chapterBlockDragAppear {
+  0% { opacity: 0; transform: scale(0.8) rotate(-5deg); }
+  100% { opacity: 1; transform: scale(1.02) rotate(-2deg); }
+}
+
 @keyframes chapterDragAppear {
   0% { opacity: 0; transform: scale(0.7) rotate(-5deg); }
   100% { opacity: 1; transform: scale(1.02) rotate(-1.5deg); }
@@ -1757,6 +1847,49 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
   align-content: flex-start;
 }
 
+.chapter-block-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-tertiary);
+  border: 2px dashed var(--color-border);
+  border-radius: var(--border-radius);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.chapter-block-drop-indicator {
+  width: 4px;
+  min-height: 100px;
+  align-self: stretch;
+  background: var(--color-accent);
+  border-radius: 2px;
+  flex-shrink: 0;
+  box-shadow: 0 0 8px var(--color-accent-glow);
+  animation: chapterDropIndicatorPulse 0.8s ease-in-out infinite;
+}
+
+@keyframes chapterDropIndicatorPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* ドラッグ中のチャプターブロック */
+.sortable-chapter-block {
+  display: flex;
+  align-items: stretch;
+}
+
+.sortable-chapter-block.dragging .chapter-block {
+  opacity: 0.7;
+  transform: scale(1.02) rotate(-1deg);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+}
+
+.sortable-chapter-block.dragging .chapter-block-drop-indicator {
+  display: none;
+}
 
 .chapter-block.drop-target {
   border-color: var(--color-accent);
@@ -1787,27 +1920,29 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
   min-width: 60px;
   min-height: 80px;
   padding: var(--spacing-sm);
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px dashed var(--color-border);
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent);
   border-radius: var(--border-radius);
   cursor: pointer;
   transition: all var(--transition-fast);
 }
 
 .chapter-block-hidden-indicator:hover {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: var(--color-accent);
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
 }
 
 .chapter-block-hidden-indicator .hidden-count {
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-bold);
-  color: var(--color-text-primary);
+  color: white;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
 .chapter-block-hidden-indicator .hidden-text {
   font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+  color: rgba(255, 255, 255, 0.9);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
 /* 展開中のチャプターブロック */
@@ -2097,7 +2232,7 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
   border: 1px solid var(--color-border-light);
   border-radius: var(--border-radius-lg);
   box-shadow: var(--shadow-xl);
-  z-index: 1000;
+  z-index: 9999;
   animation: menuAppearDown 150ms ease;
 }
 
