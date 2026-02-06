@@ -2306,10 +2306,7 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-text-primary) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: var(--color-text-primary);
 }
 
 .modified-indicator {
@@ -2742,4 +2739,24 @@ body.light-mode .chapter-block-hidden-indicator .hidden-count {
 body.light-mode .chapter-block-hidden-indicator .hidden-text {
   color: rgba(255, 255, 255, 0.9);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+body.light-mode .sidebar-drag-overlay {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+body.light-mode .chapter-drag-overlay {
+  background: linear-gradient(135deg, rgba(92, 156, 255, 0.1) 0%, rgba(255, 255, 255, 0.95) 100%);
+  color: var(--color-text-primary);
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.15),
+    0 0 20px rgba(92, 156, 255, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+body.light-mode .chapter-drag-overlay .chapter-drag-name {
+  text-shadow: none;
 }

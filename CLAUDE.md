@@ -284,3 +284,22 @@ style-src 'self' 'unsafe-inline'
 
 #### アイコン
 - PlusCircleIcon（○に+）を追加（icons.tsx）
+
+### 2026-02-06: ドラッグ操作・ライトモード改善
+
+#### preview-area
+- 空状態の判定条件を修正: `displayPages.length === 0` → `chapters.length === 0`
+- チャプターを追加したがページがない場合でもchapter-page-wrapperが表示されるように修正
+- メッセージを「ページがありません」→「チャプターがありません」に変更
+
+#### project-name-display
+- 文字色のグラデーションを削除し、単色（var(--color-text-primary)）に変更
+
+#### ドラッグ操作のUI簡素化
+- ページ移動時のドロップインジケーターバー（移動先メッセージ）を削除
+- 外部ファイルドラッグ時のみインジケーターバーを表示
+- ページドラッグ時の「新規チャプター作成ゾーン」（先頭・末尾）を削除
+
+#### ライトモード対応
+- sidebar-drag-overlay: 背景を白系（rgba(255, 255, 255, 0.95)）に変更
+- chapter-drag-overlay: 背景を白系グラデーションに変更、テキストシャドウを削除

@@ -1787,10 +1787,10 @@ function App() {
             </aside>
 
             <div className="preview-area" ref={previewAreaRef}>
-              {displayPages.length === 0 ? (
+              {chapters.length === 0 ? (
                 <div className="empty-state">
-                  <p>ページがありません</p>
-                  <p>左のパネルからチャプターを追加し、ページを読み込んでください</p>
+                  <p>チャプターがありません</p>
+                  <p>左のパネルからチャプターを追加してください</p>
                 </div>
               ) : previewMode === 'spread' ? (
               <SpreadViewer
@@ -1819,12 +1819,6 @@ function App() {
                           </div>
                         </div>
                       )}
-                      {/* 新規チャプター作成ゾーン（先頭・内部ドラッグ時・上部付近のみ表示） */}
-                      <NewChapterDropZone
-                        isActive={false}
-                        isDragging={activeDragType === 'page' && !isDraggingFiles && isNearPreviewTop}
-                        position="start"
-                      />
                       <div className="thumbnail-grid-continuous">
                         {(() => {
                           // チャプターごとにグループ化（空のチャプターも含む）
@@ -1958,12 +1952,6 @@ function App() {
                           </div>
                         </div>
                       )}
-                      {/* 新規チャプター作成ゾーン（末尾） */}
-                      <NewChapterDropZone
-                        isActive={false}
-                        isDragging={activeDragType === 'page' && !isDraggingFiles}
-                        position="end"
-                      />
                     </>
                   ) : (
                     // 選択中チャプターのみ表示
@@ -2084,69 +2072,35 @@ function App() {
         </div>
       )}
 
-      {/* ドロップインジケーターバー（外部ファイル・ページドラッグのみ、チャプタードラッグは除外） */}
-      {(isDraggingFiles || (activeDragType && activeDragType !== 'chapter')) && (
-        <div className={`drop-indicator-bar ${isDraggingFiles ? 'file-drop' : 'internal-drop'}`}>
+      {/* ドロップインジケーターバー（外部ファイルドラッグのみ） */}
+      {isDraggingFiles && (
+        <div className="drop-indicator-bar file-drop">
           <div className="drop-indicator-content">
             <span className="drop-indicator-icon">
-              {isDraggingFiles ? <FolderIcon size={18} /> : (activeDragType === 'chapter' ? <BooksIcon size={18} /> : <FileIcon size={18} />)}
+              <FolderIcon size={18} />
             </span>
             <span className="drop-indicator-text">
-              {isDraggingFiles ? (
-                // 外部ファイルドロップ時のメッセージ
-                fileDropMode === 'insert' && fileDropTargetPageId ? (
-                  (() => {
-                    const targetItem = allPages.find(p => p.page.id === fileDropTargetPageId);
-                    if (targetItem) {
-                      const posText = insertPosition === 'after' ? '後' : '前';
-                      return `「${targetItem.chapter.name}」の ${targetItem.globalIndex + 1}ページ目の${posText}に挿入`;
-                    }
-                    return 'ドロップして追加';
-                  })()
-                ) : fileDropMode === 'append-chapter' && fileDropTargetChapterId ? (
-                  (() => {
-                    const targetChapter = chapters.find(c => c.id === fileDropTargetChapterId);
-                    if (targetChapter) {
-                      return `「${targetChapter.name}」の末尾に追加`;
-                    }
-                    return 'チャプターの末尾に追加';
-                  })()
-                ) : fileDropMode === 'new-chapter' || fileDropMode === 'new-chapter-start' ? (
-                  '新しいチャプターを作成してファイルを追加'
-                ) : (
-                  'ページの上にドロップして挿入位置を指定 / 下部で新規チャプター作成'
-                )
-              ) : activeDragType === 'chapter' ? (
-                // チャプター移動時のメッセージ
+              {fileDropMode === 'insert' && fileDropTargetPageId ? (
                 (() => {
-                  const sourceChapter = chapters.find(c => c.id === activeId);
-                  if (sourceChapter) {
-                    return `「${sourceChapter.name}」を移動中...`;
+                  const targetItem = allPages.find(p => p.page.id === fileDropTargetPageId);
+                  if (targetItem) {
+                    const posText = insertPosition === 'after' ? '後' : '前';
+                    return `「${targetItem.chapter.name}」の ${targetItem.globalIndex + 1}ページ目の${posText}に挿入`;
                   }
-                  return 'チャプターを移動中...';
+                  return 'ドロップして追加';
                 })()
-              ) : activeDragType === 'page' && activePageData ? (
-                // ページ移動時のメッセージ
+              ) : fileDropMode === 'append-chapter' && fileDropTargetChapterId ? (
                 (() => {
-                  const sourceName = activePageData.page.fileName ||
-                    activePageData.page.label ||
-                    PAGE_TYPE_LABELS[activePageData.page.pageType];
-
-                  if (dropTarget?.pageId) {
-                    const targetItem = allPages.find(p => p.page.id === dropTarget.pageId);
-                    if (targetItem) {
-                      if (targetItem.chapter.id !== activePageData.chapter.id) {
-                        return `「${sourceName}」を「${targetItem.chapter.name}」に移動`;
-                      } else {
-                        const posText = dropTarget.type === 'page-after' ? '後' : '前';
-                        return `「${sourceName}」を ${targetItem.globalIndex + 1}ページ目の${posText}に移動`;
-                      }
-                    }
+                  const targetChapter = chapters.find(c => c.id === fileDropTargetChapterId);
+                  if (targetChapter) {
+                    return `「${targetChapter.name}」の末尾に追加`;
                   }
-                  return `「${sourceName}」を移動中...`;
+                  return 'チャプターの末尾に追加';
                 })()
+              ) : fileDropMode === 'new-chapter' || fileDropMode === 'new-chapter-start' ? (
+                '新しいチャプターを作成してファイルを追加'
               ) : (
-                'ドラッグ中...'
+                'ページの上にドロップして挿入位置を指定 / 下部で新規チャプター作成'
               )}
             </span>
           </div>
