@@ -772,6 +772,7 @@ dependencies = [
  "md5",
  "natord",
  "psd",
+ "rayon",
  "serde",
  "serde_json",
  "tauri",

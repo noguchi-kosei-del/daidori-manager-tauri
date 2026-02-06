@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { open, save, ask } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
@@ -61,7 +62,7 @@ import {
 const thumbnailQueue: { pageId: string; filePath: string; modifiedTime: number }[] = [];
 let isProcessingQueue = false;
 let processingPromise: Promise<void> | null = null;
-const PARALLEL_LIMIT = 4; // 同時処理数
+const PARALLEL_LIMIT = 4; // 同時処理数（メモリ節約のため調整）
 
 async function processThumbnailQueue() {
   if (isProcessingQueue || thumbnailQueue.length === 0) return;
@@ -835,6 +836,8 @@ function ChapterItem({
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(chapter.name);
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
+  const addBtnRef = useRef<HTMLButtonElement>(null);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -849,28 +852,26 @@ function ChapterItem({
     setIsEditing(false);
   };
 
-  // チャプターへの挿入ライン表示判定
-  const showChapterInsertionBefore = dropTarget?.type === 'chapter-before' && dropTarget.chapterId === chapter.id;
-  const showChapterInsertionAfter = dropTarget?.type === 'chapter-after' && dropTarget.chapterId === chapter.id;
+  // チャプターへの挿入ライン表示判定（上部に表示）
+  const showChapterInsertionLine = dropTarget?.type === 'chapter-before' && dropTarget.chapterId === chapter.id;
 
   return (
-    <>
-      {showChapterInsertionBefore && <InsertionLine />}
-      <div
-        ref={setNodeRef}
-        style={{
-          ...style,
-          backgroundColor: chapter.type !== 'chapter' ? `${CHAPTER_TYPE_COLORS[chapter.type]}15` : undefined,
-          borderColor: chapter.type !== 'chapter' ? `${CHAPTER_TYPE_COLORS[chapter.type]}40` : undefined,
-        }}
-        className={`chapter-item ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''}`}
-        onClick={onSelect}
-      >
+    <div
+      ref={setNodeRef}
+      style={{
+        ...style,
+        backgroundColor: chapter.type !== 'chapter' ? `${CHAPTER_TYPE_COLORS[chapter.type]}15` : undefined,
+        borderColor: chapter.type !== 'chapter' ? `${CHAPTER_TYPE_COLORS[chapter.type]}40` : undefined,
+      }}
+      className={`chapter-item ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''}`}
+      onClick={onSelect}
+    >
       <div
         className="chapter-header"
         {...attributes}
         {...listeners}
       >
+        {showChapterInsertionLine && <div className="chapter-header-insertion-line" />}
         <button
           className="chapter-collapse-btn"
           onClick={(e) => {
@@ -953,91 +954,72 @@ function ChapterItem({
             </SortableContext>
           )}
           <div className="chapter-pages-add">
-            <button
-              className="btn-icon chapter-add-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowAddMenu(!showAddMenu);
-              }}
-              onPointerDown={(e) => e.stopPropagation()}
-              title="ページ追加"
-            >
-              +
-            </button>
-            {showAddMenu && (
-              <>
-                <div
-                  className="menu-backdrop"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowAddMenu(false);
-                  }}
-                />
-                <div className="chapter-add-menu menu-up">
-                  <button
+              <button
+                ref={addBtnRef}
+                className="btn-icon chapter-add-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!showAddMenu && addBtnRef.current) {
+                    const rect = addBtnRef.current.getBoundingClientRect();
+                    const menuHeight = 100; // メニューの推定高さ（2項目）
+                    const windowHeight = window.innerHeight;
+                    // 画面下部に近い場合は上方向に開く
+                    if (rect.bottom + menuHeight > windowHeight) {
+                      setMenuPosition({ bottom: windowHeight - rect.top + 4, left: rect.left });
+                    } else {
+                      setMenuPosition({ top: rect.bottom + 4, left: rect.left });
+                    }
+                  }
+                  setShowAddMenu(!showAddMenu);
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                title="ページ追加"
+              >
+                +
+              </button>
+              {showAddMenu && menuPosition && createPortal(
+                <>
+                  <div
+                    className="menu-backdrop-fixed"
                     onClick={(e) => {
                       e.stopPropagation();
-                      onAddFiles();
                       setShowAddMenu(false);
                     }}
-                  >
-                    <FileIcon size={14} /> ファイルを選択
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAddFolder();
-                      setShowAddMenu(false);
+                  />
+                  <div
+                    className="chapter-add-menu menu-fixed"
+                    style={{
+                      top: menuPosition.top,
+                      bottom: menuPosition.bottom,
+                      left: menuPosition.left,
                     }}
                   >
-                    <FolderIcon size={14} /> フォルダを選択
-                  </button>
-                  <div className="menu-divider" />
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAddSpecialPage('cover');
-                      setShowAddMenu(false);
-                    }}
-                  >
-                    +表紙
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAddSpecialPage('blank');
-                      setShowAddMenu(false);
-                    }}
-                  >
-                    +白紙
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAddSpecialPage('intermission');
-                      setShowAddMenu(false);
-                    }}
-                  >
-                    +幕間
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAddSpecialPage('colophon');
-                      setShowAddMenu(false);
-                    }}
-                  >
-                    +奥付
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAddFiles();
+                        setShowAddMenu(false);
+                      }}
+                    >
+                      <FileIcon size={14} /> ファイルを選択
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAddFolder();
+                        setShowAddMenu(false);
+                      }}
+                    >
+                      <FolderIcon size={14} /> フォルダを選択
+                    </button>
+                  </div>
+                </>,
+                document.body
+              )}
+            </div>
         </div>
       )}
-      </div>
-      {showChapterInsertionAfter && <InsertionLine />}
-    </>
+    </div>
   );
 }
 

@@ -1,17 +1,19 @@
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageFormat};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-// サムネイル設定（超高解像度版）
-const THUMBNAIL_SIZE: u32 = 960;  // 超高DPIディスプレイ対応（240px×4倍）
-const JPEG_QUALITY: u8 = 98;      // JPEG品質（最高画質）
+// サムネイル設定（高解像度版・PNG形式）
+const THUMBNAIL_SIZE: u32 = 480;  // 高DPIディスプレイ対応（240px×2倍、メモリ節約）
 
 // 画像サイズ制限（DoS防止）
 const MAX_IMAGE_DIMENSION: u32 = 65535;      // 最大辺長
@@ -133,6 +135,55 @@ impl ThumbnailCache {
     }
 }
 
+// ========== メモリLRUキャッシュ（高速化用） ==========
+const MEMORY_CACHE_MAX_SIZE: usize = 20;  // 最大20件をメモリに保持（メモリ節約）
+
+struct ThumbnailMemoryCache {
+    cache: HashMap<String, String>,  // cache_key -> base64 data URL
+    order: VecDeque<String>,         // LRU順序
+    max_size: usize,
+}
+
+impl ThumbnailMemoryCache {
+    fn new(max_size: usize) -> Self {
+        Self {
+            cache: HashMap::new(),
+            order: VecDeque::new(),
+            max_size,
+        }
+    }
+
+    fn get(&mut self, key: &str) -> Option<String> {
+        if let Some(value) = self.cache.get(key) {
+            // アクセスされたキーを末尾に移動（LRU更新）
+            self.order.retain(|k| k != key);
+            self.order.push_back(key.to_string());
+            Some(value.clone())
+        } else {
+            None
+        }
+    }
+
+    fn insert(&mut self, key: String, value: String) {
+        // 既存のキーがあれば更新
+        if self.cache.contains_key(&key) {
+            self.order.retain(|k| k != &key);
+        } else if self.cache.len() >= self.max_size {
+            // キャッシュが満杯なら最も古いものを削除
+            if let Some(oldest) = self.order.pop_front() {
+                self.cache.remove(&oldest);
+            }
+        }
+        self.order.push_back(key.clone());
+        self.cache.insert(key, value);
+    }
+}
+
+// アプリケーション状態（メモリキャッシュを保持）
+pub struct AppState {
+    memory_cache: Mutex<ThumbnailMemoryCache>,
+}
+
 // 画像サイズ検証（DoS防止）
 fn validate_dimensions(width: u32, height: u32) -> Result<(), String> {
     if width == 0 || height == 0 {
@@ -165,24 +216,22 @@ fn get_file_type(ext: &str) -> Option<&'static str> {
     }
 }
 
-// 画像をサムネイルに変換（高画質・高速版）
+// 画像をサムネイルに変換（高画質PNG版 - 検版ビューワーから流用）
 fn create_thumbnail(img: DynamicImage) -> Result<Vec<u8>, String> {
-    // CatmullRom: Triangle より高品質、Lanczos3 より高速（バランス良好）
+    // CatmullRom: 高品質かつ高速なリサンプリングフィルタ（Lanczos3から変更、品質は実用上同等）
     let thumbnail = img.resize(
         THUMBNAIL_SIZE,
         THUMBNAIL_SIZE * 14 / 10,
         FilterType::CatmullRom,
     );
 
-    let mut buffer = Vec::new();
-    {
-        let mut encoder = JpegEncoder::new_with_quality(&mut buffer, JPEG_QUALITY);
-        encoder
-            .encode_image(&thumbnail)
-            .map_err(|e| format!("サムネイル書き出しエラー: {}", e))?;
-    }
+    // PNG形式で出力（可逆圧縮で画質劣化なし）
+    let mut buffer = Cursor::new(Vec::new());
+    thumbnail
+        .write_to(&mut buffer, ImageFormat::Png)
+        .map_err(|e| format!("サムネイル書き出しエラー: {}", e))?;
 
-    Ok(buffer)
+    Ok(buffer.into_inner())
 }
 
 // PSDファイルから埋め込みサムネイルを高速抽出
@@ -281,19 +330,12 @@ fn extract_psd_embedded_thumbnail(data: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
-// PSDファイルからサムネイルを生成（高速版）
+// PSDファイルからサムネイルを生成（高画質版 - 検版ビューワーから流用）
+// 埋め込みサムネイルは低解像度のため使用せず、常にフルコンポジットを使用
 fn generate_psd_thumbnail(path: &Path) -> Result<Vec<u8>, String> {
     let data = fs::read(path).map_err(|e| e.to_string())?;
 
-    // まず埋め込みサムネイルを試す（非常に高速）
-    if let Some(jpeg_data) = extract_psd_embedded_thumbnail(&data) {
-        // JPEGデータをデコードしてリサイズ
-        let img = image::load_from_memory_with_format(&jpeg_data, ImageFormat::Jpeg)
-            .map_err(|e| format!("サムネイル読み込みエラー: {}", e))?;
-        return create_thumbnail(img);
-    }
-
-    // 埋め込みサムネイルがない場合は従来の方法（フルコンポジット）
+    // フルコンポジットで高品質なサムネイルを生成
     let psd_file = psd::Psd::from_bytes(&data)
         .map_err(|e| format!("PSD読み込みエラー: {:?}", e))?;
 
@@ -387,10 +429,17 @@ async fn generate_thumbnail(
     file_path: String,
     modified_time: u64,
     cache: State<'_, ThumbnailCache>,
+    _app_state: State<'_, AppState>,
 ) -> Result<String, String> {
     let cache_dir = cache.cache_dir.clone();
 
-    // 非同期タスクで重い処理を実行
+    // キャッシュキーを生成
+    let input = format!("{}:{}:{}:png", file_path, modified_time, THUMBNAIL_SIZE);
+    let cache_key = format!("{:x}", md5::compute(&input));
+
+    // メモリキャッシュは一時的に無効化（メモリ問題の調査中）
+
+    // ディスクキャッシュをチェック & サムネイル生成
     tokio::task::spawn_blocking(move || {
         let path = Path::new(&file_path);
 
@@ -398,16 +447,12 @@ async fn generate_thumbnail(
             return Err("ファイルが存在しません".to_string());
         }
 
-        // キャッシュキーにサムネイル設定を含める（設定変更時に再生成される）
-        let input = format!("{}:{}:{}:{}", file_path, modified_time, THUMBNAIL_SIZE, JPEG_QUALITY);
-        let cache_key = format!("{:x}", md5::compute(input));
-
-        // キャッシュチェック（TOCTOU対策: 直接読み込みを試行）
-        let cached_path = cache_dir.join(format!("{}.jpg", cache_key));
+        // ディスクキャッシュチェック（TOCTOU対策: 直接読み込みを試行）
+        let cached_path = cache_dir.join(format!("{}.png", cache_key));
         match fs::read(&cached_path) {
             Ok(data) => {
                 let base64_data = BASE64.encode(&data);
-                return Ok(format!("data:image/jpeg;base64,{}", base64_data));
+                return Ok(format!("data:image/png;base64,{}", base64_data));
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // キャッシュミス - サムネイル生成へ進む
@@ -431,12 +476,12 @@ async fn generate_thumbnail(
             _ => return Err(format!("サポートされていないファイル形式: {}", ext)),
         };
 
-        // キャッシュに保存
+        // ディスクキャッシュに保存
         fs::write(&cached_path, &thumbnail_data).map_err(|e| e.to_string())?;
 
-        // base64データURLとして返す
+        // base64データURLとして返す（PNG形式）
         let base64_data = BASE64.encode(&thumbnail_data);
-        Ok(format!("data:image/jpeg;base64,{}", base64_data))
+        Ok(format!("data:image/png;base64,{}", base64_data))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -912,6 +957,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(ThumbnailCache::new())
+        .manage(AppState {
+            memory_cache: Mutex::new(ThumbnailMemoryCache::new(MEMORY_CACHE_MAX_SIZE)),
+        })
         .invoke_handler(tauri::generate_handler![
             get_folder_contents,
             generate_thumbnail,

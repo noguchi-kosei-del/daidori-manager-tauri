@@ -140,20 +140,13 @@ export const useStore = create<AppState>((set, get) => {
   thumbnailSize: 'medium',
 
   // チャプター追加
-  addChapter: (type, name, skipInitialPage = false, insertAt) => {
+  addChapter: (type, name, _skipInitialPage = false, insertAt) => {
     const id = uuidv4();
     const chapters = get().chapters;
     const chapterName = name || getDefaultChapterName(type, chapters);
 
-    // 特殊タイプのチャプターは自動的に1ページ追加（skipInitialPageがfalseの場合のみ）
-    const isSpecialType = type !== 'chapter';
-    const initialPages: Page[] = (isSpecialType && !skipInitialPage)
-      ? [{
-          id: uuidv4(),
-          pageType: type as PageType,
-          label: PAGE_TYPE_LABELS[type as PageType],
-        }]
-      : [];
+    // すべてのチャプターは空の状態で追加（ページは後から追加）
+    const initialPages: Page[] = [];
 
     const newChapter = {
       id,
