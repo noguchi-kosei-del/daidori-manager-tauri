@@ -40,9 +40,18 @@ export interface Page {
   fileSize?: number;
   modifiedTime?: number;
   thumbnailStatus?: ThumbnailStatus;
-  thumbnailPath?: string;
+  // サムネイルキャッシュ情報（base64ではなくファイルパス参照）
+  thumbnailCacheKey?: string;
+  thumbnailCachePath?: string;
   // 特殊ページの場合のラベル（カスタム名）
   label?: string;
+}
+
+// サムネイル生成結果（Rust側のThumbnailResultに対応）
+export interface ThumbnailResult {
+  cache_key: string;
+  cache_path: string;
+  status: 'cached' | 'generated';
 }
 
 // 話数/グループ

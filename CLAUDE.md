@@ -157,21 +157,63 @@ npm run tauri build
 
 ```
 daidori-manager-tauri/
-├── src/                    # Reactフロントエンド
-│   ├── App.tsx            # メインコンポーネント
-│   ├── store.ts           # Zustand状態管理
-│   ├── types.ts           # 型定義
-│   ├── icons.tsx          # アイコンコンポーネント
-│   ├── styles.css         # グローバルスタイル
-│   └── main.tsx           # エントリーポイント
-├── src-tauri/             # Tauriバックエンド
+├── src/                           # Reactフロントエンド
+│   ├── App.tsx                    # メインAppコンポーネント (~2,100行)
+│   ├── store.ts                   # Zustand状態管理
+│   ├── types.ts                   # 型定義
+│   ├── icons.tsx                  # アイコンコンポーネント
+│   ├── styles.css                 # グローバルスタイル
+│   ├── main.tsx                   # エントリーポイント
+│   ├── constants/
+│   │   └── dnd.ts                 # D&D関連定数
+│   ├── hooks/
+│   │   └── useThumbnailQueue.ts   # サムネイルキュー処理
+│   └── components/
+│       ├── preview/
+│       │   ├── SpreadViewer.tsx   # 見開きビューア
+│       │   ├── ThumbnailCard.tsx  # サムネイルカード
+│       │   └── index.ts
+│       ├── sidebar/
+│       │   ├── SortablePageItem.tsx  # ソート可能ページ
+│       │   ├── ChapterItem.tsx    # チャプター項目
+│       │   └── index.ts
+│       ├── dnd/
+│       │   ├── DragOverlays.tsx   # ドラッグオーバーレイ
+│       │   ├── DropZones.tsx      # ドロップゾーン
+│       │   └── index.ts
+│       └── modals/
+│           ├── ExportModal.tsx    # エクスポートモーダル
+│           └── index.ts
+├── src-tauri/                     # Tauriバックエンド
 │   ├── src/
-│   │   ├── lib.rs         # Rustコマンド実装
-│   │   └── main.rs        # エントリーポイント
-│   ├── Cargo.toml         # Rust依存関係
-│   └── tauri.conf.json    # Tauri設定
-├── package.json           # npm依存関係
-└── vite.config.ts         # Vite設定
+│   │   ├── lib.rs                 # エントリーポイント (~50行)
+│   │   ├── main.rs                # Tauriメイン
+│   │   ├── constants.rs           # 定数定義
+│   │   ├── state.rs               # AppState
+│   │   ├── image_utils.rs         # 画像ユーティリティ
+│   │   ├── types/
+│   │   │   ├── mod.rs
+│   │   │   ├── file.rs            # FileInfo
+│   │   │   ├── export.rs          # ExportPage
+│   │   │   └── project.rs         # プロジェクト関連型
+│   │   ├── cache/
+│   │   │   ├── mod.rs
+│   │   │   ├── disk.rs            # ThumbnailCache (ディスク)
+│   │   │   └── memory.rs          # ThumbnailMemoryCache (LRU)
+│   │   ├── thumbnail/
+│   │   │   ├── mod.rs             # generate_thumbnailコマンド
+│   │   │   ├── image.rs           # 画像サムネイル生成
+│   │   │   └── psd.rs             # PSD処理
+│   │   └── commands/
+│   │       ├── mod.rs
+│   │       ├── folder.rs          # get_folder_contents
+│   │       ├── export.rs          # export_pages
+│   │       ├── project.rs         # save/load/validate
+│   │       └── recent.rs          # recent files
+│   ├── Cargo.toml                 # Rust依存関係
+│   └── tauri.conf.json            # Tauri設定
+├── package.json                   # npm依存関係
+└── vite.config.ts                 # Vite設定
 ```
 
 ## 設計方針
@@ -194,3 +236,51 @@ style-src 'self' 'unsafe-inline'
 
 - サムネイル: `%LOCALAPPDATA%/daidori-manager/thumbnails/`
 - 設定: `%APPDATA%/daidori-manager/`
+
+## モジュール構成
+
+### フロントエンド (React/TypeScript)
+
+| モジュール | 説明 |
+|-----------|------|
+| `components/preview/` | プレビュー表示コンポーネント（SpreadViewer, ThumbnailCard） |
+| `components/sidebar/` | サイドバーコンポーネント（ChapterItem, SortablePageItem） |
+| `components/dnd/` | ドラッグ&ドロップ関連（DragOverlays, DropZones） |
+| `components/modals/` | モーダルダイアログ（ExportModal） |
+| `hooks/` | カスタムフック（useThumbnailQueue） |
+| `constants/` | 定数定義（D&D用ID、並列処理数など） |
+
+### バックエンド (Rust/Tauri)
+
+| モジュール | 説明 |
+|-----------|------|
+| `types/` | 型定義（FileInfo, ExportPage, ProjectFile等） |
+| `cache/` | キャッシュ管理（ディスクキャッシュ、メモリLRUキャッシュ） |
+| `thumbnail/` | サムネイル生成（画像処理、PSD対応） |
+| `commands/` | Tauriコマンド（folder, export, project, recent） |
+| `image_utils.rs` | 画像ユーティリティ（サイズ検証、ファイルタイプ判定） |
+| `state.rs` | アプリケーション状態管理 |
+| `constants.rs` | 定数定義（キャッシュサイズ、対応拡張子等） |
+
+## 変更履歴
+
+### 2026-02-06: UI改善
+
+#### サイドバー
+- チャプター追加ボタン（chapter-actions-bar）をsidebar-footerに移動
+- ボタン配列を変更: 表紙 → 白紙 → 話 → 幕間 → 奥付
+- ページ追加ボタンにPlusCircleIconと「ページを追加」テキストを追加
+- chapter-actions-barとfooter-statsの間に区切り線を追加
+- project-menu-triggerとexport-btnの間の余白を調整
+
+#### チャプターヘッダー
+- ホバー時のグラデーションを::before疑似要素で実装（z-index: -1でボタン枠線の下に配置）
+- overflow: hiddenとborder-radiusを追加
+
+#### プレビューエリア
+- ダークモード: 背景色を少し明るく調整（#1a1a24 → #12121a）
+- ライトモード: 背景色を少しグレーに調整（#e8eaed → #dde0e4）
+- 透明画像対応: thumbnail-wrapperの背景色を白（#ffffff）に変更
+
+#### アイコン
+- PlusCircleIcon（○に+）を追加（icons.tsx）

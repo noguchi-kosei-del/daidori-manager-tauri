@@ -70,7 +70,7 @@ interface AppState {
   setThumbnailSize: (size: ThumbnailSize) => void;
 
   // アクション: サムネイル
-  updatePageThumbnail: (pageId: string, thumbnailPath: string) => void;
+  updatePageThumbnail: (pageId: string, cacheKey: string, cachePath: string) => void;
   setPageThumbnailError: (pageId: string) => void;
 
   // アクション: 履歴
@@ -303,7 +303,8 @@ export const useStore = create<AppState>((set, get) => {
               fileSize: file.size,
               modifiedTime: file.modified_time,
               thumbnailStatus: 'pending' as const,
-              thumbnailPath: undefined,
+              thumbnailCacheKey: undefined,
+              thumbnailCachePath: undefined,
             };
           } else {
             // ファイルをクリア
@@ -315,7 +316,8 @@ export const useStore = create<AppState>((set, get) => {
               fileSize: undefined,
               modifiedTime: undefined,
               thumbnailStatus: undefined,
-              thumbnailPath: undefined,
+              thumbnailCacheKey: undefined,
+              thumbnailCachePath: undefined,
             };
           }
         }),
@@ -472,14 +474,14 @@ export const useStore = create<AppState>((set, get) => {
     set({ thumbnailSize: size });
   },
 
-  // サムネイル更新
-  updatePageThumbnail: (pageId, thumbnailPath) => {
+  // サムネイル更新（キャッシュキーとパスを保存、base64データは保存しない）
+  updatePageThumbnail: (pageId, cacheKey, cachePath) => {
     set((state) => ({
       chapters: state.chapters.map((c) => ({
         ...c,
         pages: c.pages.map((p) =>
           p.id === pageId
-            ? { ...p, thumbnailStatus: 'ready' as const, thumbnailPath }
+            ? { ...p, thumbnailStatus: 'ready' as const, thumbnailCacheKey: cacheKey, thumbnailCachePath: cachePath }
             : p
         ),
       })),
