@@ -11,9 +11,12 @@ import {
   DragStartEvent,
   PointerSensor,
   closestCenter,
+  pointerWithin,
+  rectIntersection,
   useSensor,
   useSensors,
   useDroppable,
+  CollisionDetection,
 } from '@dnd-kit/core';
 import {
   SortableContext,
@@ -51,6 +54,7 @@ import {
   MoonIcon,
   HomeIcon,
   ExportIcon,
+  TrashIcon,
 } from './icons';
 
 // サムネイル生成キュー（並列処理版）
@@ -273,7 +277,13 @@ function SpreadViewer({
           >
             {/* 見開き番号ラベル */}
             <div className="spread-number-label">
-              見開き {index + 1} / {totalSpreads}
+              {spread.right && spread.left
+                ? `見開き ${spread.right.globalIndex + 1}～${spread.left.globalIndex + 1}P`
+                : spread.right
+                  ? `見開き ${spread.right.globalIndex + 1}P`
+                  : spread.left
+                    ? `見開き ${spread.left.globalIndex + 1}P`
+                    : `見開き ${index + 1} / ${totalSpreads}`}
             </div>
 
             {/* 見開きコンテナ */}
@@ -319,6 +329,8 @@ function ThumbnailCard({
   onSelect,
   onCtrlClick,
   onShiftClick,
+  pageCount,
+  lastGlobalIndex,
 }: {
   page: Page;
   globalIndex: number;
@@ -329,6 +341,8 @@ function ThumbnailCard({
   onSelect?: () => void;
   onCtrlClick?: () => void;
   onShiftClick?: () => void;
+  pageCount?: number;
+  lastGlobalIndex?: number;
 }) {
   const {
     attributes,
@@ -445,7 +459,11 @@ function ThumbnailCard({
         {renderThumbnail()}
       </div>
       <div className="thumbnail-info">
-        <span className="thumbnail-number">{globalIndex + 1}P</span>
+        <span className="thumbnail-number">
+          {pageCount && pageCount > 1 && lastGlobalIndex !== undefined
+            ? `${globalIndex + 1}～${lastGlobalIndex + 1}P`
+            : `${globalIndex + 1}P`}
+        </span>
         <span className="thumbnail-filename" title={displayName}>
           {(() => {
             const maxLength = thumbnailSize <= 100 ? 10 : 15;
@@ -634,6 +652,7 @@ function SortablePageItem({
   onSelect,
   onAddSpecialPage,
   onSelectFile,
+  onDelete,
   showInsertionBefore,
   showInsertionAfter,
 }: {
@@ -643,6 +662,7 @@ function SortablePageItem({
   onSelect: () => void;
   onAddSpecialPage: (pageType: PageType, afterPageId: string) => void;
   onSelectFile: (pageId: string) => void;
+  onDelete: () => void;
   showInsertionBefore?: boolean;
   showInsertionAfter?: boolean;
 }) {
@@ -716,33 +736,48 @@ function SortablePageItem({
                   <FolderIcon size={12} />
                 </button>
               )}
+              {!isSpecialPage && (
+                <>
+                  <button
+                    className="page-add-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(!showMenu);
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    title="ページを挿入"
+                  >
+                    +
+                  </button>
+                  {showMenu && (
+                    <div className="page-add-menu">
+                      <button onClick={() => { onAddSpecialPage('cover', page.id); setShowMenu(false); }}>
+                        表紙
+                      </button>
+                      <button onClick={() => { onAddSpecialPage('blank', page.id); setShowMenu(false); }}>
+                        白紙
+                      </button>
+                      <button onClick={() => { onAddSpecialPage('intermission', page.id); setShowMenu(false); }}>
+                        幕間
+                      </button>
+                      <button onClick={() => { onAddSpecialPage('colophon', page.id); setShowMenu(false); }}>
+                        奥付
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
               <button
-                className="page-add-btn"
+                className="page-delete-btn"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setShowMenu(!showMenu);
+                  onDelete();
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
-                title="ページを挿入"
+                title="削除"
               >
-                +
+                <TrashIcon size={12} />
               </button>
-              {showMenu && (
-                <div className="page-add-menu">
-                  <button onClick={() => { onAddSpecialPage('cover', page.id); setShowMenu(false); }}>
-                    表紙
-                  </button>
-                  <button onClick={() => { onAddSpecialPage('blank', page.id); setShowMenu(false); }}>
-                    白紙
-                  </button>
-                  <button onClick={() => { onAddSpecialPage('intermission', page.id); setShowMenu(false); }}>
-                    幕間
-                  </button>
-                  <button onClick={() => { onAddSpecialPage('colophon', page.id); setShowMenu(false); }}>
-                    奥付
-                  </button>
-                </div>
-              )}
             </div>
           </>
         )}
@@ -762,6 +797,7 @@ function ChapterItem({
   onToggle,
   onRename,
   onDelete,
+  onDeletePage,
   onAddFiles,
   onAddFolder,
   onAddSpecialPage,
@@ -776,6 +812,7 @@ function ChapterItem({
   onToggle: () => void;
   onRename: (name: string) => void;
   onDelete: () => void;
+  onDeletePage: (pageId: string) => void;
   onAddFiles: () => void;
   onAddFolder: () => void;
   onAddSpecialPage: (pageType: PageType, afterPageId?: string) => void;
@@ -879,52 +916,8 @@ function ChapterItem({
         )}
         <span className="chapter-page-count">({chapter.pages.length})</span>
         <div className="chapter-actions">
-          <div className="chapter-add-wrapper">
-            <button
-              className="btn-icon"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowAddMenu(!showAddMenu);
-              }}
-              onPointerDown={(e) => e.stopPropagation()}
-              title="ページ追加"
-            >
-              +
-            </button>
-            {showAddMenu && (
-              <>
-                <div
-                  className="menu-backdrop"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowAddMenu(false);
-                  }}
-                />
-                <div className="chapter-add-menu menu-down">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAddFiles();
-                      setShowAddMenu(false);
-                    }}
-                  >
-                    <FileIcon size={14} /> ファイルを選択
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onAddFolder();
-                      setShowAddMenu(false);
-                    }}
-                  >
-                    <FolderIcon size={14} /> フォルダを選択
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
           <button
-            className="btn-icon"
+            className="btn-icon btn-delete"
             onClick={(e) => {
               e.stopPropagation();
               onDelete();
@@ -932,7 +925,7 @@ function ChapterItem({
             onPointerDown={(e) => e.stopPropagation()}
             title="削除"
           >
-            ×
+            <TrashIcon size={14} />
           </button>
         </div>
       </div>
@@ -952,49 +945,93 @@ function ChapterItem({
                   onSelect={() => onSelectPage(page.id)}
                   onAddSpecialPage={onAddSpecialPage}
                   onSelectFile={onSelectFile}
+                  onDelete={() => onDeletePage(page.id)}
                   showInsertionBefore={dropTarget?.type === 'page-before' && dropTarget.pageId === page.id && dropTarget.chapterId === chapter.id}
                   showInsertionAfter={dropTarget?.type === 'page-after' && dropTarget.pageId === page.id && dropTarget.chapterId === chapter.id}
                 />
               ))}
             </SortableContext>
           )}
-          <div className="chapter-pages-footer">
+          <div className="chapter-pages-add">
             <button
-              className="add-special-btn"
+              className="btn-icon chapter-add-btn"
               onClick={(e) => {
                 e.stopPropagation();
-                onAddSpecialPage('cover');
+                setShowAddMenu(!showAddMenu);
               }}
+              onPointerDown={(e) => e.stopPropagation()}
+              title="ページ追加"
             >
-              +表紙
+              +
             </button>
-            <button
-              className="add-special-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                onAddSpecialPage('blank');
-              }}
-            >
-              +白紙
-            </button>
-            <button
-              className="add-special-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                onAddSpecialPage('intermission');
-              }}
-            >
-              +幕間
-            </button>
-            <button
-              className="add-special-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                onAddSpecialPage('colophon');
-              }}
-            >
-              +奥付
-            </button>
+            {showAddMenu && (
+              <>
+                <div
+                  className="menu-backdrop"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowAddMenu(false);
+                  }}
+                />
+                <div className="chapter-add-menu menu-up">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAddFiles();
+                      setShowAddMenu(false);
+                    }}
+                  >
+                    <FileIcon size={14} /> ファイルを選択
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAddFolder();
+                      setShowAddMenu(false);
+                    }}
+                  >
+                    <FolderIcon size={14} /> フォルダを選択
+                  </button>
+                  <div className="menu-divider" />
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAddSpecialPage('cover');
+                      setShowAddMenu(false);
+                    }}
+                  >
+                    +表紙
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAddSpecialPage('blank');
+                      setShowAddMenu(false);
+                    }}
+                  >
+                    +白紙
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAddSpecialPage('intermission');
+                      setShowAddMenu(false);
+                    }}
+                  >
+                    +幕間
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAddSpecialPage('colophon');
+                      setShowAddMenu(false);
+                    }}
+                  >
+                    +奥付
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -1963,10 +2000,36 @@ function App() {
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
-        distance: 8,
+        distance: 5,
       },
     })
   );
+
+  // カスタムcollision detection: チャプタードラッグ時はチャプターIDのみを対象にする
+  const customCollisionDetection: CollisionDetection = (args) => {
+    const { droppableContainers, active } = args;
+
+    // チャプタードラッグ時
+    if (activeDragType === 'chapter') {
+      // チャプターIDのみをフィルタリング（ページIDを除外）
+      const chapterIds = new Set(chapters.map(c => c.id));
+      const chapterContainers = droppableContainers.filter(container => {
+        const id = String(container.id);
+        return chapterIds.has(id) ||
+               id === CHAPTER_REORDER_DROP_ZONE_START_ID ||
+               id === CHAPTER_REORDER_DROP_ZONE_END_ID;
+      });
+
+      // フィルタリングされたコンテナでclosestCenterを使用
+      return closestCenter({
+        ...args,
+        droppableContainers: chapterContainers,
+      });
+    }
+
+    // ページドラッグ時は通常のclosestCenter
+    return closestCenter(args);
+  };
 
   const handleAddChapter = (type: ChapterType) => {
     addChapter(type);
@@ -2141,6 +2204,10 @@ function App() {
 
     const overIdStr = String(over.id);
 
+    // ドラッグ中のアイテムの現在位置（中央）を計算
+    const activeRect = active.rect.current.translated;
+    const activeCenterY = activeRect ? activeRect.top + activeRect.height / 2 : 0;
+
     // チャプタードラッグの場合
     if (activeDragType === 'chapter') {
       // 特殊ドロップゾーンのチェック
@@ -2156,12 +2223,11 @@ function App() {
       // チャプター上にホバー（サイドバー）
       const isChapterId = chapters.some(c => c.id === overIdStr);
       if (isChapterId) {
-        // マウス位置に基づいて挿入位置を決定（ドラッグ中の現在位置）
+        // ドラッグ中のアイテムの中央位置とover要素の中央を比較
         const overRect = over.rect;
-        const startY = (event.activatorEvent as PointerEvent)?.clientY ?? 0;
-        const currentY = startY + (event.delta?.y ?? 0);
         const overCenterY = overRect.top + overRect.height / 2;
-        const insertType = currentY < overCenterY ? 'chapter-before' : 'chapter-after';
+        // ドラッグアイテムの中央がover要素の中央より上なら「前」、下なら「後」
+        const insertType = activeCenterY < overCenterY ? 'chapter-before' : 'chapter-after';
         setDropTarget({ type: insertType, chapterId: overIdStr });
       } else {
         setDropTarget(null);
@@ -2197,15 +2263,12 @@ function App() {
     const overPage = allPages.find((p) => p.page.id === actualOverId);
 
     if (activePage && overPage) {
-      // マウス位置に基づいて挿入位置を決定（アイテムの中央より上なら前、下なら後）
+      // ドラッグ中のアイテムの中央位置とover要素の中央を比較
       const overRect = over.rect;
-      const pointerY = (event.activatorEvent as PointerEvent)?.clientY ?? 0;
-
-      // over要素の中央位置
       const overCenterY = overRect.top + overRect.height / 2;
 
-      // マウスが中央より上なら「前」、下なら「後」に挿入
-      const insertType = pointerY < overCenterY ? 'page-before' : 'page-after';
+      // ドラッグアイテムの中央がover要素の中央より上なら「前」、下なら「後」
+      const insertType = activeCenterY < overCenterY ? 'page-before' : 'page-after';
       setDropTarget({ type: insertType, chapterId: overPage.chapter.id, pageId: actualOverId });
     } else {
       setDropTarget(null);
@@ -2764,7 +2827,7 @@ function App() {
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCenter}
+      collisionDetection={customCollisionDetection}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
@@ -3043,6 +3106,7 @@ function App() {
                         onToggle={() => toggleChapterCollapsed(chapter.id)}
                         onRename={(name) => renameChapter(chapter.id, name)}
                         onDelete={() => removeChapter(chapter.id)}
+                        onDeletePage={(pageId) => removePage(chapter.id, pageId)}
                         onAddFiles={() => handleAddPages(chapter.id)}
                         onAddFolder={() => handleAddFolder(chapter.id)}
                         onAddSpecialPage={(pageType, afterPageId) => addSpecialPage(chapter.id, pageType, afterPageId)}
@@ -3116,57 +3180,73 @@ function App() {
 
                           return (
                             <>
-                              {/* チャプターブロック（横並び、展開時は幅が広がる） */}
-                              <div className="chapter-blocks-row">
+                              {/* チャプターブロック（横並び、展開時はページが折り返し） */}
+                              <div className="chapter-blocks-flow">
                                 {chapterGroups.map((group) => {
                                   const isCollapsed = previewCollapsedChapters.has(group.chapter.id);
                                   const isExpanded = !isCollapsed && group.pages.length > 1;
                                   const firstPage = group.pages[0];
 
+                                  // ページ一覧を作成（折りたたみ時は先頭のみ、展開時は全て）
+                                  const pagesToShow = isCollapsed ? (firstPage ? [firstPage] : []) : group.pages;
+
                                   return (
-                                    <div
-                                      key={group.chapter.id}
-                                      className={`chapter-block ${isCollapsed ? 'collapsed' : ''} ${isExpanded ? 'expanded' : ''} ${fileDropMode === 'append-chapter' && fileDropTargetChapterId === group.chapter.id ? 'drop-target' : ''}`}
-                                      data-chapter-id={group.chapter.id}
-                                      style={{
-                                        backgroundColor: group.chapter.type !== 'chapter' ? `${CHAPTER_TYPE_COLORS[group.chapter.type]}12` : undefined,
-                                        borderColor: group.chapter.type !== 'chapter' ? `${CHAPTER_TYPE_COLORS[group.chapter.type]}40` : undefined,
-                                      }}
-                                    >
-                                      {/* チャプターヘッダー */}
-                                      <div
-                                        className="chapter-block-header"
-                                        onClick={() => group.pages.length > 1 && togglePreviewChapterCollapse(group.chapter.id)}
-                                        style={{ cursor: group.pages.length > 1 ? 'pointer' : 'default' }}
-                                      >
-                                        {group.pages.length > 1 && (
-                                          <span className="chapter-block-collapse-btn">
-                                            {isCollapsed ? '▶' : '▼'}
-                                          </span>
-                                        )}
-                                        <span
-                                          className="chapter-block-badge"
-                                          style={{ backgroundColor: CHAPTER_TYPE_COLORS[group.chapter.type] }}
-                                        >
-                                          {CHAPTER_TYPE_LABELS[group.chapter.type]}
-                                        </span>
-                                        <span className="chapter-block-name">{group.chapter.name}</span>
-                                        <span className="chapter-block-count">{group.pages.length}P</span>
-                                      </div>
-                                      {/* ページ表示（折りたたみ時は先頭のみ、展開時は全て、空の場合はプレースホルダー） */}
-                                      <div className="chapter-block-pages">
-                                        {group.pages.length === 0 ? (
-                                          // 空のチャプター：プレースホルダー表示
+                                    <div key={group.chapter.id} className="chapter-flow-group">
+                                      {/* ページなしの場合 */}
+                                      {group.pages.length === 0 ? (
+                                        <div className="chapter-page-wrapper">
+                                          {/* ヘッダー */}
+                                          <div
+                                            className={`chapter-underline-header ${fileDropMode === 'append-chapter' && fileDropTargetChapterId === group.chapter.id ? 'drop-target' : ''}`}
+                                            data-chapter-id={group.chapter.id}
+                                          >
+                                            <span
+                                              className="chapter-block-badge"
+                                              style={{ backgroundColor: CHAPTER_TYPE_COLORS[group.chapter.type] }}
+                                            >
+                                              {CHAPTER_TYPE_LABELS[group.chapter.type]}
+                                            </span>
+                                            <span className="chapter-block-name">{group.chapter.name}</span>
+                                          </div>
+                                          {/* 空のページ */}
                                           <div
                                             className="chapter-block-empty"
                                             style={{ width: thumbnailSizeValue, height: thumbnailSizeValue * 1.4 }}
                                           >
                                             <span>ページなし</span>
                                           </div>
-                                        ) : isExpanded ? (
-                                          // 展開時：全ページを表示
-                                          group.pages.map((item) => (
-                                            <div key={item.page.id} className="thumbnail-wrapper-with-indicator">
+                                          {/* アンダーライン */}
+                                          <div
+                                            className="chapter-underline"
+                                            style={{ backgroundColor: CHAPTER_TYPE_COLORS[group.chapter.type] }}
+                                          />
+                                        </div>
+                                      ) : (
+                                        // ページがある場合：各ページにヘッダーとアンダーラインを付ける
+                                        pagesToShow.map((item, idx) => (
+                                          <div key={item.page.id} className="chapter-page-wrapper">
+                                            {/* 最初のページのみヘッダーを表示 */}
+                                            {idx === 0 && (
+                                              <div
+                                                className={`chapter-underline-header ${fileDropMode === 'append-chapter' && fileDropTargetChapterId === group.chapter.id ? 'drop-target' : ''}`}
+                                                data-chapter-id={group.chapter.id}
+                                                onClick={() => group.pages.length > 1 && togglePreviewChapterCollapse(group.chapter.id)}
+                                                style={{ cursor: group.pages.length > 1 ? 'pointer' : 'default' }}
+                                              >
+                                                {group.pages.length > 1 && (
+                                                  <span className="chapter-block-collapse-btn">{isCollapsed ? '▶' : '▼'}</span>
+                                                )}
+                                                <span
+                                                  className="chapter-block-badge"
+                                                  style={{ backgroundColor: CHAPTER_TYPE_COLORS[group.chapter.type] }}
+                                                >
+                                                  {CHAPTER_TYPE_LABELS[group.chapter.type]}
+                                                </span>
+                                                <span className="chapter-block-name">{group.chapter.name}</span>
+                                              </div>
+                                            )}
+                                            {/* ページ */}
+                                            <div className="thumbnail-wrapper-with-indicator chapter-flow-page">
                                               {dropTarget?.pageId === item.page.id && activeId && (dropTarget?.type === 'page-before' || dropTarget?.type === 'page-after') && (
                                                 <div className={`drop-indicator ${dropTarget?.type === 'page-after' ? 'right' : 'left'}`} />
                                               )}
@@ -3195,59 +3275,18 @@ function App() {
                                                     selectPage(item.page.id);
                                                   }
                                                 }}
+                                                pageCount={isCollapsed ? group.pages.length : undefined}
+                                                lastGlobalIndex={isCollapsed && group.pages.length > 1 ? group.pages[group.pages.length - 1].globalIndex : undefined}
                                               />
                                             </div>
-                                          ))
-                                        ) : (
-                                          // 折りたたみ時または1ページのみ：先頭ページのみ表示
-                                          <>
-                                            <div className="thumbnail-wrapper-with-indicator">
-                                              {dropTarget?.pageId === firstPage.page.id && activeId && (dropTarget?.type === 'page-before' || dropTarget?.type === 'page-after') && (
-                                                <div className={`drop-indicator ${dropTarget?.type === 'page-after' ? 'right' : 'left'}`} />
-                                              )}
-                                              {fileDropTargetPageId === firstPage.page.id && isDraggingFiles && (
-                                                <div className={`drop-indicator file-drop ${insertPosition === 'after' ? 'right' : 'left'}`} />
-                                              )}
-                                              <ThumbnailCard
-                                                page={firstPage.page}
-                                                globalIndex={firstPage.globalIndex}
-                                                thumbnailSize={thumbnailSizeValue}
-                                                isHighlighted={firstPage.page.id === highlightedPageId}
-                                                isSelected={firstPage.page.id === selectedPageId}
-                                                isMultiSelected={selectedPageIds.includes(firstPage.page.id)}
-                                                onSelect={() => {
-                                                  selectChapter(firstPage.chapter.id);
-                                                  selectPage(firstPage.page.id);
-                                                }}
-                                                onCtrlClick={() => {
-                                                  selectChapter(firstPage.chapter.id);
-                                                  togglePageSelection(firstPage.page.id);
-                                                }}
-                                                onShiftClick={() => {
-                                                  if (selectedPageId) {
-                                                    selectPageRange(selectedPageId, firstPage.page.id);
-                                                  } else {
-                                                    selectPage(firstPage.page.id);
-                                                  }
-                                                }}
-                                              />
-                                            </div>
-                                            {/* 折りたたみ時に残りページ数を表示 */}
-                                            {isCollapsed && group.pages.length > 1 && (
-                                              <div
-                                                className="chapter-block-hidden-indicator"
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  togglePreviewChapterCollapse(group.chapter.id);
-                                                }}
-                                              >
-                                                <span className="hidden-count">+{group.pages.length - 1}</span>
-                                                <span className="hidden-text">ページ</span>
-                                              </div>
-                                            )}
-                                          </>
-                                        )}
-                                      </div>
+                                            {/* アンダーライン */}
+                                            <div
+                                              className="chapter-underline"
+                                              style={{ backgroundColor: CHAPTER_TYPE_COLORS[group.chapter.type] }}
+                                            />
+                                          </div>
+                                        ))
+                                      )}
                                     </div>
                                   );
                                 })}

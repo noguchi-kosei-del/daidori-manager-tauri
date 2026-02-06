@@ -9,9 +9,9 @@ use image::{DynamicImage, ImageFormat};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-// サムネイル設定（極限高画質版）
-const THUMBNAIL_SIZE: u32 = 480;  // 高DPIディスプレイ対応（特大240px×2倍）
-const JPEG_QUALITY: u8 = 95;      // JPEG品質（高画質）
+// サムネイル設定（超高解像度版）
+const THUMBNAIL_SIZE: u32 = 960;  // 超高DPIディスプレイ対応（240px×4倍）
+const JPEG_QUALITY: u8 = 98;      // JPEG品質（最高画質）
 
 // 画像サイズ制限（DoS防止）
 const MAX_IMAGE_DIMENSION: u32 = 65535;      // 最大辺長
