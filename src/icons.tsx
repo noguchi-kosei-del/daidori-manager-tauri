@@ -279,3 +279,81 @@ export function TrashIcon({ size = 16, className }: IconProps) {
     </svg>
   );
 }
+
+// ▲ 上矢印アイコン（前へ）
+export function ChevronUpIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <polyline points="18 15 12 9 6 15" />
+    </svg>
+  );
+}
+
+// ▼ 下矢印アイコン（次へ）
+export function ChevronDownIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  );
+}
+
+// ⏫ 先頭へジャンプアイコン
+export function ChevronsUpIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <polyline points="17 11 12 6 7 11" />
+      <polyline points="17 18 12 13 7 18" />
+    </svg>
+  );
+}
+
+// ⏬ 末尾へジャンプアイコン
+export function ChevronsDownIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <polyline points="7 13 12 18 17 13" />
+      <polyline points="7 6 12 11 17 6" />
+    </svg>
+  );
+}

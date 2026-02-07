@@ -1704,6 +1704,12 @@ function App() {
               </div>
               <div className="sidebar-content">
                 <div className="chapter-list">
+                  {chapters.length === 0 ? (
+                    <div className="sidebar-empty-state">
+                      <p>チャプターを追加してください</p>
+                    </div>
+                  ) : (
+                    <>
                   {/* サイドバー用の新規チャプター作成ゾーン（先頭） */}
                   <SidebarNewChapterDropZone isDragging={activeDragType === 'page'} position="start" />
                   {/* サイドバー用のチャプター並べ替えゾーン（先頭） */}
@@ -1742,6 +1748,8 @@ function App() {
                   <SidebarChapterReorderDropZone isDragging={activeDragType === 'chapter'} position="end" />
                   {/* サイドバー用の新規チャプター作成ゾーン（末尾） */}
                   <SidebarNewChapterDropZone isDragging={activeDragType === 'page'} position="end" />
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -1787,12 +1795,7 @@ function App() {
             </aside>
 
             <div className="preview-area" ref={previewAreaRef}>
-              {chapters.length === 0 ? (
-                <div className="empty-state">
-                  <p>チャプターがありません</p>
-                  <p>左のパネルからチャプターを追加してください</p>
-                </div>
-              ) : previewMode === 'spread' ? (
+              {previewMode === 'spread' ? (
               <SpreadViewer
                 key={displayPages.map(p => p.page.id).join(',')}
                 pages={displayPages}
