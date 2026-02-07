@@ -182,7 +182,7 @@ export function ThumbnailCard({
         {renderThumbnail()}
       </div>
       <div className="thumbnail-info">
-        <span className="thumbnail-number">
+        <span className="thumbnail-number" style={{ fontSize: thumbnailSize <= 100 ? 16 : thumbnailSize >= 180 ? 28 : 22 }}>
           {pageCount && pageCount > 1 && lastGlobalIndex !== undefined
             ? `${globalIndex + 1}～${lastGlobalIndex + 1}P`
             : `${globalIndex + 1}P`}

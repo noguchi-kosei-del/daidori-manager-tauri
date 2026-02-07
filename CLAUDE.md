@@ -325,3 +325,18 @@ style-src 'self' 'unsafe-inline'
 
 #### preview-area
 - empty-state（チャプターがありません）を削除
+
+### 2026-02-07: UI調整
+
+#### ThumbnailCard
+- thumbnail-numberのフォントサイズをグリッドサイズに応じて変更
+  - 小（100px）: 16px
+  - 中（140px）: 22px
+  - 大（180px）: 28px
+
+#### ヘッダー
+- ホームボタンを「リセット」ボタンに変更
+- アイコンをHomeIconからResetIcon（円形矢印）に変更
+
+#### アイコン追加（icons.tsx）
+- ResetIcon（円形矢印）を追加

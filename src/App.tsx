@@ -45,7 +45,7 @@ import {
   BooksIcon,
   SunIcon,
   MoonIcon,
-  HomeIcon,
+  ResetIcon,
   ExportIcon,
 } from './icons';
 
@@ -1597,10 +1597,10 @@ function App() {
                       setCurrentView('home');
                     }
                   }}
-                  title="ホーム画面に戻る"
+                  title="リセット"
                   disabled={chapters.length === 0}
                 >
-                  <HomeIcon size={18} />
+                  <ResetIcon size={18} />
                 </button>
 
                 <button
