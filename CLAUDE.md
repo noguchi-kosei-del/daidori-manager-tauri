@@ -303,3 +303,25 @@ style-src 'self' 'unsafe-inline'
 #### ライトモード対応
 - sidebar-drag-overlay: 背景を白系（rgba(255, 255, 255, 0.95)）に変更
 - chapter-drag-overlay: 背景を白系グラデーションに変更、テキストシャドウを削除
+
+### 2026-02-07: 見開き表示にフローティングナビゲーションバーを追加
+
+#### SpreadViewer
+- 見開き表示時に右側にフローティングスクロールバーを追加
+- ハンドルをドラッグしてページ間を移動可能
+- トラッククリックでその位置にジャンプ
+- 現在のページ番号をバブル表示（例: 2-3p）
+- バブルの色をハンドルと同じアクセントカラーに統一
+
+#### アイコン追加（icons.tsx）
+- ChevronUpIcon（上矢印）
+- ChevronDownIcon（下矢印）
+- ChevronsUpIcon（二重上矢印）
+- ChevronsDownIcon（二重下矢印）
+
+#### サイドバー
+- チャプターが空の場合「チャプターを追加してください」メッセージを表示
+- sidebar-empty-stateを縦横中央に配置
+
+#### preview-area
+- empty-state（チャプターがありません）を削除
