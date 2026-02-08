@@ -340,3 +340,19 @@ style-src 'self' 'unsafe-inline'
 
 #### アイコン追加（icons.tsx）
 - ResetIcon（円形矢印）を追加
+
+### 2026-02-08: アプリアイコン設定
+
+#### アイコン生成
+- `logo/daidori_icon.png`から`tauri icon`コマンドで各種アイコンを自動生成
+- 生成先: `src-tauri/icons/`
+  - Windows: icon.ico
+  - macOS: icon.icns
+  - PNG各種サイズ（32x32, 64x64, 128x128, 256x256）
+  - Windows Store用ロゴ（Square各種サイズ）
+  - iOS/Android用アイコン
+
+#### ウィンドウアイコン（lib.rs）
+- `setup`フックでウィンドウアイコンを動的に設定
+- `image`クレートでPNGをデコードし、`tauri::image::Image::new_owned`でアイコン作成
+- 開発モードでもタイトルバーにアイコンが表示されるように対応

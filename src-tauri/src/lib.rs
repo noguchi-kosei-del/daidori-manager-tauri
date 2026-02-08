@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use cache::{ThumbnailCache, ThumbnailMemoryCache};
 use state::AppState;
 use constants::MEMORY_CACHE_MAX_SIZE;
+use tauri::Manager;
 
 // Tauri コマンドを再エクスポート
 use commands::folder::get_folder_contents;
@@ -27,6 +28,19 @@ pub fn run() {
         .manage(ThumbnailCache::new())
         .manage(AppState {
             memory_cache: Mutex::new(ThumbnailMemoryCache::new(MEMORY_CACHE_MAX_SIZE)),
+        })
+        .setup(|app| {
+            // ウィンドウアイコンを設定
+            if let Some(window) = app.get_webview_window("main") {
+                let icon_bytes = include_bytes!("../icons/icon.png");
+                if let Ok(img) = image::load_from_memory(icon_bytes) {
+                    let rgba = img.to_rgba8();
+                    let (width, height) = rgba.dimensions();
+                    let icon = tauri::image::Image::new_owned(rgba.into_raw(), width, height);
+                    let _ = window.set_icon(icon);
+                }
+            }
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_folder_contents,
