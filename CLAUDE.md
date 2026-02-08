@@ -356,3 +356,16 @@ style-src 'self' 'unsafe-inline'
 - `setup`フックでウィンドウアイコンを動的に設定
 - `image`クレートでPNGをデコードし、`tauri::image::Image::new_owned`でアイコン作成
 - 開発モードでもタイトルバーにアイコンが表示されるように対応
+
+### 2026-02-08: 空状態UI改善
+
+#### サイドバー空状態（sidebar-empty-state）
+- 「チャプターを追加してください」メッセージの上にPlusCircleIcon（48px）を追加
+- flex-direction: columnで縦並びに配置
+- アイコンのopacityを0.5に設定
+
+#### グリッド表示空状態
+- チャプターがない場合に「ページがありません」メッセージを中央に表示
+- spread-viewer-emptyクラスを再利用
+- preview-areaにdisplay: flex; flex-direction: columnを追加
+- thumbnail-grid-containerにflex: 1; height: 100%を追加

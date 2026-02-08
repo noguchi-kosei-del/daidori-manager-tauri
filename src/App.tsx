@@ -40,6 +40,7 @@ import {
   FileIcon,
   FolderIcon,
   PlusIcon,
+  PlusCircleIcon,
   BookOpenIcon,
   AlertTriangleIcon,
   BooksIcon,
@@ -1706,6 +1707,7 @@ function App() {
                 <div className="chapter-list">
                   {chapters.length === 0 ? (
                     <div className="sidebar-empty-state">
+                      <PlusCircleIcon size={48} />
                       <p>チャプターを追加してください</p>
                     </div>
                   ) : (
@@ -1806,6 +1808,11 @@ function App() {
               />
             ) : (
               <div className="thumbnail-grid-container">
+                {chapters.length === 0 ? (
+                  <div className="spread-viewer-empty">
+                    <p>ページがありません</p>
+                  </div>
+                ) : (
                 <SortableContext
                   items={displayPages.map((p) => p.page.id)}
                   strategy={rectSortingStrategy}
@@ -1997,6 +2004,7 @@ function App() {
                     </div>
                   )}
                 </SortableContext>
+                )}
               </div>
             )}
             </div>
