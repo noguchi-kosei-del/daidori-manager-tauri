@@ -135,6 +135,7 @@ interface DaidoriProjectFile {
 | `validate_project_files` | ファイル参照の検証 |
 | `get_recent_files` | 最近使ったファイル取得 |
 | `add_recent_file` | 最近使ったファイルに追加 |
+| `open_file_with_default_app` | ファイルを既定のアプリケーションで開く |
 
 ## 開発・ビルド
 
@@ -369,3 +370,41 @@ style-src 'self' 'unsafe-inline'
 - spread-viewer-emptyクラスを再利用
 - preview-areaにdisplay: flex; flex-direction: columnを追加
 - thumbnail-grid-containerにflex: 1; height: 100%を追加
+
+### 2026-02-09: 見開きビューア機能強化・UI改善
+
+#### グリッド切替ボタン変更（App.tsx, icons.tsx）
+- 「⊞ グリッド」ボタンのテキストを「単ページ」に変更
+- SinglePageIconコンポーネントを新規追加（ドキュメント風アイコン）
+
+#### PSDファイルをPhotoshopで開く機能（SpreadViewer.tsx, open_file.rs）
+- spread-info-barのページラベルクリックでポップアップメニュー表示
+- 「Photoshopで開く」選択でPSDファイルを外部アプリケーションで開く
+- Rustコマンド`open_file_with_default_app`を新規追加
+  - Windows: `cmd /C start`
+  - macOS: `open`
+  - Linux: `xdg-open`
+
+#### 見開き表示のページ位置修正（SpreadViewer.tsx）
+- 日本漫画の右綴じ（右から左へ読む）に対応
+- spread-info-barの左右ページラベル位置を入れ替え
+- 右側に若いページ番号（例: 2p）、左側に大きいページ番号（例: 3p）を表示
+
+#### キーボードナビゲーション（SpreadViewer.tsx）
+- 方向キーによるページ移動機能を追加
+  - ↓（ArrowDown）: 次のスプレッドへ移動
+  - ↑（ArrowUp）: 前のスプレッドへ移動
+  - Ctrl+↓: 最後のスプレッドへジャンプ
+  - Ctrl+↑: 最初のスプレッドへジャンプ
+- ターゲットベースのスクロール同期を実装
+  - `isProgrammaticScroll`と`targetSpreadIndex`による状態管理
+  - フローティングバーのガクガク動作を解消
+
+#### 削除ボタンホバースタイル（styles.css）
+- chapter-itemの削除ボタンにホバー時の赤色背景を追加
+- `.btn-icon.btn-delete:hover:not(:disabled)`: 白文字＋エラー色背景
+
+#### Tauriコマンド追加
+| コマンド | 説明 |
+|---------|------|
+| `open_file_with_default_app` | ファイルを既定のアプリケーションで開く |

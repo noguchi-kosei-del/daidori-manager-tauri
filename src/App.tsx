@@ -48,6 +48,7 @@ import {
   MoonIcon,
   ResetIcon,
   ExportIcon,
+  SinglePageIcon,
 } from './icons';
 
 // 抽出したコンポーネント
@@ -1663,9 +1664,9 @@ function App() {
                 <button
                   className={`view-mode-btn ${previewMode === 'grid' ? 'active' : ''}`}
                   onClick={() => setPreviewMode('grid')}
-                  title="グリッド表示"
+                  title="単ページ表示"
                 >
-                  ⊞ グリッド
+                  <SinglePageIcon size={14} /> 単ページ
                 </button>
                 <button
                   className={`view-mode-btn ${previewMode === 'spread' ? 'active' : ''}`}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { Chapter, Page, PAGE_TYPE_LABELS, PAGE_TYPE_COLORS } from '../../types';
 import { queueThumbnail } from '../../hooks';
 
@@ -18,6 +18,16 @@ export function SpreadViewer({
   const [isDragging, setIsDragging] = useState(false);
   // ドラッグ中のハンドル位置（0〜1の範囲）
   const [dragHandlePosition, setDragHandlePosition] = useState(0);
+  // プログラムによるスクロール中のイベント抑制用
+  const isProgrammaticScroll = useRef(false);
+  const targetSpreadIndex = useRef<number | null>(null);
+  // ポップアップメニュー用
+  const [popupInfo, setPopupInfo] = useState<{
+    filePath: string;
+    fileName: string;
+    x: number;
+    y: number;
+  } | null>(null);
 
   // 見開きのペアを計算（日本の漫画スタイル：右から左へ読む）
   const spreads = useMemo(() => {
@@ -76,12 +86,13 @@ export function SpreadViewer({
     });
   }, [visibleSpreads, spreads]);
 
-  // スクロール位置から現在の見開きインデックスを計算（ドラッグ中は無視）
+  // スクロール位置から現在の見開きインデックスを計算
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const handleScroll = () => {
+      // ドラッグ中は無視
       if (isDragging) return;
 
       const spreadElements = container.querySelectorAll('.spread-item');
@@ -101,6 +112,16 @@ export function SpreadViewer({
           closestIndex = index;
         }
       });
+
+      // プログラムスクロール中は、目標位置に到達したらフラグを解除
+      if (isProgrammaticScroll.current) {
+        if (targetSpreadIndex.current !== null && closestIndex === targetSpreadIndex.current) {
+          isProgrammaticScroll.current = false;
+          targetSpreadIndex.current = null;
+        }
+        // 目標位置に到達するまでインデックスは更新しない
+        return;
+      }
 
       setCurrentSpreadIndex(closestIndex);
     };
@@ -125,6 +146,60 @@ export function SpreadViewer({
     ? Math.round(dragHandlePosition * (totalSpreads - 1))
     : currentSpreadIndex;
 
+  // PSDファイルかどうかを判定
+  const isPsdFile = useCallback((filePath: string | undefined) => {
+    if (!filePath) return false;
+    return filePath.toLowerCase().endsWith('.psd');
+  }, []);
+
+  // spread-info-barのクリックハンドラー
+  const handleInfoBarClick = useCallback((
+    e: React.MouseEvent,
+    item: typeof pages[0] | undefined
+  ) => {
+    if (!item) return;
+    const { page } = item;
+    if (!page.filePath || !isPsdFile(page.filePath)) return;
+
+    e.stopPropagation();
+    setPopupInfo({
+      filePath: page.filePath,
+      fileName: page.fileName || 'ファイル',
+      x: e.clientX,
+      y: e.clientY,
+    });
+  }, [isPsdFile]);
+
+  // Photoshopで開く
+  const handleOpenInPhotoshop = useCallback(async () => {
+    if (!popupInfo) return;
+    try {
+      await invoke('open_file_with_default_app', { filePath: popupInfo.filePath });
+    } catch (error) {
+      console.error('ファイルを開けませんでした:', error);
+    }
+    setPopupInfo(null);
+  }, [popupInfo]);
+
+  // ポップアップを閉じる（外側クリック）
+  useEffect(() => {
+    if (!popupInfo) return;
+
+    const handleClickOutside = () => {
+      setPopupInfo(null);
+    };
+
+    // 少し遅延させてから登録（クリックイベントとの競合を防ぐ）
+    const timer = setTimeout(() => {
+      document.addEventListener('click', handleClickOutside);
+    }, 0);
+
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('click', handleClickOutside);
+    };
+  }, [popupInfo]);
+
   // ナビゲーション関数
   const scrollToSpread = useCallback((index: number) => {
     const container = containerRef.current;
@@ -136,6 +211,56 @@ export function SpreadViewer({
       targetElement.scrollIntoView({ behavior: 'auto', block: 'center' });
     }
   }, []);
+
+  // プログラムによるスクロールを実行（スクロールイベント抑制付き）
+  const navigateToSpread = useCallback((targetIndex: number) => {
+    // スクロールイベントを抑制し、目標位置を記録
+    isProgrammaticScroll.current = true;
+    targetSpreadIndex.current = targetIndex;
+    setCurrentSpreadIndex(targetIndex);
+    scrollToSpread(targetIndex);
+  }, [scrollToSpread]);
+
+  // キーボードナビゲーション（上下キーでページ移動、Ctrl+上下で先頭/末尾へ）
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // ポップアップが開いている場合は無視
+      if (popupInfo) return;
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (e.ctrlKey || e.metaKey) {
+          // Ctrl+下：最後のページへ
+          if (currentSpreadIndex !== totalSpreads - 1) {
+            navigateToSpread(totalSpreads - 1);
+          }
+        } else {
+          // 下：次のページへ
+          const nextIndex = Math.min(currentSpreadIndex + 1, totalSpreads - 1);
+          if (nextIndex !== currentSpreadIndex) {
+            navigateToSpread(nextIndex);
+          }
+        }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (e.ctrlKey || e.metaKey) {
+          // Ctrl+上：最初のページへ
+          if (currentSpreadIndex !== 0) {
+            navigateToSpread(0);
+          }
+        } else {
+          // 上：前のページへ
+          const prevIndex = Math.max(currentSpreadIndex - 1, 0);
+          if (prevIndex !== currentSpreadIndex) {
+            navigateToSpread(prevIndex);
+          }
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [currentSpreadIndex, totalSpreads, navigateToSpread, popupInfo]);
 
   // トラッククリック/ドラッグでスクロール
   const handleTrackInteraction = useCallback((clientY: number) => {
@@ -278,18 +403,24 @@ export function SpreadViewer({
                 {renderPage(spread.left, 'left')}
               </div>
 
-              {/* ページ情報バー */}
+              {/* ページ情報バー（右綴じ：右側が若いページ） */}
               <div className="spread-info-bar">
-                {spread.right && (
-                  <span className="spread-page-label right">
-                    P.{spread.right.globalIndex + 1}
-                    {spread.right.page.fileName && ` - ${spread.right.page.fileName}`}
-                  </span>
-                )}
                 {spread.left && (
-                  <span className="spread-page-label left">
+                  <span
+                    className={`spread-page-label left ${isPsdFile(spread.left.page.filePath) ? 'clickable' : ''}`}
+                    onClick={(e) => handleInfoBarClick(e, spread.left)}
+                  >
                     P.{spread.left.globalIndex + 1}
                     {spread.left.page.fileName && ` - ${spread.left.page.fileName}`}
+                  </span>
+                )}
+                {spread.right && (
+                  <span
+                    className={`spread-page-label right ${isPsdFile(spread.right.page.filePath) ? 'clickable' : ''}`}
+                    onClick={(e) => handleInfoBarClick(e, spread.right)}
+                  >
+                    P.{spread.right.globalIndex + 1}
+                    {spread.right.page.fileName && ` - ${spread.right.page.fileName}`}
                   </span>
                 )}
               </div>
@@ -329,6 +460,26 @@ export function SpreadViewer({
               </span>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* PSDファイル用ポップアップメニュー */}
+      {popupInfo && (
+        <div
+          className="spread-popup-menu"
+          style={{
+            position: 'fixed',
+            left: popupInfo.x,
+            top: popupInfo.y,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="spread-popup-item"
+            onClick={handleOpenInPhotoshop}
+          >
+            Photoshopで開く
+          </button>
         </div>
       )}
     </div>
