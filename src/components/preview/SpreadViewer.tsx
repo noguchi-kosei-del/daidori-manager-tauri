@@ -2,14 +2,24 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { Chapter, Page, PAGE_TYPE_LABELS, PAGE_TYPE_COLORS } from '../../types';
 import { queueThumbnail } from '../../hooks';
+import { CloseIcon } from '../../icons';
+
+// 閉じるボタン自動非表示の遅延時間（ミリ秒）
+const CLOSE_BUTTON_HIDE_DELAY = 3000;
+// ナビゲーションヒント表示時間（ミリ秒）
+const NAV_HINT_SHOW_DURATION = 3000;
 
 // 見開きプレビューコンポーネント（縦スクロール式）
 export function SpreadViewer({
   pages,
   onPageSelect,
+  isViewerMode = false,
+  onExitViewerMode,
 }: {
   pages: { page: Page; chapter: Chapter; globalIndex: number }[];
   onPageSelect?: (chapterId: string, pageId: string) => void;
+  isViewerMode?: boolean;
+  onExitViewerMode?: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -28,6 +38,13 @@ export function SpreadViewer({
     x: number;
     y: number;
   } | null>(null);
+
+  // 閲覧モード時の閉じるボタン表示制御
+  const [closeButtonVisible, setCloseButtonVisible] = useState(true);
+  const closeButtonTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 閲覧モード時のナビゲーションヒント表示制御
+  const [navHintVisible, setNavHintVisible] = useState(false);
 
   // 見開きのペアを計算（日本の漫画スタイル：右から左へ読む）
   const spreads = useMemo(() => {
@@ -221,11 +238,18 @@ export function SpreadViewer({
     scrollToSpread(targetIndex);
   }, [scrollToSpread]);
 
-  // キーボードナビゲーション（上下キーでページ移動、Ctrl+上下で先頭/末尾へ）
+  // キーボードナビゲーション（上下キーでページ移動、Ctrl+上下で先頭/末尾へ、ESCで閲覧モード終了）
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // ポップアップが開いている場合は無視
       if (popupInfo) return;
+
+      // ESCキーで閲覧モード終了
+      if (e.key === 'Escape' && isViewerMode) {
+        e.preventDefault();
+        onExitViewerMode?.();
+        return;
+      }
 
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -260,7 +284,60 @@ export function SpreadViewer({
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [currentSpreadIndex, totalSpreads, navigateToSpread, popupInfo]);
+  }, [currentSpreadIndex, totalSpreads, navigateToSpread, popupInfo, isViewerMode, onExitViewerMode]);
+
+  // 閲覧モード時の閉じるボタン自動非表示（3秒後に非表示、マウス移動で再表示）
+  useEffect(() => {
+    if (!isViewerMode) {
+      setCloseButtonVisible(true);
+      return;
+    }
+
+    const hideCloseButton = () => {
+      closeButtonTimeoutRef.current = setTimeout(() => {
+        setCloseButtonVisible(false);
+      }, CLOSE_BUTTON_HIDE_DELAY);
+    };
+
+    const showCloseButton = () => {
+      if (closeButtonTimeoutRef.current) {
+        clearTimeout(closeButtonTimeoutRef.current);
+      }
+      setCloseButtonVisible(true);
+      hideCloseButton();
+    };
+
+    // 初期表示後3秒で非表示
+    hideCloseButton();
+
+    // マウス移動で再表示
+    document.addEventListener('mousemove', showCloseButton);
+
+    return () => {
+      if (closeButtonTimeoutRef.current) {
+        clearTimeout(closeButtonTimeoutRef.current);
+      }
+      document.removeEventListener('mousemove', showCloseButton);
+    };
+  }, [isViewerMode]);
+
+  // 閲覧モード開始時にナビゲーションヒントを表示（3秒後にフェードアウト）
+  useEffect(() => {
+    if (!isViewerMode) {
+      setNavHintVisible(false);
+      return;
+    }
+
+    // 閲覧モード開始時にヒントを表示
+    setNavHintVisible(true);
+
+    // 3秒後に非表示
+    const timer = setTimeout(() => {
+      setNavHintVisible(false);
+    }, NAV_HINT_SHOW_DURATION);
+
+    return () => clearTimeout(timer);
+  }, [isViewerMode]);
 
   // トラッククリック/ドラッグでスクロール
   const handleTrackInteraction = useCallback((clientY: number) => {
@@ -480,6 +557,24 @@ export function SpreadViewer({
           >
             Photoshopで開く
           </button>
+        </div>
+      )}
+
+      {/* 閲覧モード時の閉じるボタン */}
+      {isViewerMode && (
+        <button
+          className={`viewer-mode-close-btn ${closeButtonVisible ? 'visible' : 'auto-hidden'}`}
+          onClick={onExitViewerMode}
+          title="閲覧モードを終了 (ESC)"
+        >
+          <CloseIcon size={24} />
+        </button>
+      )}
+
+      {/* 閲覧モード時のナビゲーションヒント */}
+      {isViewerMode && (
+        <div className={`viewer-nav-hint ${navHintVisible ? 'show' : ''}`}>
+          escまたは×ボタンで閲覧モード解除
         </div>
       )}
     </div>

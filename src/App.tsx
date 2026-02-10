@@ -49,6 +49,7 @@ import {
   ResetIcon,
   ExportIcon,
   SinglePageIcon,
+  MonitorIcon,
 } from './icons';
 
 // 抽出したコンポーネント
@@ -156,6 +157,7 @@ function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeDragType, setActiveDragType] = useState<'chapter' | 'page' | null>(null);
   const [previewMode, setPreviewMode] = useState<'grid' | 'spread'>('grid');
+  const [isViewerMode, setIsViewerMode] = useState(false);
   const [isToolbarCollapsed, setIsToolbarCollapsed] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -484,6 +486,18 @@ function App() {
     localStorage.setItem('daidori_dark_mode', isDarkMode ? 'true' : 'false');
   }, [isDarkMode]);
 
+  // 閲覧モード切替の適用（body classを追加/削除）
+  useEffect(() => {
+    if (isViewerMode) {
+      document.body.classList.add('viewer-mode');
+    } else {
+      document.body.classList.remove('viewer-mode');
+    }
+    return () => {
+      document.body.classList.remove('viewer-mode');
+    };
+  }, [isViewerMode]);
+
   // ダークモードトグル
   const toggleDarkMode = () => {
     setIsDarkMode(!isDarkMode);
@@ -545,6 +559,15 @@ function App() {
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement
       ) {
+        return;
+      }
+
+      // F1: 閲覧モード切替（見開き表示時のみ）
+      if (e.key === 'F1') {
+        e.preventDefault();
+        if (previewMode === 'spread') {
+          setIsViewerMode(prev => !prev);
+        }
         return;
       }
 
@@ -653,7 +676,7 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedChapterId, selectedPageId, selectedPageIds, chapters, allPages, removePage, removeChapter, removeSelectedPages, selectChapter, selectPage, undo, redo]);
+  }, [selectedChapterId, selectedPageId, selectedPageIds, chapters, allPages, removePage, removeChapter, removeSelectedPages, selectChapter, selectPage, undo, redo, previewMode]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -1493,7 +1516,21 @@ function App() {
       <div className="app">
         <main className="main-area">
           <div className={`main-header ${isToolbarCollapsed ? 'collapsed' : ''}`}>
-            <div className="main-header-row">
+            <div className="main-header-row" data-tauri-drag-region>
+              {/* アプリアイコン */}
+              <img src="/logo/daidori_icon.png" alt="台割マネージャー" className="app-icon" />
+
+              {/* ツールバー折りたたみボタン */}
+              <button
+                className="toolbar-collapse-btn"
+                onClick={() => setIsToolbarCollapsed(!isToolbarCollapsed)}
+                title={isToolbarCollapsed ? 'ツールバーを展開' : 'ツールバーを折りたたむ'}
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" className={`collapse-icon ${isToolbarCollapsed ? 'collapsed' : ''}`}>
+                  <path d="M4 6L8 10L12 6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+
               <div className="project-menu-container" ref={projectMenuRef}>
                 {isEditingProjectName ? (
                   <div className="project-name-edit">
@@ -1577,49 +1614,34 @@ function App() {
                 )}
               </div>
 
-              <div className="main-header-actions">
+              {/* ウィンドウコントロールボタン（右側） */}
+              <div className="window-controls">
                 <button
-                  className="export-btn"
-                  onClick={() => setIsExportModalOpen(true)}
-                  title="エクスポート"
-                  disabled={allPages.length === 0}
+                  className="window-control-btn minimize"
+                  onClick={async () => { await getCurrentWindow().minimize(); }}
+                  title="最小化"
                 >
-                  <ExportIcon size={18} />
+                  <svg width="12" height="12" viewBox="0 0 12 12">
+                    <line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" strokeWidth="1.5"/>
+                  </svg>
                 </button>
-
                 <button
-                  className="home-btn"
-                  onClick={async () => {
-                    const confirmed = await ask('プロジェクトがリセットされます。よろしいですか？', {
-                      title: '確認',
-                      kind: 'warning',
-                    });
-                    if (confirmed) {
-                      resetProject();
-                      setCurrentView('home');
-                    }
-                  }}
-                  title="リセット"
-                  disabled={chapters.length === 0}
+                  className="window-control-btn maximize"
+                  onClick={async () => { await getCurrentWindow().toggleMaximize(); }}
+                  title="最大化"
                 >
-                  <ResetIcon size={18} />
+                  <svg width="12" height="12" viewBox="0 0 12 12">
+                    <rect x="2" y="2" width="8" height="8" stroke="currentColor" strokeWidth="1.5" fill="none"/>
+                  </svg>
                 </button>
-
                 <button
-                  className="theme-toggle-btn"
-                  onClick={toggleDarkMode}
-                  title={isDarkMode ? 'ライトモードに切り替え' : 'ダークモードに切り替え'}
+                  className="window-control-btn close"
+                  onClick={async () => { await getCurrentWindow().close(); }}
+                  title="閉じる"
                 >
-                  {isDarkMode ? <MoonIcon size={18} /> : <SunIcon size={18} />}
-                </button>
-
-                <button
-                  className="toolbar-collapse-btn"
-                  onClick={() => setIsToolbarCollapsed(!isToolbarCollapsed)}
-                  title={isToolbarCollapsed ? 'ツールバーを展開' : 'ツールバーを折りたたむ'}
-                >
-                  <svg width="16" height="16" viewBox="0 0 16 16" className={`collapse-icon ${isToolbarCollapsed ? 'collapsed' : ''}`}>
-                    <path d="M4 6L8 10L12 6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                  <svg width="12" height="12" viewBox="0 0 12 12">
+                    <line x1="2" y1="2" x2="10" y2="10" stroke="currentColor" strokeWidth="1.5"/>
+                    <line x1="10" y1="2" x2="2" y2="10" stroke="currentColor" strokeWidth="1.5"/>
                   </svg>
                 </button>
               </div>
@@ -1677,6 +1699,17 @@ function App() {
                 </button>
               </div>
 
+              {previewMode === 'spread' && (
+                <button
+                  className="viewer-mode-btn"
+                  onClick={() => setIsViewerMode(true)}
+                  title="閲覧モード (F1)"
+                  disabled={displayPages.length === 0}
+                >
+                  <MonitorIcon size={14} />
+                </button>
+              )}
+
               {previewMode === 'grid' && (
                 <div className="thumbnail-size-selector">
                   {(Object.keys(THUMBNAIL_SIZES) as ThumbnailSize[]).map((size) => (
@@ -1690,6 +1723,43 @@ function App() {
                   ))}
                 </div>
               )}
+
+              <div className="toolbar-right-actions">
+                <button
+                  className="export-btn"
+                  onClick={() => setIsExportModalOpen(true)}
+                  title="エクスポート"
+                  disabled={allPages.length === 0}
+                >
+                  <ExportIcon size={18} />
+                </button>
+
+                <button
+                  className="home-btn"
+                  onClick={async () => {
+                    const confirmed = await ask('プロジェクトがリセットされます。よろしいですか？', {
+                      title: '確認',
+                      kind: 'warning',
+                    });
+                    if (confirmed) {
+                      resetProject();
+                      setCurrentView('home');
+                    }
+                  }}
+                  title="リセット"
+                  disabled={chapters.length === 0}
+                >
+                  <ResetIcon size={18} />
+                </button>
+
+                <button
+                  className="theme-toggle-btn"
+                  onClick={toggleDarkMode}
+                  title={isDarkMode ? 'ライトモードに切り替え' : 'ダークモードに切り替え'}
+                >
+                  {isDarkMode ? <MoonIcon size={18} /> : <SunIcon size={18} />}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1806,6 +1876,8 @@ function App() {
                   selectChapter(chapterId);
                   selectPage(pageId);
                 }}
+                isViewerMode={isViewerMode}
+                onExitViewerMode={() => setIsViewerMode(false)}
               />
             ) : (
               <div className="thumbnail-grid-container">

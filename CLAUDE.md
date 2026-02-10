@@ -408,3 +408,33 @@ style-src 'self' 'unsafe-inline'
 | コマンド | 説明 |
 |---------|------|
 | `open_file_with_default_app` | ファイルを既定のアプリケーションで開く |
+
+### 2026-02-10: カスタムウィンドウ装飾・閲覧モード実装
+
+#### カスタムウィンドウ装飾（tauri.conf.json, App.tsx, styles.css）
+- ネイティブタイトルバーを削除（`decorations: false`）
+- カスタムウィンドウコントロールボタン（最小化、最大化、閉じる）を右上角に固定配置
+- ウィンドウドラッグ領域を`data-tauri-drag-region`で設定
+- Tauriウィンドウ権限を追加（`core:window:allow-minimize`, `core:window:allow-toggle-maximize`）
+
+#### アプリアイコン表示（App.tsx, styles.css）
+- ヘッダー左端にアプリアイコン（24x24px）を追加
+- `public/logo/daidori_icon.png`を使用
+
+#### 閲覧モード実装（App.tsx, SpreadViewer.tsx, styles.css, icons.tsx）
+- 見開き表示時にモニターアイコンボタンで閲覧モード開始
+- F1キーでも閲覧モード開始可能
+- UIがフェードアウトし、見開きページを全画面表示
+- 右上に×ボタン配置（3秒後に自動非表示、マウス移動で再表示）
+- ESCキーまたは×ボタンで閲覧モード終了
+- ナビゲーションヒント「escまたは×ボタンで閲覧モード解除」を3秒間表示
+- ページがない場合は閲覧モードボタンをグレーアウト
+
+#### ヘッダーレイアウト調整（styles.css）
+- main-header-rowにpadding-right: 150pxを追加（ウィンドウコントロール用）
+- toolbar-collapse-btnにmargin-right追加
+- ボタン角丸調整: viewer-mode-btn（border-radius: 25%）、btn-small（border-radius: 8px）
+
+#### アイコン追加（icons.tsx）
+- MonitorIcon: モニター形状（閲覧モード用）
+- CloseIcon: ×マーク（閲覧モード終了用）

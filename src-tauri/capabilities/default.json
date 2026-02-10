@@ -8,6 +8,8 @@
     "core:event:default",
     "core:window:allow-destroy",
     "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
     "opener:default",
     "dialog:default",
     "dialog:allow-open",

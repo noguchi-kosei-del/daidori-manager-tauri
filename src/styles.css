@@ -276,6 +276,14 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
   align-items: center;
   justify-content: space-between;
   padding: var(--spacing-sm) var(--spacing-lg);
+  padding-right: 150px; /* ウィンドウコントロール用スペース */
+}
+.app-icon {
+  width: 24px;
+  height: 24px;
+  margin-right: var(--spacing-sm);
+  border-radius: 4px;
+  -webkit-app-region: no-drag;
 }
 .toolbar-collapse-btn {
   display: flex;
@@ -284,6 +292,7 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
   width: 28px;
   height: 28px;
   padding: 0;
+  margin-right: var(--spacing-md);
   background: transparent;
   border: none;
   border-radius: var(--border-radius);
@@ -305,6 +314,41 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
   display: flex;
   align-items: center;
   gap: var(--spacing-xs);
+}
+
+/* ウィンドウコントロールボタン */
+.window-controls {
+  position: fixed;
+  top: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  z-index: 9999;
+}
+
+.window-control-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.window-control-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.window-control-btn.close:hover {
+  background: #e81123;
+  color: white;
 }
 .export-btn {
   display: flex;
@@ -388,6 +432,38 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
   border-top-color: transparent;
   opacity: 0;
 }
+
+/* ツールバー右側のアクションボタン群 */
+.toolbar-right-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-left: auto;
+}
+
+.toolbar-right-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-xs);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.toolbar-right-actions button:hover:not(:disabled) {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+.toolbar-right-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .main-content { flex: 1; overflow-y: auto; padding: var(--spacing-xl); background: linear-gradient(180deg, var(--color-bg-primary) 0%, #08080f 100%); }
 
 .btn { padding: var(--spacing-sm) var(--spacing-md); border-radius: var(--border-radius); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); transition: all var(--transition-base); display: inline-flex; align-items: center; justify-content: center; gap: var(--spacing-xs); }
@@ -1052,7 +1128,7 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
 .input-with-button { display: flex; gap: var(--spacing-sm); }
 .input-with-button input { flex: 1; }
 
-.btn-small { padding: var(--spacing-xs) var(--spacing-sm); font-size: var(--font-size-xs); }
+.btn-small { padding: var(--spacing-xs) var(--spacing-sm); font-size: var(--font-size-xs); border-radius: 8px; }
 .btn-danger { background: linear-gradient(135deg, var(--color-error) 0%, #d45050 100%); }
 .btn-danger:hover:not(:disabled) { background: linear-gradient(135deg, #ff8888 0%, var(--color-error) 100%); box-shadow: var(--shadow-md), 0 4px 16px rgba(248, 113, 113, 0.25); }
 
@@ -2914,4 +2990,176 @@ body.light-mode .chapter-drag-overlay {
 
 body.light-mode .chapter-drag-overlay .chapter-drag-name {
   text-shadow: none;
+}
+
+/* ====================================
+   閲覧モード (Viewer Mode)
+   ==================================== */
+
+/* 閲覧モードボタン（ツールバー） */
+.viewer-mode-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-sm);
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 25%;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  width: 32px;
+  height: 32px;
+}
+
+.viewer-mode-btn:hover:not(:disabled) {
+  background: var(--color-bg-tertiary);
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.viewer-mode-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 閲覧モード時のUIフェードアウト */
+body.viewer-mode .main-header,
+body.viewer-mode .sidebar {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+/* 閲覧モード時のプレビューエリア（全画面化） */
+body.viewer-mode .preview-area {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9999;
+  background: #000;
+}
+
+body.viewer-mode .preview-container {
+  position: static;
+}
+
+/* 閲覧モード時の見開きコンテナ */
+body.viewer-mode .spread-viewer-container {
+  height: 100vh;
+  background: #000;
+}
+
+body.viewer-mode .spread-viewer-scroll {
+  height: 100vh;
+  padding: 0;
+  background: #000;
+}
+
+/* 閲覧モード時の見開きペア（画面いっぱいに表示） */
+body.viewer-mode .spread-item {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-lg) 0;
+}
+
+body.viewer-mode .spread-pair {
+  max-width: 100%;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+body.viewer-mode .spread-page {
+  max-height: 90vh;
+}
+
+body.viewer-mode .spread-thumbnail {
+  max-height: 90vh;
+  max-width: 48vw;
+  object-fit: contain;
+}
+
+/* 閲覧モード時のナビゲーションバーを非表示 */
+body.viewer-mode .spread-nav-bar {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+/* 閲覧モード時のラベル類を非表示 */
+body.viewer-mode .spread-number-label,
+body.viewer-mode .spread-info-bar,
+body.viewer-mode .spread-page-info {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+/* 閲覧モード終了ボタン */
+.viewer-mode-close-btn {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.viewer-mode-close-btn.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.viewer-mode-close-btn.auto-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.viewer-mode-close-btn:hover {
+  background: var(--color-error);
+  border-color: var(--color-error);
+  color: white;
+  transform: scale(1.1);
+}
+
+.viewer-mode-close-btn:active {
+  transform: scale(0.95);
+}
+
+/* 閲覧モード ナビゲーションヒント */
+.viewer-nav-hint {
+  position: fixed;
+  top: 50px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  border-radius: 12px;
+  padding: 16px 32px;
+  font-size: 18px;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+  pointer-events: none;
+}
+
+.viewer-nav-hint.show {
+  opacity: 1;
 }
