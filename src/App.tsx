@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open, save, ask } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
@@ -50,6 +50,7 @@ import {
   ExportIcon,
   SinglePageIcon,
   MonitorIcon,
+  SaveIcon,
 } from './icons';
 
 // 抽出したコンポーネント
@@ -158,6 +159,7 @@ function App() {
   const [activeDragType, setActiveDragType] = useState<'chapter' | 'page' | null>(null);
   const [previewMode, setPreviewMode] = useState<'grid' | 'spread'>('grid');
   const [isViewerMode, setIsViewerMode] = useState(false);
+  const [showSplash, setShowSplash] = useState(true);
   const [isToolbarCollapsed, setIsToolbarCollapsed] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -230,18 +232,28 @@ function App() {
   // プロジェクト関連のstate
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
   const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
+  const [isSaveMenuOpen, setIsSaveMenuOpen] = useState(false);
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   const [pendingAction, setPendingAction] = useState<'new' | 'open' | 'close' | null>(null);
   const [pendingOpenPath, setPendingOpenPath] = useState<string | null>(null);
   const [missingFiles, setMissingFiles] = useState<FileValidationResult[]>([]);
   const [showMissingFilesDialog, setShowMissingFilesDialog] = useState(false);
   const projectMenuRef = useRef<HTMLDivElement>(null);
+  const saveMenuRef = useRef<HTMLDivElement>(null);
   const isModifiedRef = useRef(isModified);
 
   // isModifiedRefを常に最新に保つ
   useEffect(() => {
     isModifiedRef.current = isModified;
   }, [isModified]);
+
+  // スプラッシュスクリーンを一定時間後に非表示
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowSplash(false);
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, []);
 
   // chaptersからallPagesを計算（リアクティブに更新される）
   const allPages = useMemo(() => {
@@ -546,10 +558,28 @@ function App() {
       if (projectMenuRef.current && !projectMenuRef.current.contains(e.target as Node)) {
         setIsProjectMenuOpen(false);
       }
+      if (saveMenuRef.current && !saveMenuRef.current.contains(e.target as Node)) {
+        setIsSaveMenuOpen(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // チャプター削除（確認ダイアログ付き）
+  const handleDeleteChapter = useCallback(async (chapterId: string) => {
+    const chapter = chapters.find(c => c.id === chapterId);
+    if (!chapter) return;
+
+    if (chapter.pages.length > 0) {
+      const confirmed = await ask('チャプター内にページがあります。削除してよろしいですか？', {
+        title: '確認',
+        kind: 'warning',
+      });
+      if (!confirmed) return;
+    }
+    removeChapter(chapterId);
+  }, [chapters, removeChapter]);
 
   // キーボードナビゲーション（削除・矢印移動・Undo/Redo）
   useEffect(() => {
@@ -628,7 +658,7 @@ function App() {
         }
         // チャプターが選択されている場合はチャプターを削除
         else if (selectedChapterId) {
-          removeChapter(selectedChapterId);
+          handleDeleteChapter(selectedChapterId);
         }
       }
 
@@ -676,7 +706,7 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedChapterId, selectedPageId, selectedPageIds, chapters, allPages, removePage, removeChapter, removeSelectedPages, selectChapter, selectPage, undo, redo, previewMode]);
+  }, [selectedChapterId, selectedPageId, selectedPageIds, chapters, allPages, removePage, removeChapter, removeSelectedPages, selectChapter, selectPage, undo, redo, previewMode, handleDeleteChapter]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -1506,14 +1536,24 @@ function App() {
   }, []);
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={customCollisionDetection}
-      onDragStart={handleDragStart}
-      onDragOver={handleDragOver}
-      onDragEnd={handleDragEnd}
-    >
-      <div className="app">
+    <>
+      {/* スプラッシュスクリーン */}
+      {showSplash && (
+        <div className="splash-screen" data-tauri-drag-region>
+          <div className="splash-content">
+            <img src="/logo/daidori_icon.png" alt="アイコン" className="splash-icon" />
+            <img src="/logo/daidori_logo.png" alt="台割マネージャー" className="splash-logo" />
+          </div>
+        </div>
+      )}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={customCollisionDetection}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragEnd={handleDragEnd}
+      >
+        <div className="app">
         <main className="main-area">
           <div className={`main-header ${isToolbarCollapsed ? 'collapsed' : ''}`}>
             <div className="main-header-row" data-tauri-drag-region>
@@ -1601,15 +1641,6 @@ function App() {
                         </div>
                       </div>
                     )}
-                    <div className="project-menu-divider" />
-                    <button onClick={() => { handleSaveProject(); setIsProjectMenuOpen(false); }}>
-                      <span>保存</span>
-                      <kbd>Ctrl+S</kbd>
-                    </button>
-                    <button onClick={() => { handleSaveProject(true); setIsProjectMenuOpen(false); }}>
-                      <span>名前を付けて保存...</span>
-                      <kbd>Ctrl+Shift+S</kbd>
-                    </button>
                   </div>
                 )}
               </div>
@@ -1725,6 +1756,27 @@ function App() {
               )}
 
               <div className="toolbar-right-actions">
+                {/* 保存ボタン */}
+                <div className="save-menu-container" ref={saveMenuRef}>
+                  <button
+                    onClick={() => setIsSaveMenuOpen(!isSaveMenuOpen)}
+                    title="保存"
+                  >
+                    <SaveIcon size={18} />
+                  </button>
+                  {isSaveMenuOpen && (
+                    <div className="save-menu-dropdown">
+                      <button onClick={() => { handleSaveProject(); setIsSaveMenuOpen(false); }}>
+                        <span>上書き保存</span>
+                        <kbd>Ctrl+S</kbd>
+                      </button>
+                      <button onClick={() => { handleSaveProject(true); setIsSaveMenuOpen(false); }}>
+                        <span>名前を付けて保存</span>
+                        <kbd>Ctrl+Shift+S</kbd>
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <button
                   className="export-btn"
                   onClick={() => setIsExportModalOpen(true)}
@@ -1807,7 +1859,7 @@ function App() {
                         }}
                         onToggle={() => toggleChapterCollapsed(chapter.id)}
                         onRename={(name) => renameChapter(chapter.id, name)}
-                        onDelete={() => removeChapter(chapter.id)}
+                        onDelete={() => handleDeleteChapter(chapter.id)}
                         onDeletePage={(pageId) => removePage(chapter.id, pageId)}
                         onAddFiles={() => handleAddPages(chapter.id)}
                         onAddFolder={() => handleAddFolder(chapter.id)}
@@ -2191,6 +2243,7 @@ function App() {
         </div>
       )}
     </DndContext>
+    </>
   );
 }
 

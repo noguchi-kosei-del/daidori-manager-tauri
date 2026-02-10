@@ -438,3 +438,29 @@ style-src 'self' 'unsafe-inline'
 #### アイコン追加（icons.tsx）
 - MonitorIcon: モニター形状（閲覧モード用）
 - CloseIcon: ×マーク（閲覧モード終了用）
+
+### 2026-02-11: スプラッシュスクリーン・保存ボタン・UI改善
+
+#### スプラッシュスクリーン（App.tsx, styles.css）
+- アプリ起動時に2秒間スプラッシュスクリーンを表示
+- Reactコンポーネント方式で実装（showSplash state）
+- ロゴ表示: daidori_icon.png（上）+ daidori_logo.png（下）
+- #33a4deの枠線、白背景、スケールインアニメーション
+
+#### 保存ボタンをツールバーに移動（App.tsx, styles.css, icons.tsx）
+- プロジェクトメニューから「保存」「名前を付けて保存」を削除
+- ツールバー右側（エクスポートボタンの左）に保存アイコンボタンを追加
+- クリックでドロップダウンメニュー表示（上書き保存、名前を付けて保存）
+- SaveIcon（フロッピーディスク型）を新規追加
+
+#### プロジェクトメニュー幅調整（styles.css）
+- project-menu-containerの幅を半分に変更（flex: 0.5）
+- margin-right: autoで左寄せ
+
+#### チャプター削除確認ダイアログ（App.tsx）
+- チャプター内にページがある場合、削除前に確認ダイアログを表示
+- 「チャプター内にページがあります。削除してよろしいですか？」
+- handleDeleteChapter関数をuseCallbackでメモ化
+
+#### アイコン追加（icons.tsx）
+- SaveIcon: フロッピーディスク型（保存ボタン用）

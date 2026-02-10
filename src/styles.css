@@ -357,7 +357,6 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
   width: 32px;
   height: 32px;
   padding: 0;
-  margin-left: var(--spacing-sm);
   background: transparent;
   border: none;
   border-radius: var(--border-radius);
@@ -437,11 +436,12 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
 .toolbar-right-actions {
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
+  gap: var(--spacing-xs);
   margin-left: auto;
 }
 
-.toolbar-right-actions button {
+.toolbar-right-actions > button,
+.toolbar-right-actions > .save-menu-container > button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -454,12 +454,13 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
   transition: all var(--transition-fast);
 }
 
-.toolbar-right-actions button:hover:not(:disabled) {
+.toolbar-right-actions > button:hover:not(:disabled),
+.toolbar-right-actions > .save-menu-container > button:hover:not(:disabled) {
   background: var(--color-bg-tertiary);
   color: var(--color-text-primary);
 }
 
-.toolbar-right-actions button:disabled {
+.toolbar-right-actions > button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
@@ -2496,7 +2497,8 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
 
 .project-menu-container {
   position: relative;
-  flex: 1;
+  flex: 0.5;
+  margin-right: auto;
   background: rgba(255, 255, 255, 0.05);
   border-radius: var(--border-radius);
 }
@@ -3162,4 +3164,147 @@ body.viewer-mode .spread-page-info {
 
 .viewer-nav-hint.show {
   opacity: 1;
+}
+
+/* ===== スプラッシュスクリーン ===== */
+.splash-screen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 99999;
+  animation: splash-fade-in 0.3s ease-out;
+}
+
+.splash-content {
+  background: #ffffff;
+  border: 4px solid #33a4de;
+  border-radius: 20px;
+  padding: 64px 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 32px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  animation: splash-scale-in 0.4s ease-out;
+}
+
+.splash-icon {
+  width: 160px;
+  height: 160px;
+  object-fit: contain;
+}
+
+.splash-logo {
+  height: 64px;
+  object-fit: contain;
+}
+
+@keyframes splash-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes splash-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ===== 保存メニュー ===== */
+.save-menu-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+}
+
+.save-menu-container > button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--border-radius);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.save-menu-container > button:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.save-menu-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  min-width: 200px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--border-radius);
+  box-shadow: var(--shadow-lg);
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.save-menu-dropdown button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.save-menu-dropdown button:hover {
+  background: var(--color-bg-hover);
+}
+
+.save-menu-dropdown kbd {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  background: var(--color-bg-tertiary);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+body.light-mode .save-menu-dropdown {
+  background: white;
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+body.light-mode .save-menu-dropdown button:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+body.light-mode .save-menu-dropdown kbd {
+  background: rgba(0, 0, 0, 0.08);
 }
