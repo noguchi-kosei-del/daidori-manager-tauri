@@ -464,3 +464,27 @@ style-src 'self' 'unsafe-inline'
 
 #### アイコン追加（icons.tsx）
 - SaveIcon: フロッピーディスク型（保存ボタン用）
+
+### 2026-02-13: Photoshopボタン・選択解除機能
+
+#### Photoshopで開くボタン（App.tsx, styles.css）
+- ツールバーにPhotoshopアイコンボタンを追加
+- 選択したPSDファイルをPhotoshopで開く機能
+- 複数ファイル選択時は一括で開く
+- プロジェクト内にPSDがない場合は無効化
+- 選択中のファイルがすべてPSDでない場合も無効化
+
+#### 選択解除機能（App.tsx）
+- thumbnail-grid-continuousの余白クリックでページ選択を解除
+- thumbnail-wrapper以外の領域をクリックした場合に`selectPage(null)`を実行
+
+#### SpreadViewerからポップアップメニュー削除（SpreadViewer.tsx）
+- 見開きビューアのページ情報バークリックでのPhotoshopポップアップを削除
+- ツールバーのPhotoshopボタンに機能を統合
+
+#### UIの無効化状態（App.tsx, styles.css）
+- チャプターがない場合: サムネイルサイズセレクターを無効化（グレーアウト）
+- ページがない場合: 保存ボタンを無効化
+
+#### アイコン追加（icons.tsx）
+- ExternalAppIcon: 外部アプリで開くアイコン（矢印付きウィンドウ）

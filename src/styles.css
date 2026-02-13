@@ -785,6 +785,8 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
 .size-btn { padding: var(--spacing-xs) var(--spacing-sm); background: transparent; color: var(--color-text-secondary); border-radius: calc(var(--border-radius) - 2px); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); min-width: 32px; transition: all var(--transition-fast); }
 .size-btn:hover:not(.active) { background: var(--color-bg-hover); color: var(--color-text-primary); }
 .size-btn.active { background: var(--color-accent); color: white; }
+.thumbnail-size-selector.disabled { opacity: 0.5; pointer-events: none; }
+.thumbnail-size-selector.disabled .size-btn { cursor: not-allowed; }
 
 .total-pages { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
 .total-pages strong { color: var(--color-accent); font-size: var(--font-size-xl); font-weight: var(--font-weight-bold); font-family: var(--font-family-mono); }
@@ -3025,6 +3027,37 @@ body.light-mode .chapter-drag-overlay .chapter-drag-name {
   cursor: not-allowed;
 }
 
+/* Photoshopで開くボタン */
+.photoshop-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-xs);
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  width: 32px;
+  height: 32px;
+}
+
+.photoshop-btn:hover:not(:disabled) {
+  background: var(--color-bg-tertiary);
+  border-color: var(--color-accent);
+}
+
+.photoshop-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.photoshop-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
 /* 閲覧モード時のUIフェードアウト */
 body.viewer-mode .main-header,
 body.viewer-mode .sidebar {
@@ -3251,9 +3284,17 @@ body.viewer-mode .spread-page-info {
   transition: all var(--transition-fast);
 }
 
-.save-menu-container > button:hover {
+.save-menu-container > button:hover:not(:disabled) {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);
+}
+
+.save-menu-container.disabled {
+  opacity: 0.5;
+}
+
+.save-menu-container.disabled > button {
+  cursor: not-allowed;
 }
 
 .save-menu-dropdown {

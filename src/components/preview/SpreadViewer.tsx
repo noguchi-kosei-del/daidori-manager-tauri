@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { Chapter, Page, PAGE_TYPE_LABELS, PAGE_TYPE_COLORS } from '../../types';
 import { queueThumbnail } from '../../hooks';
 import { CloseIcon } from '../../icons';
@@ -31,13 +31,6 @@ export function SpreadViewer({
   // プログラムによるスクロール中のイベント抑制用
   const isProgrammaticScroll = useRef(false);
   const targetSpreadIndex = useRef<number | null>(null);
-  // ポップアップメニュー用
-  const [popupInfo, setPopupInfo] = useState<{
-    filePath: string;
-    fileName: string;
-    x: number;
-    y: number;
-  } | null>(null);
 
   // 閲覧モード時の閉じるボタン表示制御
   const [closeButtonVisible, setCloseButtonVisible] = useState(true);
@@ -163,60 +156,6 @@ export function SpreadViewer({
     ? Math.round(dragHandlePosition * (totalSpreads - 1))
     : currentSpreadIndex;
 
-  // PSDファイルかどうかを判定
-  const isPsdFile = useCallback((filePath: string | undefined) => {
-    if (!filePath) return false;
-    return filePath.toLowerCase().endsWith('.psd');
-  }, []);
-
-  // spread-info-barのクリックハンドラー
-  const handleInfoBarClick = useCallback((
-    e: React.MouseEvent,
-    item: typeof pages[0] | undefined
-  ) => {
-    if (!item) return;
-    const { page } = item;
-    if (!page.filePath || !isPsdFile(page.filePath)) return;
-
-    e.stopPropagation();
-    setPopupInfo({
-      filePath: page.filePath,
-      fileName: page.fileName || 'ファイル',
-      x: e.clientX,
-      y: e.clientY,
-    });
-  }, [isPsdFile]);
-
-  // Photoshopで開く
-  const handleOpenInPhotoshop = useCallback(async () => {
-    if (!popupInfo) return;
-    try {
-      await invoke('open_file_with_default_app', { filePath: popupInfo.filePath });
-    } catch (error) {
-      console.error('ファイルを開けませんでした:', error);
-    }
-    setPopupInfo(null);
-  }, [popupInfo]);
-
-  // ポップアップを閉じる（外側クリック）
-  useEffect(() => {
-    if (!popupInfo) return;
-
-    const handleClickOutside = () => {
-      setPopupInfo(null);
-    };
-
-    // 少し遅延させてから登録（クリックイベントとの競合を防ぐ）
-    const timer = setTimeout(() => {
-      document.addEventListener('click', handleClickOutside);
-    }, 0);
-
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener('click', handleClickOutside);
-    };
-  }, [popupInfo]);
-
   // ナビゲーション関数
   const scrollToSpread = useCallback((index: number) => {
     const container = containerRef.current;
@@ -241,9 +180,6 @@ export function SpreadViewer({
   // キーボードナビゲーション（上下キーでページ移動、Ctrl+上下で先頭/末尾へ、ESCで閲覧モード終了）
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // ポップアップが開いている場合は無視
-      if (popupInfo) return;
-
       // ESCキーで閲覧モード終了
       if (e.key === 'Escape' && isViewerMode) {
         e.preventDefault();
@@ -284,7 +220,7 @@ export function SpreadViewer({
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [currentSpreadIndex, totalSpreads, navigateToSpread, popupInfo, isViewerMode, onExitViewerMode]);
+  }, [currentSpreadIndex, totalSpreads, navigateToSpread, isViewerMode, onExitViewerMode]);
 
   // 閲覧モード時の閉じるボタン自動非表示（3秒後に非表示、マウス移動で再表示）
   useEffect(() => {
@@ -483,19 +419,13 @@ export function SpreadViewer({
               {/* ページ情報バー（右綴じ：右側が若いページ） */}
               <div className="spread-info-bar">
                 {spread.left && (
-                  <span
-                    className={`spread-page-label left ${isPsdFile(spread.left.page.filePath) ? 'clickable' : ''}`}
-                    onClick={(e) => handleInfoBarClick(e, spread.left)}
-                  >
+                  <span className="spread-page-label left">
                     P.{spread.left.globalIndex + 1}
                     {spread.left.page.fileName && ` - ${spread.left.page.fileName}`}
                   </span>
                 )}
                 {spread.right && (
-                  <span
-                    className={`spread-page-label right ${isPsdFile(spread.right.page.filePath) ? 'clickable' : ''}`}
-                    onClick={(e) => handleInfoBarClick(e, spread.right)}
-                  >
+                  <span className="spread-page-label right">
                     P.{spread.right.globalIndex + 1}
                     {spread.right.page.fileName && ` - ${spread.right.page.fileName}`}
                   </span>
@@ -537,26 +467,6 @@ export function SpreadViewer({
               </span>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* PSDファイル用ポップアップメニュー */}
-      {popupInfo && (
-        <div
-          className="spread-popup-menu"
-          style={{
-            position: 'fixed',
-            left: popupInfo.x,
-            top: popupInfo.y,
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            className="spread-popup-item"
-            onClick={handleOpenInPhotoshop}
-          >
-            Photoshopで開く
-          </button>
         </div>
       )}
 

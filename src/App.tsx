@@ -51,6 +51,7 @@ import {
   SinglePageIcon,
   MonitorIcon,
   SaveIcon,
+  ExternalAppIcon,
 } from './icons';
 
 // 抽出したコンポーネント
@@ -1742,12 +1743,13 @@ function App() {
               )}
 
               {previewMode === 'grid' && (
-                <div className="thumbnail-size-selector">
+                <div className={`thumbnail-size-selector ${chapters.length === 0 ? 'disabled' : ''}`}>
                   {(Object.keys(THUMBNAIL_SIZES) as ThumbnailSize[]).map((size) => (
                     <button
                       key={size}
                       className={`size-btn ${thumbnailSize === size ? 'active' : ''}`}
                       onClick={() => setThumbnailSize(size)}
+                      disabled={chapters.length === 0}
                     >
                       {THUMBNAIL_SIZES[size].label}
                     </button>
@@ -1755,12 +1757,51 @@ function App() {
                 </div>
               )}
 
+              {/* Photoshopで開くボタン */}
+              {(() => {
+                // プロジェクト内にPSDファイルがあるかチェック
+                const projectHasPsd = allPages.some(p => p.page.filePath?.toLowerCase().endsWith('.psd'));
+
+                // 選択されているページを取得（複数選択対応）
+                const selectedPages = selectedPageIds.length > 0
+                  ? allPages.filter(p => selectedPageIds.includes(p.page.id))
+                  : selectedPageId
+                    ? allPages.filter(p => p.page.id === selectedPageId)
+                    : [];
+
+                // すべてがPSDファイルかチェック
+                const psdPages = selectedPages.filter(p => p.page.filePath?.toLowerCase().endsWith('.psd'));
+                const hasPsdFiles = psdPages.length > 0 && psdPages.length === selectedPages.length;
+
+                return (
+                  <button
+                    className="photoshop-btn"
+                    onClick={async () => {
+                      for (const pageInfo of psdPages) {
+                        if (pageInfo.page.filePath) {
+                          try {
+                            await invoke('open_file_with_default_app', { filePath: pageInfo.page.filePath });
+                          } catch (error) {
+                            console.error('ファイルを開けませんでした:', error);
+                          }
+                        }
+                      }
+                    }}
+                    title={psdPages.length > 1 ? `Photoshopで開く (${psdPages.length})` : 'Photoshopで開く'}
+                    disabled={!projectHasPsd || !hasPsdFiles}
+                  >
+                    <img src="/logo/Photoshop_icon.png" alt="Ps" className="photoshop-icon" />
+                  </button>
+                );
+              })()}
+
               <div className="toolbar-right-actions">
                 {/* 保存ボタン */}
-                <div className="save-menu-container" ref={saveMenuRef}>
+                <div className={`save-menu-container ${allPages.length === 0 ? 'disabled' : ''}`} ref={saveMenuRef}>
                   <button
                     onClick={() => setIsSaveMenuOpen(!isSaveMenuOpen)}
                     title="保存"
+                    disabled={allPages.length === 0}
                   >
                     <SaveIcon size={18} />
                   </button>
@@ -1954,7 +1995,16 @@ function App() {
                           </div>
                         </div>
                       )}
-                      <div className="thumbnail-grid-continuous">
+                      <div
+                        className="thumbnail-grid-continuous"
+                        onClick={(e) => {
+                          // thumbnail-wrapper以外の領域をクリックした場合は選択解除
+                          const target = e.target as HTMLElement;
+                          if (!target.closest('.thumbnail-wrapper')) {
+                            selectPage(null);
+                          }
+                        }}
+                      >
                         {(() => {
                           // チャプターごとにグループ化（空のチャプターも含む）
                           const chapterGroups: { chapter: Chapter; pages: typeof displayPages }[] = chapters.map(chapter => ({
