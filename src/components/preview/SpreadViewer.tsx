@@ -15,11 +15,13 @@ export function SpreadViewer({
   onPageSelect,
   isViewerMode = false,
   onExitViewerMode,
+  isPageBarVisible = true,
 }: {
   pages: { page: Page; chapter: Chapter; globalIndex: number }[];
   onPageSelect?: (chapterId: string, pageId: string) => void;
   isViewerMode?: boolean;
   onExitViewerMode?: () => void;
+  isPageBarVisible?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -437,7 +439,7 @@ export function SpreadViewer({
       </div>
 
       {/* フローティングスクロールバー */}
-      {totalSpreads > 1 && (
+      {totalSpreads > 1 && isPageBarVisible && (
         <div className="spread-nav-bar">
           <div
             className="spread-nav-track"

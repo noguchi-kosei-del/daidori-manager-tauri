@@ -488,3 +488,28 @@ style-src 'self' 'unsafe-inline'
 
 #### アイコン追加（icons.tsx）
 - ExternalAppIcon: 外部アプリで開くアイコン（矢印付きウィンドウ）
+
+### 2026-02-16: チャプタークリア・ページバー表示切替
+
+#### サムネイルファイル名文字数制限（ThumbnailCard.tsx）
+- グリッド表示「大」（180px）の場合、ファイル名を20文字まで表示（従来は15文字）
+- 小（100px）: 10文字、中（140px）: 15文字、大（180px）: 20文字
+
+#### すべてクリアボタン（App.tsx, store.ts, styles.css）
+- sidebar-footerに「すべてクリア」ボタンを追加
+- TrashIconとテキストを表示
+- クリック時にTauriのaskダイアログで確認後、全チャプターを削除
+- チャプターがない場合はdisabledでグレーアウト
+- ホバー時に赤色背景（btn-deleteと同様のスタイル）
+- store.tsに`clearChapters`アクションを追加（履歴保存対応でUndo可能）
+
+#### ページバー表示切替機能（App.tsx, SpreadViewer.tsx, icons.tsx）
+- 見開きモード時、閲覧モードボタンの右側にページバー表示切替ボタンを追加
+- EyeIcon（目）: ページバー表示中
+- EyeOffIcon（目斜線）: ページバー非表示中
+- フローティングスクロールバー（spread-nav-bar）の表示/非表示を制御
+- 設定はlocalStorage（`daidori_pagebar_visible`）に永続化
+
+#### アイコン追加（icons.tsx）
+- EyeIcon: 目アイコン（表示状態）
+- EyeOffIcon: 目斜線アイコン（非表示状態）

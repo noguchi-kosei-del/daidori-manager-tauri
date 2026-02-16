@@ -189,7 +189,7 @@ export function ThumbnailCard({
         </span>
         <span className="thumbnail-filename" title={displayName}>
           {(() => {
-            const maxLength = thumbnailSize <= 100 ? 10 : 15;
+            const maxLength = thumbnailSize <= 100 ? 10 : thumbnailSize >= 180 ? 20 : 15;
             return displayName.length > maxLength ? displayName.slice(0, maxLength) + '…' : displayName;
           })()}
         </span>

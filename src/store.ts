@@ -46,6 +46,7 @@ interface AppState {
   // アクション: チャプター管理
   addChapter: (type: ChapterType, name?: string, skipInitialPage?: boolean, insertAt?: number) => string;
   removeChapter: (id: string) => void;
+  clearChapters: () => void;
   renameChapter: (id: string, name: string) => void;
   toggleChapterCollapsed: (id: string) => void;
   reorderChapters: (fromIndex: number, toIndex: number) => void;
@@ -180,6 +181,17 @@ export const useStore = create<AppState>((set, get) => {
       ...saveHistory(),
       chapters: state.chapters.filter((c) => c.id !== id),
       selectedChapterId: state.selectedChapterId === id ? null : state.selectedChapterId,
+    }));
+  },
+
+  // すべてのチャプターをクリア
+  clearChapters: () => {
+    set(() => ({
+      ...saveHistory(),
+      chapters: [],
+      selectedChapterId: null,
+      selectedPageId: null,
+      selectedPageIds: [],
     }));
   },
 

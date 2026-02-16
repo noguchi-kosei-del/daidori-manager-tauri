@@ -52,6 +52,9 @@ import {
   MonitorIcon,
   SaveIcon,
   ExternalAppIcon,
+  TrashIcon,
+  EyeIcon,
+  EyeOffIcon,
 } from './icons';
 
 // 抽出したコンポーネント
@@ -126,6 +129,7 @@ function App() {
     // チャプター管理
     addChapter,
     removeChapter,
+    clearChapters,
     renameChapter,
     toggleChapterCollapsed,
     reorderChapters,
@@ -160,6 +164,11 @@ function App() {
   const [activeDragType, setActiveDragType] = useState<'chapter' | 'page' | null>(null);
   const [previewMode, setPreviewMode] = useState<'grid' | 'spread'>('grid');
   const [isViewerMode, setIsViewerMode] = useState(false);
+  const [isPageBarVisible, setIsPageBarVisible] = useState(() => {
+    // 初期状態をlocalStorageから復元（デフォルトは表示）
+    const saved = localStorage.getItem('daidori_pagebar_visible');
+    return saved !== 'false';
+  });
   const [showSplash, setShowSplash] = useState(true);
   const [isToolbarCollapsed, setIsToolbarCollapsed] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -1732,14 +1741,27 @@ function App() {
               </div>
 
               {previewMode === 'spread' && (
-                <button
-                  className="viewer-mode-btn"
-                  onClick={() => setIsViewerMode(true)}
-                  title="閲覧モード (F1)"
-                  disabled={displayPages.length === 0}
-                >
-                  <MonitorIcon size={14} />
-                </button>
+                <>
+                  <button
+                    className="viewer-mode-btn"
+                    onClick={() => setIsViewerMode(true)}
+                    title="閲覧モード (F1)"
+                    disabled={displayPages.length === 0}
+                  >
+                    <MonitorIcon size={14} />
+                  </button>
+                  <button
+                    className="viewer-mode-btn"
+                    onClick={() => {
+                      const newValue = !isPageBarVisible;
+                      setIsPageBarVisible(newValue);
+                      localStorage.setItem('daidori_pagebar_visible', String(newValue));
+                    }}
+                    title={isPageBarVisible ? 'ページバーを隠す' : 'ページバーを表示'}
+                  >
+                    {isPageBarVisible ? <EyeIcon size={14} /> : <EyeOffIcon size={14} />}
+                  </button>
+                </>
               )}
 
               {previewMode === 'grid' && (
@@ -1957,6 +1979,23 @@ function App() {
                   <span className="stats-value">{allPages.length}</span>
                   <span className="stats-unit">ページ</span>
                 </div>
+                <button
+                  className="btn-secondary btn-small btn-clear-all"
+                  onClick={async () => {
+                    if (chapters.length === 0) return;
+                    const confirmed = await ask('すべてのチャプターを削除しますか？', {
+                      title: '確認',
+                      kind: 'warning',
+                    });
+                    if (confirmed) {
+                      clearChapters();
+                    }
+                  }}
+                  disabled={chapters.length === 0}
+                >
+                  <TrashIcon size={14} />
+                  すべてクリア
+                </button>
               </div>
             </aside>
 
@@ -1971,6 +2010,7 @@ function App() {
                 }}
                 isViewerMode={isViewerMode}
                 onExitViewerMode={() => setIsViewerMode(false)}
+                isPageBarVisible={isPageBarVisible}
               />
             ) : (
               <div className="thumbnail-grid-container">
