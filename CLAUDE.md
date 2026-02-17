@@ -513,3 +513,23 @@ style-src 'self' 'unsafe-inline'
 #### アイコン追加（icons.tsx）
 - EyeIcon: 目アイコン（表示状態）
 - EyeOffIcon: 目斜線アイコン（非表示状態）
+
+### 2026-02-17: TIFF変換カラーモード自動判定・エクスポートUI改善
+
+#### TIFF変換カラーモード自動判定（tiff_convert.jsx, types/tiff.rs）
+- PSDをTIFFに変換する際、元のカラーモードを自動判定
+- RGBのPSDはRGBのまま、グレースケールのPSDはグレースケールで出力
+- カラーモード選択UIを削除し、自動判定に変更
+- 変換結果にカラーモード情報を追加（rgb/grayscale）
+- `getColorModeName()`ヘルパー関数を追加
+
+#### エクスポート結果表示改善（App.tsx）
+- TIFF変換完了時にカラーモード別の件数を表示
+- 例: 「5ファイルをTIFFに変換しました（RGB: 2件、グレースケール: 3件）」
+
+#### エクスポートボタン無効化条件（ExportModal.tsx）
+- 「高画質JPGに変換」または「PhotoshopでTIFFに変換」のいずれかが選択されていない場合、エクスポートボタンを無効化（グレーアウト）
+
+#### 破棄ダイアログUIスタイル（App.tsx, styles.css）
+- 「変更を破棄しますか？」ダイアログの「破棄する」ボタンを赤背景・白文字に変更
+- `.btn-danger`クラスに`color: white`を追加

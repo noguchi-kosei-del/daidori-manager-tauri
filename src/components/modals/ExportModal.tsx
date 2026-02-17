@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { save } from '@tauri-apps/plugin-dialog';
 import { desktopDir, join } from '@tauri-apps/api/path';
+import { invoke } from '@tauri-apps/api/core';
 import { Chapter, CHAPTER_TYPE_LABELS, CHAPTER_TYPE_COLORS } from '../../types';
 
 // チャプターごとのリネーム設定
@@ -19,6 +20,7 @@ export interface ExportOptions {
   exportMode: 'copy' | 'move';  // コピーか移動か
   convertToJpg: boolean;  // JPGに変換するか
   jpgQuality: number;  // JPG品質（1-100）
+  convertToTiff: boolean;  // PhotoshopでTIFFに変換するか
   renameMode: 'unified' | 'perChapter';
   // 一括設定
   startNumber: number;
@@ -44,6 +46,8 @@ export function ExportModal({
   const [exportMode, setExportMode] = useState<'copy' | 'move'>('copy');
   const [convertToJpg, setConvertToJpg] = useState(false);
   const [jpgQuality, setJpgQuality] = useState(100);
+  const [convertToTiff, setConvertToTiff] = useState(false);
+  const [photoshopInstalled, setPhotoshopInstalled] = useState<boolean | null>(null);
   const [renameMode, setRenameMode] = useState<'unified' | 'perChapter'>('unified');
   const [startNumber, setStartNumber] = useState(1);
   const [startNumberText, setStartNumberText] = useState('1');
@@ -68,6 +72,27 @@ export function ExportModal({
       initDefaultPath();
     }
   }, [isOpen, outputPath]);
+
+  // Photoshopインストールチェック
+  useEffect(() => {
+    const checkPhotoshop = async () => {
+      try {
+        const installed = await invoke<boolean>('check_photoshop_installed');
+        setPhotoshopInstalled(installed);
+      } catch (e) {
+        console.error('Failed to check Photoshop:', e);
+        setPhotoshopInstalled(false);
+      }
+    };
+    if (isOpen && photoshopInstalled === null) {
+      checkPhotoshop();
+    }
+  }, [isOpen, photoshopInstalled]);
+
+  // PSDファイルがあるかチェック
+  const hasPsdFiles = chapters.some(chapter =>
+    chapter.pages.some(page => page.fileType === 'psd')
+  );
 
   // チャプターごとの設定を初期化
   useEffect(() => {
@@ -102,7 +127,7 @@ export function ExportModal({
   const handleExport = async () => {
     if (!outputPath) return;
     setIsExporting(true);
-    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, renameMode, startNumber, digits, prefix, perChapterSettings });
+    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameMode, startNumber, digits, prefix, perChapterSettings });
     setIsExporting(false);
     onClose();
   };
@@ -140,7 +165,7 @@ export function ExportModal({
                 placeholder="フォルダを選択..."
                 readOnly
               />
-              <button className="btn-secondary" onClick={handleSelectFolder}>
+              <button className="btn-secondary btn-small" onClick={handleSelectFolder}>
                 参照
               </button>
             </div>
@@ -177,7 +202,10 @@ export function ExportModal({
               <input
                 type="checkbox"
                 checked={convertToJpg}
-                onChange={(e) => setConvertToJpg(e.target.checked)}
+                onChange={(e) => {
+                  setConvertToJpg(e.target.checked);
+                  if (e.target.checked) setConvertToTiff(false);
+                }}
               />
               高画質JPGに変換して出力
             </label>
@@ -194,6 +222,34 @@ export function ExportModal({
                 <div className="quality-labels">
                   <span>小さめ</span>
                   <span>高画質</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="form-group">
+            <label className={`checkbox-label ${!hasPsdFiles || !photoshopInstalled ? 'disabled' : ''}`}>
+              <input
+                type="checkbox"
+                checked={convertToTiff}
+                disabled={!hasPsdFiles || !photoshopInstalled}
+                onChange={(e) => {
+                  setConvertToTiff(e.target.checked);
+                  if (e.target.checked) setConvertToJpg(false);
+                }}
+              />
+              PhotoshopでTIFFに変換（PSDのみ）
+              {!photoshopInstalled && photoshopInstalled !== null && (
+                <span className="option-note"> - Photoshopが見つかりません</span>
+              )}
+              {photoshopInstalled && !hasPsdFiles && (
+                <span className="option-note"> - PSDファイルがありません</span>
+              )}
+            </label>
+            {convertToTiff && (
+              <div className="tiff-options">
+                <div className="tiff-note">
+                  ※ LZW圧縮、レイヤー統合で出力（カラーモードは元ファイルを維持）
                 </div>
               </div>
             )}
@@ -395,13 +451,13 @@ export function ExportModal({
           </div>
         </div>
         <div className="modal-footer">
-          <button className="btn-secondary" onClick={onClose}>
+          <button className="btn-secondary btn-small" onClick={onClose}>
             キャンセル
           </button>
           <button
-            className="btn-primary"
+            className="btn-primary btn-small"
             onClick={handleExport}
-            disabled={!outputPath || isExporting}
+            disabled={!outputPath || isExporting || (!convertToJpg && !convertToTiff)}
           >
             {isExporting ? 'エクスポート中...' : 'エクスポート'}
           </button>

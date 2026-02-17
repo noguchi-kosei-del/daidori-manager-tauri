@@ -50,7 +50,6 @@ import {
   ExportIcon,
   SinglePageIcon,
   MonitorIcon,
-  SaveIcon,
   ExternalAppIcon,
   TrashIcon,
   EyeIcon,
@@ -242,14 +241,12 @@ function App() {
   // プロジェクト関連のstate
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
   const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
-  const [isSaveMenuOpen, setIsSaveMenuOpen] = useState(false);
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   const [pendingAction, setPendingAction] = useState<'new' | 'open' | 'close' | null>(null);
   const [pendingOpenPath, setPendingOpenPath] = useState<string | null>(null);
   const [missingFiles, setMissingFiles] = useState<FileValidationResult[]>([]);
   const [showMissingFilesDialog, setShowMissingFilesDialog] = useState(false);
   const projectMenuRef = useRef<HTMLDivElement>(null);
-  const saveMenuRef = useRef<HTMLDivElement>(null);
   const isModifiedRef = useRef(isModified);
 
   // isModifiedRefを常に最新に保つ
@@ -361,32 +358,6 @@ function App() {
     }));
   };
 
-  // プロジェクト保存
-  const handleSaveProject = async (saveAs = false) => {
-    try {
-      let savePath = currentProjectPath;
-
-      if (!savePath || saveAs) {
-        const desktopPath = await desktopDir();
-        const result = await save({
-          defaultPath: await join(desktopPath, `${projectName}.daidori`),
-          filters: [{ name: '台割プロジェクト', extensions: ['daidori'] }],
-        });
-        if (!result) return;
-        savePath = result;
-      }
-
-      const projectFile = await createProjectFile(savePath);
-      await invoke('save_project', { filePath: savePath, project: projectFile });
-      await invoke('add_recent_file', { path: savePath, name: projectFile.name });
-      markAsSaved(savePath);
-      loadRecentFiles();
-    } catch (error) {
-      console.error('プロジェクト保存エラー:', error);
-      alert(`保存に失敗しました: ${error}`);
-    }
-  };
-
   // プロジェクト読み込み
   const handleOpenProject = async (filePath?: string) => {
     try {
@@ -457,16 +428,12 @@ function App() {
   };
 
   // 未保存確認後のアクション実行
-  const handleUnsavedDialogAction = async (action: 'save' | 'discard' | 'cancel') => {
+  const handleUnsavedDialogAction = async (action: 'discard' | 'cancel') => {
     setShowUnsavedDialog(false);
     if (action === 'cancel') {
       setPendingAction(null);
       setPendingOpenPath(null);
       return;
-    }
-
-    if (action === 'save') {
-      await handleSaveProject();
     }
 
     if (pendingAction === 'new') {
@@ -568,9 +535,6 @@ function App() {
       if (projectMenuRef.current && !projectMenuRef.current.contains(e.target as Node)) {
         setIsProjectMenuOpen(false);
       }
-      if (saveMenuRef.current && !saveMenuRef.current.contains(e.target as Node)) {
-        setIsSaveMenuOpen(false);
-      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -627,13 +591,6 @@ function App() {
         } else {
           handleOpenProject();
         }
-        return;
-      }
-
-      // Ctrl+S: 保存 / Ctrl+Shift+S: 名前を付けて保存
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        e.preventDefault();
-        handleSaveProject(e.shiftKey);
         return;
       }
 
@@ -852,8 +809,85 @@ function App() {
   };
 
   const handleExport = async (options: ExportOptions) => {
-    const { outputPath, exportMode, convertToJpg, jpgQuality, renameMode, startNumber, digits, prefix, perChapterSettings } = options;
+    const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameMode, startNumber, digits, prefix, perChapterSettings } = options;
 
+    // TIFF変換モードの場合
+    if (convertToTiff) {
+      // PSDファイルのみを抽出
+      const psdPages: { path: string; outputName: string }[] = [];
+
+      if (renameMode === 'unified') {
+        allPages.forEach((item, index) => {
+          if (item.page.fileType === 'psd' && item.page.filePath) {
+            psdPages.push({
+              path: item.page.filePath,
+              outputName: `${prefix}${String(startNumber + index).padStart(digits, '0')}.tif`,
+            });
+          }
+        });
+      } else {
+        for (const chapter of chapters) {
+          const settings = perChapterSettings[chapter.id] || { enabled: true, startNumber: 1, digits: 4, prefix: '' };
+          if (settings.enabled === false) continue;
+          chapter.pages.forEach((page, pageIndex) => {
+            if (page.fileType === 'psd' && page.filePath) {
+              psdPages.push({
+                path: page.filePath,
+                outputName: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}.tif`,
+              });
+            }
+          });
+        }
+      }
+
+      if (psdPages.length === 0) {
+        alert('変換可能なPSDファイルがありません');
+        return;
+      }
+
+      try {
+        const config = {
+          globalSettings: {
+            flattenImage: true,
+          },
+          files: psdPages.map(p => ({
+            path: p.path,
+            outputPath: outputPath,
+            outputName: p.outputName,
+          })),
+        };
+
+        const response = await invoke<{ results: { fileName: string; success: boolean; colorMode?: string; error?: string }[]; outputDir: string }>('run_photoshop_tiff_convert', {
+          config,
+          outputDir: outputPath,
+        });
+
+        const successResults = response.results.filter(r => r.success);
+        const errorResults = response.results.filter(r => !r.success);
+        const rgbCount = successResults.filter(r => r.colorMode === 'rgb').length;
+        const grayscaleCount = successResults.filter(r => r.colorMode === 'grayscale').length;
+
+        let message = `${successResults.length}ファイルをTIFFに変換しました`;
+        if (rgbCount > 0 || grayscaleCount > 0) {
+          const modeParts: string[] = [];
+          if (rgbCount > 0) modeParts.push(`RGB: ${rgbCount}件`);
+          if (grayscaleCount > 0) modeParts.push(`グレースケール: ${grayscaleCount}件`);
+          message += `\n（${modeParts.join('、')}）`;
+        }
+        if (errorResults.length > 0) {
+          message += `\n（エラー: ${errorResults.length}件）`;
+          const errors = errorResults.map(r => `${r.fileName}: ${r.error}`).join('\n');
+          console.error('TIFF変換エラー:', errors);
+        }
+        message += `\n出力先: ${response.outputDir}`;
+        alert(message);
+      } catch (error) {
+        alert(`TIFF変換エラー: ${error}`);
+      }
+      return;
+    }
+
+    // 通常のエクスポート処理
     // エクスポートページを生成
     let exportPages: { source_path: string | null; output_name: string; page_type: string; subfolder?: string }[] = [];
 
@@ -1818,28 +1852,6 @@ function App() {
               })()}
 
               <div className="toolbar-right-actions">
-                {/* 保存ボタン */}
-                <div className={`save-menu-container ${allPages.length === 0 ? 'disabled' : ''}`} ref={saveMenuRef}>
-                  <button
-                    onClick={() => setIsSaveMenuOpen(!isSaveMenuOpen)}
-                    title="保存"
-                    disabled={allPages.length === 0}
-                  >
-                    <SaveIcon size={18} />
-                  </button>
-                  {isSaveMenuOpen && (
-                    <div className="save-menu-dropdown">
-                      <button onClick={() => { handleSaveProject(); setIsSaveMenuOpen(false); }}>
-                        <span>上書き保存</span>
-                        <kbd>Ctrl+S</kbd>
-                      </button>
-                      <button onClick={() => { handleSaveProject(true); setIsSaveMenuOpen(false); }}>
-                        <span>名前を付けて保存</span>
-                        <kbd>Ctrl+Shift+S</kbd>
-                      </button>
-                    </div>
-                  )}
-                </div>
                 <button
                   className="export-btn"
                   onClick={() => setIsExportModalOpen(true)}
@@ -2258,17 +2270,14 @@ function App() {
       {showUnsavedDialog && (
         <div className="modal-overlay">
           <div className="modal-content unsaved-dialog">
-            <h2>未保存の変更があります</h2>
-            <p>「{projectName}」への変更を保存しますか？</p>
+            <h2>変更を破棄しますか？</h2>
+            <p>「{projectName}」への変更は失われます。</p>
             <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => handleUnsavedDialogAction('cancel')}>
+              <button className="btn-secondary btn-small" onClick={() => handleUnsavedDialogAction('cancel')}>
                 キャンセル
               </button>
-              <button className="btn-secondary" onClick={() => handleUnsavedDialogAction('discard')}>
-                保存しない
-              </button>
-              <button className="btn-primary" onClick={() => handleUnsavedDialogAction('save')}>
-                保存
+              <button className="btn-danger btn-small" onClick={() => handleUnsavedDialogAction('discard')}>
+                破棄する
               </button>
             </div>
           </div>
@@ -2290,7 +2299,7 @@ function App() {
               ))}
             </div>
             <div className="modal-footer">
-              <button className="btn-primary" onClick={() => setShowMissingFilesDialog(false)}>
+              <button className="btn-primary btn-small" onClick={() => setShowMissingFilesDialog(false)}>
                 閉じる
               </button>
             </div>

@@ -146,3 +146,42 @@ export interface RecentFile {
   name: string;
   openedAt: string;
 }
+
+// ========== TIFF変換関連 ==========
+
+// TIFF変換の個別ファイル設定
+export interface TiffFileConfig {
+  path: string;
+  outputPath: string;
+  outputName: string;
+  colorMode?: 'rgb' | 'grayscale';
+}
+
+// TIFF変換のグローバル設定
+export interface TiffGlobalSettings {
+  flattenImage: boolean;
+  colorMode?: 'rgb' | 'grayscale';
+  targetWidth?: number;
+  targetHeight?: number;
+  targetDpi?: number;
+}
+
+// TIFF変換の設定全体
+export interface TiffConvertConfig {
+  globalSettings: TiffGlobalSettings;
+  files: TiffFileConfig[];
+}
+
+// TIFF変換の個別結果
+export interface TiffConvertResult {
+  fileName: string;
+  success: boolean;
+  outputPath?: string;
+  error?: string;
+}
+
+// TIFF変換のレスポンス
+export interface TiffConvertResponse {
+  results: TiffConvertResult[];
+  outputDir: string;
+}

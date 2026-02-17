@@ -802,6 +802,12 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
 .modal-header h2 { font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); color: var(--color-text-primary); }
 .modal-body { padding: var(--spacing-xl); overflow-y: auto; }
 .modal-footer { display: flex; justify-content: flex-end; gap: var(--spacing-sm); padding: var(--spacing-lg) var(--spacing-xl); border-top: 1px solid var(--color-border); background: var(--color-bg-tertiary); }
+.modal-footer .btn-small {
+  padding: var(--spacing-sm) var(--spacing-lg);
+  font-size: var(--font-size-sm);
+  border-radius: var(--border-radius);
+  min-width: 100px;
+}
 
 .form-group { margin-bottom: var(--spacing-lg); }
 .form-group label { display: block; margin-bottom: var(--spacing-xs); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); color: var(--color-text-secondary); }
@@ -1049,6 +1055,38 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
   color: var(--color-text-muted);
   margin-top: var(--spacing-xs);
 }
+
+/* TIFF変換オプション */
+.tiff-options {
+  margin-top: var(--spacing-sm);
+  padding: var(--spacing-md);
+  background: var(--color-bg-tertiary);
+  border-radius: var(--border-radius);
+}
+.tiff-options label {
+  display: block;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  margin-bottom: var(--spacing-xs);
+}
+.tiff-options .radio-group {
+  margin-bottom: var(--spacing-sm);
+}
+.tiff-note {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  margin-top: var(--spacing-sm);
+}
+.checkbox-label.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.option-note {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-weight: normal;
+}
+
 .per-chapter-settings {
   display: flex;
   flex-direction: column;
@@ -1136,7 +1174,7 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
 .input-with-button input { flex: 1; }
 
 .btn-small { padding: var(--spacing-xs) var(--spacing-sm); font-size: var(--font-size-xs); border-radius: 8px; }
-.btn-danger { background: linear-gradient(135deg, var(--color-error) 0%, #d45050 100%); }
+.btn-danger { background: linear-gradient(135deg, var(--color-error) 0%, #d45050 100%); color: white; }
 .btn-danger:hover:not(:disabled) { background: linear-gradient(135deg, #ff8888 0%, var(--color-error) 100%); box-shadow: var(--shadow-md), 0 4px 16px rgba(248, 113, 113, 0.25); }
 
 /* 選択バー */
