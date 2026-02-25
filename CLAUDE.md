@@ -533,3 +533,28 @@ style-src 'self' 'unsafe-inline'
 #### 破棄ダイアログUIスタイル（App.tsx, styles.css）
 - 「変更を破棄しますか？」ダイアログの「破棄する」ボタンを赤背景・白文字に変更
 - `.btn-danger`クラスに`color: white`を追加
+
+### 2026-02-25: 見開きビューアUI改善
+
+#### ヘッダーボタン削除（App.tsx, icons.tsx）
+- 「リセット」ボタン（ResetIcon）をツールバーから削除
+- ResetIconのインポートを削除
+
+#### 見開きビューアのページ選択機能（SpreadViewer.tsx, styles.css）
+- 見開きビューアで選択中のページに青い枠（3px、アクセントカラー）を表示
+- `selectedPageId` propを追加して選択状態を受け取る
+- 閲覧モード中はクリックによる選択を無効化
+- ページのホバー効果を削除（クリックで選択する方式に変更）
+
+#### フローティングスクロールバーのスリム化（SpreadViewer.tsx, styles.css）
+- トラック幅を24px→12pxに縮小
+- ハンドル高さを40px→30pxに縮小
+- ハンドル幅を20px→10pxに縮小
+- グリップ線の幅を10px→6pxに縮小
+- バー位置を右端（right: 0）に変更
+
+#### 見開きビューアのスクロールバー非表示（styles.css）
+- spread-viewer-scrollのネイティブスクロールバーを非表示に変更
+- Firefox: `scrollbar-width: none`
+- Chrome/Safari: `::-webkit-scrollbar { display: none }`
+- IE/Edge: `-ms-overflow-style: none`
