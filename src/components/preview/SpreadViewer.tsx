@@ -12,12 +12,14 @@ const NAV_HINT_SHOW_DURATION = 3000;
 // 見開きプレビューコンポーネント（縦スクロール式）
 export function SpreadViewer({
   pages,
+  selectedPageId,
   onPageSelect,
   isViewerMode = false,
   onExitViewerMode,
   isPageBarVisible = true,
 }: {
   pages: { page: Page; chapter: Chapter; globalIndex: number }[];
+  selectedPageId?: string | null;
   onPageSelect?: (chapterId: string, pageId: string) => void;
   isViewerMode?: boolean;
   onExitViewerMode?: () => void;
@@ -283,7 +285,7 @@ export function SpreadViewer({
     if (!track || totalSpreads <= 1) return;
 
     const rect = track.getBoundingClientRect();
-    const handleHeight = 40;
+    const handleHeight = 30;
     const trackHeight = rect.height - handleHeight;
     const relativeY = Math.max(0, Math.min(clientY - rect.top - handleHeight / 2, trackHeight));
     const ratio = relativeY / trackHeight;
@@ -336,11 +338,12 @@ export function SpreadViewer({
     const isSpecialPage = page.pageType !== 'file';
     const hasFile = page.filePath && page.modifiedTime;
     const typeColor = PAGE_TYPE_COLORS[page.pageType] || '#888';
+    const isSelected = !isViewerMode && selectedPageId === page.id;
 
     return (
       <div
-        className={`spread-page ${side}`}
-        onClick={() => onPageSelect?.(item.chapter.id, page.id)}
+        className={`spread-page ${side}${isSelected ? ' selected' : ''}`}
+        onClick={() => !isViewerMode && onPageSelect?.(item.chapter.id, page.id)}
       >
         <div className="spread-page-content">
           {isSpecialPage && !hasFile ? (
@@ -448,7 +451,7 @@ export function SpreadViewer({
           >
             <div
               className={`spread-nav-handle ${isDragging ? 'dragging' : ''}`}
-              style={{ top: `calc(${displayHandlePosition * 100}% - ${displayHandlePosition * 40}px)` }}
+              style={{ top: `calc(${displayHandlePosition * 100}% - ${displayHandlePosition * 30}px)` }}
             >
               <div className="spread-nav-handle-grip" />
               <span className="spread-nav-handle-label">

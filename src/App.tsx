@@ -1,6 +1,6 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { open, save, ask } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
 import { desktopDir, join } from '@tauri-apps/api/path';
 import {
@@ -46,7 +46,6 @@ import {
   BooksIcon,
   SunIcon,
   MoonIcon,
-  ResetIcon,
   ExportIcon,
   SinglePageIcon,
   MonitorIcon,
@@ -139,13 +138,13 @@ function App() {
     removePage,
     reorderPages,
     movePage,
+    movePages,
     selectChapter,
     selectPage,
     togglePageSelection,
     selectPageRange,
     clearPageSelection,
     removeSelectedPages,
-    setViewMode,
     setThumbnailSize,
     undo,
     redo,
@@ -161,6 +160,7 @@ function App() {
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeDragType, setActiveDragType] = useState<'chapter' | 'page' | null>(null);
+  const [draggedPageIds, setDraggedPageIds] = useState<string[]>([]);  // 複数ページドラッグ用
   const [previewMode, setPreviewMode] = useState<'grid' | 'spread'>('grid');
   const [isViewerMode, setIsViewerMode] = useState(false);
   const [isPageBarVisible, setIsPageBarVisible] = useState(() => {
@@ -246,6 +246,21 @@ function App() {
   const [pendingOpenPath, setPendingOpenPath] = useState<string | null>(null);
   const [missingFiles, setMissingFiles] = useState<FileValidationResult[]>([]);
   const [showMissingFilesDialog, setShowMissingFilesDialog] = useState(false);
+  const [exportResultDialog, setExportResultDialog] = useState<{
+    show: boolean;
+    title: string;
+    message: string;
+    details?: string;
+    outputDir?: string;
+    isError?: boolean;
+  }>({ show: false, title: '', message: '' });
+  const [deleteConfirmDialog, setDeleteConfirmDialog] = useState<{
+    show: boolean;
+    type: 'chapter' | 'all';
+    chapterId?: string;
+    chapterName?: string;
+    pageCount?: number;
+  }>({ show: false, type: 'chapter' });
   const projectMenuRef = useRef<HTMLDivElement>(null);
   const isModifiedRef = useRef(isModified);
 
@@ -541,16 +556,20 @@ function App() {
   }, []);
 
   // チャプター削除（確認ダイアログ付き）
-  const handleDeleteChapter = useCallback(async (chapterId: string) => {
+  const handleDeleteChapter = useCallback((chapterId: string) => {
     const chapter = chapters.find(c => c.id === chapterId);
     if (!chapter) return;
 
     if (chapter.pages.length > 0) {
-      const confirmed = await ask('チャプター内にページがあります。削除してよろしいですか？', {
-        title: '確認',
-        kind: 'warning',
+      // カスタム確認ダイアログを表示
+      setDeleteConfirmDialog({
+        show: true,
+        type: 'chapter',
+        chapterId,
+        chapterName: chapter.name,
+        pageCount: chapter.pages.length,
       });
-      if (!confirmed) return;
+      return;
     }
     removeChapter(chapterId);
   }, [chapters, removeChapter]);
@@ -813,13 +832,14 @@ function App() {
 
     // TIFF変換モードの場合
     if (convertToTiff) {
-      // PSDファイルのみを抽出
-      const psdPages: { path: string; outputName: string }[] = [];
+      // PSD・JPEGファイルを抽出（Photoshopで開いてTIFFに変換）
+      const convertibleTypes = ['psd', 'jpg'];
+      const convertiblePages: { path: string; outputName: string }[] = [];
 
       if (renameMode === 'unified') {
         allPages.forEach((item, index) => {
-          if (item.page.fileType === 'psd' && item.page.filePath) {
-            psdPages.push({
+          if (item.page.fileType && convertibleTypes.includes(item.page.fileType) && item.page.filePath) {
+            convertiblePages.push({
               path: item.page.filePath,
               outputName: `${prefix}${String(startNumber + index).padStart(digits, '0')}.tif`,
             });
@@ -830,8 +850,8 @@ function App() {
           const settings = perChapterSettings[chapter.id] || { enabled: true, startNumber: 1, digits: 4, prefix: '' };
           if (settings.enabled === false) continue;
           chapter.pages.forEach((page, pageIndex) => {
-            if (page.fileType === 'psd' && page.filePath) {
-              psdPages.push({
+            if (page.fileType && convertibleTypes.includes(page.fileType) && page.filePath) {
+              convertiblePages.push({
                 path: page.filePath,
                 outputName: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}.tif`,
               });
@@ -840,8 +860,8 @@ function App() {
         }
       }
 
-      if (psdPages.length === 0) {
-        alert('変換可能なPSDファイルがありません');
+      if (convertiblePages.length === 0) {
+        alert('変換可能なファイル（PSD・JPEG）がありません');
         return;
       }
 
@@ -850,17 +870,19 @@ function App() {
           globalSettings: {
             flattenImage: true,
           },
-          files: psdPages.map(p => ({
+          files: convertiblePages.map(p => ({
             path: p.path,
             outputPath: outputPath,
             outputName: p.outputName,
           })),
         };
 
+        console.log('TIFF変換開始:', { config, outputDir: outputPath });
         const response = await invoke<{ results: { fileName: string; success: boolean; colorMode?: string; error?: string }[]; outputDir: string }>('run_photoshop_tiff_convert', {
           config,
           outputDir: outputPath,
         });
+        console.log('TIFF変換完了:', response);
 
         const successResults = response.results.filter(r => r.success);
         const errorResults = response.results.filter(r => !r.success);
@@ -872,17 +894,30 @@ function App() {
           const modeParts: string[] = [];
           if (rgbCount > 0) modeParts.push(`RGB: ${rgbCount}件`);
           if (grayscaleCount > 0) modeParts.push(`グレースケール: ${grayscaleCount}件`);
-          message += `\n（${modeParts.join('、')}）`;
+          message += `（${modeParts.join('、')}）`;
         }
+
+        let details = '';
         if (errorResults.length > 0) {
-          message += `\n（エラー: ${errorResults.length}件）`;
-          const errors = errorResults.map(r => `${r.fileName}: ${r.error}`).join('\n');
-          console.error('TIFF変換エラー:', errors);
+          details = errorResults.map(r => `${r.fileName}: ${r.error}`).join('\n');
+          console.error('TIFF変換エラー:', details);
         }
-        message += `\n出力先: ${response.outputDir}`;
-        alert(message);
+
+        setExportResultDialog({
+          show: true,
+          title: errorResults.length > 0 ? 'TIFF変換完了（一部エラー）' : 'TIFF変換完了',
+          message,
+          details: errorResults.length > 0 ? `エラー: ${errorResults.length}件\n${details}` : undefined,
+          outputDir: response.outputDir,
+          isError: errorResults.length > 0,
+        });
       } catch (error) {
-        alert(`TIFF変換エラー: ${error}`);
+        setExportResultDialog({
+          show: true,
+          title: 'TIFF変換エラー',
+          message: String(error),
+          isError: true,
+        });
       }
       return;
     }
@@ -948,6 +983,21 @@ function App() {
 
     const isChapter = chapters.some((c) => c.id === activeIdStr);
     setActiveDragType(isChapter ? 'chapter' : 'page');
+
+    // ページドラッグの場合、複数選択をチェック
+    if (!isChapter) {
+      const isSidebarDrag = activeIdStr.startsWith(SIDEBAR_PREFIX);
+      const actualPageId = isSidebarDrag ? activeIdStr.replace(SIDEBAR_PREFIX, '') : activeIdStr;
+
+      // ドラッグしたページが選択中のページに含まれている場合、選択中のページすべてをドラッグ
+      if (selectedPageIds.length > 1 && selectedPageIds.includes(actualPageId)) {
+        setDraggedPageIds(selectedPageIds);
+      } else {
+        setDraggedPageIds([actualPageId]);
+      }
+    } else {
+      setDraggedPageIds([]);
+    }
   };
 
   const handleDragOver = (event: DragOverEvent) => {
@@ -1086,10 +1136,12 @@ function App() {
         return;
       }
 
+      // 複数ページドラッグの場合
+      const isMultiDrag = draggedPageIds.length > 1;
+
       // 新規チャプターへのドロップ
       if (dropTarget.type === 'new-chapter-start' || dropTarget.type === 'new-chapter-end') {
         const page = activePage.page;
-        const fromChapterId = activePage.chapter.id;
 
         const chapterType: ChapterType = page.pageType !== 'file'
           ? (page.pageType as ChapterType)
@@ -1097,49 +1149,74 @@ function App() {
 
         const insertAt = dropTarget.type === 'new-chapter-start' ? 0 : undefined;
         const newChapterId = addChapter(chapterType, undefined, true, insertAt);
-        movePage(fromChapterId, newChapterId, actualActiveId, 0);
+
+        if (isMultiDrag) {
+          movePages(draggedPageIds, newChapterId, 0);
+        } else {
+          movePage(activePage.chapter.id, newChapterId, actualActiveId, 0);
+        }
         selectChapter(newChapterId);
 
         setActiveId(null);
         setActiveDragType(null);
         setDropTarget(null);
+        setDraggedPageIds([]);
         return;
       }
 
       // 通常のページ移動（page-before / page-after）
       if ((dropTarget.type === 'page-before' || dropTarget.type === 'page-after') && dropTarget.pageId) {
-        const fromChapterId = activePage.chapter.id;
         const toChapterId = dropTarget.chapterId;
         const targetChapter = chapters.find(c => c.id === toChapterId);
 
         if (targetChapter) {
           const targetPageIndex = targetChapter.pages.findIndex(p => p.id === dropTarget.pageId);
+          let newIndex = dropTarget.type === 'page-after' ? targetPageIndex + 1 : targetPageIndex;
 
-          if (fromChapterId === toChapterId) {
-            // 同じチャプター内での並べ替え
-            const sourceIndex = targetChapter.pages.findIndex(p => p.id === actualActiveId);
-            if (sourceIndex !== -1 && targetPageIndex !== -1 && sourceIndex !== targetPageIndex) {
-              let newIndex = dropTarget.type === 'page-after' ? targetPageIndex + 1 : targetPageIndex;
-              // 自分より後ろに移動する場合は、自分が抜けた分を考慮
-              if (newIndex > sourceIndex) newIndex -= 1;
-              reorderPages(toChapterId, sourceIndex, newIndex);
-            }
+          if (isMultiDrag) {
+            // 複数ページ移動
+            // ドロップ先にドラッグ中のページが含まれている場合、調整が必要
+            const draggedPagesBeforeTarget = draggedPageIds.filter(id => {
+              const page = targetChapter.pages.find(p => p.id === id);
+              if (!page) return false;
+              const pageIndex = targetChapter.pages.indexOf(page);
+              return pageIndex < targetPageIndex;
+            }).length;
+            newIndex = Math.max(0, newIndex - draggedPagesBeforeTarget);
+            movePages(draggedPageIds, toChapterId, newIndex);
           } else {
-            // 異なるチャプター間の移動
-            const newIndex = dropTarget.type === 'page-after' ? targetPageIndex + 1 : targetPageIndex;
-            movePage(fromChapterId, toChapterId, actualActiveId, newIndex);
+            // 単一ページ移動
+            const fromChapterId = activePage.chapter.id;
+            if (fromChapterId === toChapterId) {
+              // 同じチャプター内での並べ替え
+              const sourceIndex = targetChapter.pages.findIndex(p => p.id === actualActiveId);
+              if (sourceIndex !== -1 && targetPageIndex !== -1 && sourceIndex !== targetPageIndex) {
+                // 自分より後ろに移動する場合は、自分が抜けた分を考慮
+                if (newIndex > sourceIndex) newIndex -= 1;
+                reorderPages(toChapterId, sourceIndex, newIndex);
+              }
+            } else {
+              // 異なるチャプター間の移動
+              movePage(fromChapterId, toChapterId, actualActiveId, newIndex);
+            }
           }
         }
       }
 
       // チャプター末尾へのドロップ
       if (dropTarget.type === 'chapter-end') {
-        const fromChapterId = activePage.chapter.id;
         const toChapterId = dropTarget.chapterId;
-        if (fromChapterId !== toChapterId) {
-          const targetChapter = chapters.find(c => c.id === toChapterId);
-          if (targetChapter) {
-            movePage(fromChapterId, toChapterId, actualActiveId, targetChapter.pages.length);
+        const targetChapter = chapters.find(c => c.id === toChapterId);
+        if (targetChapter) {
+          if (isMultiDrag) {
+            // 複数ページ移動
+            movePages(draggedPageIds, toChapterId, targetChapter.pages.length);
+          } else {
+            // 単一ページ移動
+            const fromChapterId = activePage.chapter.id;
+            if (fromChapterId !== toChapterId) {
+              movePage(fromChapterId, toChapterId, actualActiveId, targetChapter.pages.length);
+            }
           }
         }
       }
@@ -1148,12 +1225,10 @@ function App() {
     setActiveId(null);
     setActiveDragType(null);
     setDropTarget(null);
+    setDraggedPageIds([]);
   };
 
-  const displayPages =
-    viewMode === 'all'
-      ? allPages
-      : allPages.filter((p) => p.chapter.id === selectedChapterId);
+  const displayPages = allPages;
 
   // サイドバーのIDからプレフィックスを取り除いてページデータを検索
   const isSidebarDragging = activeId?.startsWith(SIDEBAR_PREFIX) ?? false;
@@ -1723,7 +1798,7 @@ function App() {
             </div>
 
             <div className={`toolbar-content ${isToolbarCollapsed ? 'collapsed' : ''}`}>
-              {selectedPageIds.length > 1 ? (
+              {selectedPageIds.length > 1 && (
                 <div className="selection-bar">
                   <span className="selection-count">{selectedPageIds.length}件選択中</span>
                   <button
@@ -1737,22 +1812,6 @@ function App() {
                     onClick={removeSelectedPages}
                   >
                     削除
-                  </button>
-                </div>
-              ) : (
-                <div className="view-mode-toggle">
-                  <button
-                    className={`view-mode-btn ${viewMode === 'all' ? 'active' : ''}`}
-                    onClick={() => setViewMode('all')}
-                  >
-                    全体
-                  </button>
-                  <button
-                    className={`view-mode-btn ${viewMode === 'selection' ? 'active' : ''}`}
-                    onClick={() => setViewMode('selection')}
-                    disabled={!selectedChapterId}
-                  >
-                    選択中
                   </button>
                 </div>
               )}
@@ -1859,24 +1918,6 @@ function App() {
                   disabled={allPages.length === 0}
                 >
                   <ExportIcon size={18} />
-                </button>
-
-                <button
-                  className="home-btn"
-                  onClick={async () => {
-                    const confirmed = await ask('プロジェクトがリセットされます。よろしいですか？', {
-                      title: '確認',
-                      kind: 'warning',
-                    });
-                    if (confirmed) {
-                      resetProject();
-                      setCurrentView('home');
-                    }
-                  }}
-                  title="リセット"
-                  disabled={chapters.length === 0}
-                >
-                  <ResetIcon size={18} />
                 </button>
 
                 <button
@@ -1993,15 +2034,13 @@ function App() {
                 </div>
                 <button
                   className="btn-secondary btn-small btn-clear-all"
-                  onClick={async () => {
+                  onClick={() => {
                     if (chapters.length === 0) return;
-                    const confirmed = await ask('すべてのチャプターを削除しますか？', {
-                      title: '確認',
-                      kind: 'warning',
+                    setDeleteConfirmDialog({
+                      show: true,
+                      type: 'all',
+                      pageCount: allPages.length,
                     });
-                    if (confirmed) {
-                      clearChapters();
-                    }
                   }}
                   disabled={chapters.length === 0}
                 >
@@ -2016,6 +2055,7 @@ function App() {
               <SpreadViewer
                 key={displayPages.map(p => p.page.id).join(',')}
                 pages={displayPages}
+                selectedPageId={selectedPageId}
                 onPageSelect={(chapterId, pageId) => {
                   selectChapter(chapterId);
                   selectPage(pageId);
@@ -2035,18 +2075,15 @@ function App() {
                   items={displayPages.map((p) => p.page.id)}
                   strategy={rectSortingStrategy}
                 >
-                  {viewMode === 'all' ? (
-                    // 全体表示：連続横並び
-                    <>
-                      {/* 新規チャプター作成ゾーン（先頭・外部ファイルドラッグ時） */}
-                      {isDraggingFiles && (
-                        <div className={`new-chapter-drop-zone start ${fileDropMode === 'new-chapter-start' ? 'active' : ''}`}>
-                          <div className="new-chapter-drop-content">
-                            <span className="new-chapter-icon"><PlusIcon size={16} /></span>
-                            <span className="new-chapter-text">先頭に新しいチャプターを作成</span>
-                          </div>
-                        </div>
-                      )}
+                  {/* 新規チャプター作成ゾーン（先頭・外部ファイルドラッグ時） */}
+                  {isDraggingFiles && (
+                    <div className={`new-chapter-drop-zone start ${fileDropMode === 'new-chapter-start' ? 'active' : ''}`}>
+                      <div className="new-chapter-drop-content">
+                        <span className="new-chapter-icon"><PlusIcon size={16} /></span>
+                        <span className="new-chapter-text">先頭に新しいチャプターを作成</span>
+                      </div>
+                    </div>
+                  )}
                       <div
                         className="thumbnail-grid-continuous"
                         onClick={(e) => {
@@ -2189,47 +2226,6 @@ function App() {
                           </div>
                         </div>
                       )}
-                    </>
-                  ) : (
-                    // 選択中チャプターのみ表示
-                    <div className="thumbnail-grid">
-                      {displayPages.map((item) => (
-                        <div key={item.page.id} className="thumbnail-wrapper-with-indicator">
-                          {/* 内部ドラッグ用インジケーター */}
-                          {dropTarget?.pageId === item.page.id && activeId && (dropTarget?.type === 'page-before' || dropTarget?.type === 'page-after') && (
-                            <div className={`drop-indicator ${dropTarget?.type === 'page-after' ? 'right' : 'left'}`} />
-                          )}
-                          {/* 外部ファイルドラッグ用インジケーター（左右対応） */}
-                          {fileDropTargetPageId === item.page.id && isDraggingFiles && (
-                            <div className={`drop-indicator file-drop ${insertPosition === 'after' ? 'right' : 'left'}`} />
-                          )}
-                          <ThumbnailCard
-                            page={item.page}
-                            globalIndex={item.globalIndex}
-                            thumbnailSize={thumbnailSizeValue}
-                            isHighlighted={item.page.id === highlightedPageId}
-                            isSelected={item.page.id === selectedPageId}
-                            isMultiSelected={selectedPageIds.includes(item.page.id)}
-                            onSelect={() => {
-                              selectChapter(item.chapter.id);
-                              selectPage(item.page.id);
-                            }}
-                            onCtrlClick={() => {
-                              selectChapter(item.chapter.id);
-                              togglePageSelection(item.page.id);
-                            }}
-                            onShiftClick={() => {
-                              if (selectedPageId) {
-                                selectPageRange(selectedPageId, item.page.id);
-                              } else {
-                                selectPage(item.page.id);
-                              }
-                            }}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </SortableContext>
                 )}
               </div>
@@ -2249,11 +2245,12 @@ function App() {
           })()
         ) : activeId && activePageData && activeDragType === 'page' ? (
           activeId.startsWith(SIDEBAR_PREFIX) ? (
-            <DragOverlaySidebarItem page={activePageData.page} />
+            <DragOverlaySidebarItem page={activePageData.page} dragCount={draggedPageIds.length} />
           ) : (
             <DragOverlayThumbnail
               page={activePageData.page}
               thumbnailSize={thumbnailSizeValue}
+              dragCount={draggedPageIds.length}
             />
           )
         ) : null}
@@ -2301,6 +2298,87 @@ function App() {
             <div className="modal-footer">
               <button className="btn-primary btn-small" onClick={() => setShowMissingFilesDialog(false)}>
                 閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* エクスポート結果ダイアログ */}
+      {exportResultDialog.show && (
+        <div className="modal-overlay">
+          <div className={`modal-content export-result-dialog ${exportResultDialog.isError ? 'has-error' : ''}`}>
+            <h2>{exportResultDialog.title}</h2>
+            <p className="export-result-message">{exportResultDialog.message}</p>
+            {exportResultDialog.details && (
+              <div className="export-result-details">
+                <pre>{exportResultDialog.details}</pre>
+              </div>
+            )}
+            {exportResultDialog.outputDir && (
+              <p className="export-result-output">
+                出力先: <span className="output-path">{exportResultDialog.outputDir}</span>
+              </p>
+            )}
+            <div className="modal-footer">
+              {exportResultDialog.outputDir && (
+                <button
+                  className="btn-secondary btn-small"
+                  onClick={async () => {
+                    try {
+                      await invoke('open_file_with_default_app', { filePath: exportResultDialog.outputDir });
+                    } catch (e) {
+                      console.error('フォルダを開けませんでした:', e);
+                    }
+                  }}
+                >
+                  フォルダを開く
+                </button>
+              )}
+              <button
+                className="btn-primary btn-small"
+                onClick={() => setExportResultDialog({ show: false, title: '', message: '' })}
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* チャプター削除確認ダイアログ */}
+      {deleteConfirmDialog.show && (
+        <div className="modal-overlay">
+          <div className="modal-content delete-confirm-dialog">
+            <h2>
+              {deleteConfirmDialog.type === 'all' ? 'すべて削除' : 'チャプター削除'}
+            </h2>
+            <p>
+              {deleteConfirmDialog.type === 'all'
+                ? `すべてのチャプター（${chapters.length}件、${deleteConfirmDialog.pageCount}ページ）を削除しますか？`
+                : `「${deleteConfirmDialog.chapterName}」（${deleteConfirmDialog.pageCount}ページ）を削除しますか？`
+              }
+            </p>
+            <p className="delete-warning">この操作は取り消せます（Ctrl+Z）</p>
+            <div className="modal-footer">
+              <button
+                className="btn-secondary btn-small"
+                onClick={() => setDeleteConfirmDialog({ show: false, type: 'chapter' })}
+              >
+                キャンセル
+              </button>
+              <button
+                className="btn-danger btn-small"
+                onClick={() => {
+                  if (deleteConfirmDialog.type === 'all') {
+                    clearChapters();
+                  } else if (deleteConfirmDialog.chapterId) {
+                    removeChapter(deleteConfirmDialog.chapterId);
+                  }
+                  setDeleteConfirmDialog({ show: false, type: 'chapter' });
+                }}
+              >
+                削除する
               </button>
             </div>
           </div>

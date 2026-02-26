@@ -39,26 +39,64 @@ function main() {
 
     var globalSettings = config.globalSettings;
     var results = [];
+    var totalFiles = config.files.length;
+
+    // プログレスウィンドウを作成
+    var progressWin = new Window("palette", "TIFF変換", undefined, { closeButton: false });
+    progressWin.orientation = "column";
+    progressWin.alignChildren = ["fill", "top"];
+    progressWin.spacing = 10;
+    progressWin.margins = 20;
+
+    var statusText = progressWin.add("statictext", undefined, "準備中...");
+    statusText.preferredSize = [350, 20];
+
+    var progressBar = progressWin.add("progressbar", undefined, 0, totalFiles);
+    progressBar.preferredSize = [350, 20];
+
+    var fileText = progressWin.add("statictext", undefined, "");
+    fileText.preferredSize = [350, 20];
+
+    var countText = progressWin.add("statictext", undefined, "0 / " + totalFiles);
+    countText.alignment = ["center", "center"];
+
+    progressWin.show();
 
     // Initial heartbeat
     try {
         var pf = new File(tempFolder + "/daidori_tiff_progress.txt");
-        pf.open("w"); pf.write("0/" + String(config.files.length)); pf.close();
+        pf.open("w"); pf.write("0/" + String(totalFiles)); pf.close();
     } catch (e_hb0) {}
 
-    for (var i = 0; i < config.files.length; i++) {
+    for (var i = 0; i < totalFiles; i++) {
         var fileConfig = config.files[i];
+        var fileName = decodeURI(new File(fileConfig.path).name);
+
+        // プログレス更新
+        statusText.text = "変換中... (" + (i + 1) + "/" + totalFiles + ")";
+        fileText.text = fileName;
+        countText.text = (i + 1) + " / " + totalFiles;
+        progressBar.value = i;
+        progressWin.update();
+
         var result = processFile(fileConfig, globalSettings);
         results.push(result);
+
+        // プログレスバー更新
+        progressBar.value = i + 1;
+        progressWin.update();
 
         // Heartbeat progress
         try {
             var progressFile = new File(tempFolder + "/daidori_tiff_progress.txt");
             progressFile.open("w");
-            progressFile.write(String(i + 1) + "/" + String(config.files.length));
+            progressFile.write(String(i + 1) + "/" + String(totalFiles));
             progressFile.close();
         } catch (e_hb) {}
     }
+
+    // プログレスウィンドウを閉じる
+    progressWin.close();
 
     // Write results
     var resultFile = new File(tempFolder + "/daidori_tiff_results.json");

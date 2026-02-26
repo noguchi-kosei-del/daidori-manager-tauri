@@ -89,9 +89,9 @@ export function ExportModal({
     }
   }, [isOpen, photoshopInstalled]);
 
-  // PSDファイルがあるかチェック
-  const hasPsdFiles = chapters.some(chapter =>
-    chapter.pages.some(page => page.fileType === 'psd')
+  // PSD・JPEGファイルがあるかチェック（TIFF変換対象）
+  const hasConvertibleFiles = chapters.some(chapter =>
+    chapter.pages.some(page => page.fileType === 'psd' || page.fileType === 'jpg')
   );
 
   // チャプターごとの設定を初期化
@@ -228,22 +228,22 @@ export function ExportModal({
           </div>
 
           <div className="form-group">
-            <label className={`checkbox-label ${!hasPsdFiles || !photoshopInstalled ? 'disabled' : ''}`}>
+            <label className={`checkbox-label ${!hasConvertibleFiles || !photoshopInstalled ? 'disabled' : ''}`}>
               <input
                 type="checkbox"
                 checked={convertToTiff}
-                disabled={!hasPsdFiles || !photoshopInstalled}
+                disabled={!hasConvertibleFiles || !photoshopInstalled}
                 onChange={(e) => {
                   setConvertToTiff(e.target.checked);
                   if (e.target.checked) setConvertToJpg(false);
                 }}
               />
-              PhotoshopでTIFFに変換（PSDのみ）
+              PhotoshopでTIFFに変換（PSD・JPEG）
               {!photoshopInstalled && photoshopInstalled !== null && (
                 <span className="option-note"> - Photoshopが見つかりません</span>
               )}
-              {photoshopInstalled && !hasPsdFiles && (
-                <span className="option-note"> - PSDファイルがありません</span>
+              {photoshopInstalled && !hasConvertibleFiles && (
+                <span className="option-note"> - 変換可能なファイルがありません</span>
               )}
             </label>
             {convertToTiff && (

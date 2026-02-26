@@ -558,3 +558,26 @@ style-src 'self' 'unsafe-inline'
 - Firefox: `scrollbar-width: none`
 - Chrome/Safari: `::-webkit-scrollbar { display: none }`
 - IE/Edge: `-ms-overflow-style: none`
+
+### 2026-02-26: 複数ページドラッグ&ドロップ・UI簡素化
+
+#### 複数ページドラッグ&ドロップ（App.tsx, store.ts, DragOverlays.tsx）
+- Ctrl+クリック/Shift+クリックで複数ページを選択
+- 選択したページのいずれかをドラッグすると全選択ページが一緒に移動
+- store.tsに`movePages`アクション追加（複数ページ一括移動）
+- `draggedPageIds` stateで複数ドラッグ状態を管理
+- `handleDragStart`/`handleDragEnd`を複数ページ対応に更新
+
+#### ドラッグ個数バッジ表示（DragOverlays.tsx, styles.css）
+- 複数ページドラッグ時に「+N」バッジを表示
+- `DragOverlayThumbnail`に`dragCount` propを追加（右上に配置）
+- `DragOverlaySidebarItem`に`dragCount` propを追加
+- `.drag-count-badge`: アクセントカラー背景、白文字
+- `.sidebar-drag-count-badge`: コンパクトなバッジスタイル
+- `thumbnail-drag-overlay`を`overflow: visible`に変更（バッジ表示のため）
+
+#### view-mode-toggle削除（App.tsx）
+- 「全体/選択中」切替トグルを削除
+- 常に全ページ表示モードに固定
+- `displayPages`を単純化（常に`allPages`を使用）
+- `setViewMode`のimportを削除

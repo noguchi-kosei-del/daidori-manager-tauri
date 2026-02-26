@@ -7,9 +7,11 @@ import { FileIcon } from '../../icons';
 export function DragOverlayThumbnail({
   page,
   thumbnailSize,
+  dragCount = 1,
 }: {
   page: Page;
   thumbnailSize: number;
+  dragCount?: number;
 }) {
   const isSpecialPage = page.pageType !== 'file';
   const displayName = isSpecialPage
@@ -21,6 +23,9 @@ export function DragOverlayThumbnail({
       className="thumbnail-drag-overlay"
       style={{ width: thumbnailSize, height: thumbnailSize * 1.4 }}
     >
+      {dragCount > 1 && (
+        <div className="drag-count-badge">+{dragCount - 1}</div>
+      )}
       <div className="thumbnail-wrapper">
         {isSpecialPage ? (
           <div
@@ -52,7 +57,7 @@ export function DragOverlayThumbnail({
 }
 
 // サイドバー用のドラッグオーバーレイ
-export function DragOverlaySidebarItem({ page }: { page: Page }) {
+export function DragOverlaySidebarItem({ page, dragCount = 1 }: { page: Page; dragCount?: number }) {
   const isSpecialPage = page.pageType !== 'file';
   const displayName = isSpecialPage
     ? (page.label || PAGE_TYPE_LABELS[page.pageType])
@@ -71,6 +76,9 @@ export function DragOverlaySidebarItem({ page }: { page: Page }) {
         <span className="sidebar-drag-icon"><FileIcon size={14} /></span>
       )}
       <span className="sidebar-drag-name">{displayName}</span>
+      {dragCount > 1 && (
+        <span className="sidebar-drag-count-badge">+{dragCount - 1}</span>
+      )}
     </div>
   );
 }

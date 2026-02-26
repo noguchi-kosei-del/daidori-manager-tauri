@@ -62,21 +62,35 @@ pub async fn run_photoshop_tiff_convert(
         .resource_dir()
         .map_err(|e| format!("リソースディレクトリの取得に失敗: {}", e))?;
 
-    let script_path = resource_path.join("scripts").join("tiff_convert.jsx");
+    eprintln!("TIFF Convert - Resource dir: {}", resource_path.display());
 
-    // 開発モード: ソースディレクトリを優先
-    let script_path_str = {
-        let dev_script = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("scripts")
-            .join("tiff_convert.jsx");
-        if dev_script.exists() {
-            dev_script.to_string_lossy().to_string()
-        } else if script_path.exists() {
-            script_path.to_string_lossy().to_string()
-        } else {
-            return Err("TIFF変換スクリプトが見つかりません".to_string());
-        }
+    // 検索するパスのリスト（優先順位順）
+    let dev_script = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("scripts")
+        .join("tiff_convert.jsx");
+    let resource_script = resource_path.join("scripts").join("tiff_convert.jsx");
+    let resource_root_script = resource_path.join("tiff_convert.jsx");
+
+    eprintln!("TIFF Convert - Checking dev script: {} (exists: {})", dev_script.display(), dev_script.exists());
+    eprintln!("TIFF Convert - Checking resource script: {} (exists: {})", resource_script.display(), resource_script.exists());
+    eprintln!("TIFF Convert - Checking resource root script: {} (exists: {})", resource_root_script.display(), resource_root_script.exists());
+
+    let script_path_str = if dev_script.exists() {
+        dev_script.to_string_lossy().to_string()
+    } else if resource_script.exists() {
+        resource_script.to_string_lossy().to_string()
+    } else if resource_root_script.exists() {
+        resource_root_script.to_string_lossy().to_string()
+    } else {
+        return Err(format!(
+            "TIFF変換スクリプトが見つかりません。検索パス:\n- {}\n- {}\n- {}",
+            dev_script.display(),
+            resource_script.display(),
+            resource_root_script.display()
+        ));
     };
+
+    eprintln!("TIFF Convert - Using script: {}", script_path_str);
 
     let temp_dir = std::env::temp_dir();
     let settings_path = temp_dir.join("daidori_tiff_settings.json");
@@ -127,21 +141,53 @@ pub async fn run_photoshop_tiff_convert(
         .map_err(|e| format!("設定の書き込みに失敗: {}", e))?;
     drop(settings_file);
 
-    // スクリプトをtempにコピー（日本語パス問題回避）
+    // スクリプトをtempにコピー（UTF-8 BOM付きで書き出し）
     let temp_script = temp_dir.join("daidori_tiff_convert_temp.jsx");
-    fs::copy(&script_path_str, &temp_script)
-        .map_err(|e| format!("スクリプトのコピーに失敗: {}", e))?;
-    let script_to_run = temp_script.to_string_lossy().to_string();
+    let script_content = fs::read_to_string(&script_path_str)
+        .map_err(|e| format!("スクリプトの読み込みに失敗: {} (元: {})", e, script_path_str))?;
+
+    // UTF-8 BOM + スクリプト内容を書き出し
+    let mut script_file = fs::File::create(&temp_script)
+        .map_err(|e| format!("スクリプトファイルの作成に失敗: {}", e))?;
+    script_file.write_all(&[0xEF, 0xBB, 0xBF])  // UTF-8 BOM
+        .map_err(|e| format!("BOM書き込みに失敗: {}", e))?;
+    script_file.write_all(script_content.as_bytes())
+        .map_err(|e| format!("スクリプト書き込みに失敗: {}", e))?;
+    drop(script_file);
+
+    // コピー後の存在確認
+    if !temp_script.exists() {
+        return Err(format!("スクリプトのコピー後にファイルが見つかりません: {}", temp_script.display()));
+    }
+
+    // コピーしたファイルの内容確認
+    let copied_size = fs::metadata(&temp_script)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    eprintln!("TIFF Convert - Copied script size: {} bytes", copied_size);
+    if copied_size == 0 {
+        return Err("スクリプトファイルが空です".to_string());
+    }
+
+    // フルパスを取得（8.3形式を回避）
+    let script_to_run = temp_script.canonicalize()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| temp_script.to_string_lossy().to_string());
+
+    // \\?\ プレフィックスを削除
+    let script_to_run = script_to_run.strip_prefix(r"\\?\").unwrap_or(&script_to_run).to_string();
 
     eprintln!("TIFF Convert - Photoshop: {}", ps_path);
     eprintln!("TIFF Convert - Script: {}", script_to_run);
 
-    // Photoshopを起動（非ブロッキング）
+    // Photoshopを起動してスクリプトを実行
+    // 注: Photoshop 2025では -r オプションの後にスペースを入れてパスを指定
     let _child = Command::new(&ps_path)
-        .arg("-r")
-        .arg(&script_to_run)
+        .args(["-r", &script_to_run])
         .spawn()
         .map_err(|e| format!("Photoshopの起動に失敗: {}", e))?;
+
+    eprintln!("TIFF Convert - Launched: {} -r {}", ps_path, script_to_run);
 
     // 結果をポーリング
     let file_count = config_with_output.files.len().max(1);

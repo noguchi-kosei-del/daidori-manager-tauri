@@ -59,6 +59,7 @@ interface AppState {
   removePage: (chapterId: string, pageId: string) => void;
   reorderPages: (chapterId: string, fromIndex: number, toIndex: number) => void;
   movePage: (fromChapterId: string, toChapterId: string, pageId: string, toIndex: number) => void;
+  movePages: (pageIds: string[], toChapterId: string, toIndex: number) => void;
 
   // アクション: 選択
   selectChapter: (id: string | null) => void;
@@ -393,6 +394,53 @@ export const useStore = create<AppState>((set, get) => {
       if (shouldDeleteFromChapter) {
         newChapters = newChapters.filter((c) => c.id !== fromChapterId);
       }
+
+      return {
+        ...historyUpdate,
+        chapters: newChapters,
+      };
+    });
+  },
+
+  // 複数ページ移動
+  movePages: (pageIds, toChapterId, toIndex) => {
+    set((state) => {
+      const historyUpdate = saveHistory();
+
+      // 移動対象のページを収集（元の順序を保持）
+      const pagesToMove: { page: Page; fromChapterId: string }[] = [];
+      for (const chapter of state.chapters) {
+        for (const page of chapter.pages) {
+          if (pageIds.includes(page.id)) {
+            pagesToMove.push({ page, fromChapterId: chapter.id });
+          }
+        }
+      }
+
+      if (pagesToMove.length === 0) return state;
+
+      // ページIDの順序でソート（選択順序を維持）
+      pagesToMove.sort((a, b) => pageIds.indexOf(a.page.id) - pageIds.indexOf(b.page.id));
+
+      // 各チャプターからページを削除
+      let newChapters = state.chapters.map((c) => ({
+        ...c,
+        pages: c.pages.filter((p) => !pageIds.includes(p.id)),
+      }));
+
+      // 移動先チャプターにページを追加
+      newChapters = newChapters.map((c) => {
+        if (c.id === toChapterId) {
+          const pages = [...c.pages];
+          const insertPages = pagesToMove.map((p) => p.page);
+          pages.splice(toIndex, 0, ...insertPages);
+          return { ...c, pages };
+        }
+        return c;
+      });
+
+      // 空になったチャプター（特殊アイテムのみのチャプター）を削除
+      newChapters = newChapters.filter((c) => c.pages.length > 0 || c.type === 'chapter');
 
       return {
         ...historyUpdate,

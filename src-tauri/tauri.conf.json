@@ -41,7 +41,7 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "scripts/*"
+      "scripts/"
     ],
     "windows": {
       "nsis": {
