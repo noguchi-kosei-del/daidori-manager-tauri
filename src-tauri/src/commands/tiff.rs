@@ -52,6 +52,7 @@ pub async fn run_photoshop_tiff_convert(
     app_handle: tauri::AppHandle,
     config: TiffConvertConfig,
     output_dir: String,
+    jpg_output_dir: Option<String>,
 ) -> Result<TiffConvertResponse, String> {
     let ps_path = find_photoshop_path()
         .ok_or_else(|| "Photoshopが見つかりません。Adobe Photoshopをインストールしてください。".to_string())?;
@@ -108,28 +109,68 @@ pub async fn run_photoshop_tiff_convert(
             loop {
                 let candidate = format!("{} ({})", base, counter);
                 if !Path::new(&candidate).exists() {
-                    fs::create_dir_all(&candidate)
-                        .map_err(|e| format!("出力ディレクトリの作成に失敗: {}", e))?;
                     break candidate;
                 }
                 counter += 1;
             }
         } else {
-            fs::create_dir_all(&output_dir)
-                .map_err(|e| format!("出力ディレクトリの作成に失敗: {}", e))?;
             output_dir.clone()
         }
     };
 
+    // 出力ディレクトリを作成
+    fs::create_dir_all(&final_output_dir)
+        .map_err(|e| format!("出力ディレクトリの作成に失敗: {}", e))?;
+
     eprintln!("TIFF Convert - Output dir: {}", final_output_dir);
+
+    // JPG出力ディレクトリ: 既存の場合は連番で新規作成
+    let final_jpg_output_dir = if let Some(ref jdir) = jpg_output_dir {
+        if !jdir.is_empty() {
+            let base_path = Path::new(jdir);
+            let resolved = if base_path.exists() {
+                let base = jdir.clone();
+                let mut counter = 1;
+                loop {
+                    let candidate = format!("{} ({})", base, counter);
+                    if !Path::new(&candidate).exists() {
+                        break candidate;
+                    }
+                    counter += 1;
+                }
+            } else {
+                jdir.clone()
+            };
+            eprintln!("TIFF Convert - JPG Output dir: {}", resolved);
+            let _ = fs::create_dir_all(&resolved);
+            Some(resolved)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     // 設定JSONを作成（outputPathを最終出力ディレクトリに書き換え）
     let mut config_with_output = config;
+    let output_dir_fwd = output_dir.replace('\\', "/");
+    let final_dir_fwd = final_output_dir.replace('\\', "/");
+
     for file_config in &mut config_with_output.files {
-        file_config.output_path = final_output_dir.clone();
+        // outputPathを書き換え
+        file_config.output_path = file_config.output_path.replace(&output_dir_fwd, &final_dir_fwd);
+
+        // jpgOutputPathも書き換え
+        if let (Some(ref orig_jpg), Some(ref final_jpg)) = (&jpg_output_dir, &final_jpg_output_dir) {
+            if let Some(ref mut jpg_path) = file_config.jpg_output_path {
+                let orig_fwd = orig_jpg.replace('\\', "/");
+                let final_fwd = final_jpg.replace('\\', "/");
+                *jpg_path = jpg_path.replace(&orig_fwd, &final_fwd);
+            }
+        }
     }
 
-    let settings_json = serde_json::to_string(&config_with_output)
+    let settings_json = serde_json::to_string_pretty(&config_with_output)
         .map_err(|e| format!("JSON変換に失敗: {}", e))?;
 
     // 設定ファイルを書き込み（UTF-8 BOM付き）
@@ -181,7 +222,6 @@ pub async fn run_photoshop_tiff_convert(
     eprintln!("TIFF Convert - Script: {}", script_to_run);
 
     // Photoshopを起動してスクリプトを実行
-    // 注: Photoshop 2025では -r オプションの後にスペースを入れてパスを指定
     let _child = Command::new(&ps_path)
         .args(["-r", &script_to_run])
         .spawn()
@@ -189,7 +229,7 @@ pub async fn run_photoshop_tiff_convert(
 
     eprintln!("TIFF Convert - Launched: {} -r {}", ps_path, script_to_run);
 
-    // 結果をポーリング
+    // 結果をポーリング（ハートビートベース）
     let file_count = config_with_output.files.len().max(1);
     let poll_interval_ms: u64 = 500;
     let initial_timeout_secs: u64 = 600;  // 10分（PS起動 + 最初のファイル）
@@ -200,7 +240,8 @@ pub async fn run_photoshop_tiff_convert(
     let mut polls_since_progress: u64 = 0;
     let mut all_done = false;
 
-    eprintln!("TIFF Convert - Heartbeat: {}s initial, {} files", initial_timeout_secs, file_count);
+    eprintln!("TIFF Convert - Heartbeat: {}s initial, no timeout during processing, {} files",
+        initial_timeout_secs, file_count);
 
     loop {
         // 結果ファイルをチェック
@@ -231,11 +272,11 @@ pub async fn run_photoshop_tiff_convert(
 
         polls_since_progress += 1;
 
-        // タイムアウト計算
-        let timeout_polls = if all_done {
-            (final_timeout_secs * 1000) / poll_interval_ms
-        } else if last_progress.is_empty() {
+        // タイムアウト計算: 最初のハートビート前と全完了後のみ適用
+        let timeout_polls = if last_progress.is_empty() {
             (initial_timeout_secs * 1000) / poll_interval_ms
+        } else if all_done {
+            (final_timeout_secs * 1000) / poll_interval_ms
         } else {
             u64::MAX  // 処理中はタイムアウトなし
         };
@@ -281,6 +322,7 @@ pub async fn run_photoshop_tiff_convert(
         Ok(TiffConvertResponse {
             results: wrapper.results,
             output_dir: final_output_dir,
+            jpg_output_dir: final_jpg_output_dir,
         })
     } else {
         let _ = fs::remove_file(&temp_script);

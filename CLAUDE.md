@@ -581,3 +581,66 @@ style-src 'self' 'unsafe-inline'
 - 常に全ページ表示モードに固定
 - `displayPages`を単純化（常に`allPages`を使用）
 - `setViewMode`のimportを削除
+
+### 2026-02-27: TIFF変換処理をCOMIC-Bridgeベースに刷新
+
+#### JSXスクリプト刷新（tiff_convert.jsx）
+- COMIC-Bridge TIPPY v2.92ベースの高度な処理パイプラインを導入
+- **テキスト/背景分離**: テキストグループ（#text#, text, 写植, セリフ等）を自動検出
+- **スマートオブジェクト化**: テキストと背景を個別にスマートオブジェクト化→ラスタライズ
+- **ぼかし機能**: 背景のみにガウスぼかし適用（部分ぼかし対応）
+- **クロップ機能**: 指定範囲でのトリミング対応
+- **カラーモード変換**: RGB/グレースケール自動判定（元がRGBならRGB維持）
+- **DPI設定**: モノクロ600dpi、カラー350dpiの自動設定
+- **JPG同時出力**: TIFF+JPGの同時出力対応
+- **プログレスウィンドウ**: 変換進捗をリアルタイム表示
+
+#### Rust型定義拡張（types/tiff.rs）
+- `TiffCropBounds`: クロップ範囲（left, top, right, bottom）
+- `TiffPartialBlur`: 部分ぼかし設定（blurRadius, bounds）
+- `TiffFileConfig`: 新フィールド追加
+  - `apply_blur`: ぼかし適用フラグ
+  - `blur_radius`: ぼかし半径
+  - `partial_blur`: 部分ぼかし設定
+  - `skip_crop`: クロップスキップフラグ
+  - `crop_bounds`: クロップ範囲
+  - `jpg_output_path`: JPG出力先パス
+- `TiffGlobalSettings`: 新フィールド追加
+  - `separate_text_and_background`: テキスト/背景分離フラグ
+  - `reorganize_text`: テキスト整理フラグ
+  - `target_dpi_mono`: モノクロ用DPI（デフォルト600）
+  - `target_dpi_color`: カラー用DPI（デフォルト350）
+  - `proceed_as_tiff`: TIFF出力フラグ
+  - `output_jpg`: JPG出力フラグ
+- `TiffConvertResponse`: `jpg_output_dir`フィールド追加
+
+#### Rustコマンド更新（commands/tiff.rs）
+- `run_photoshop_tiff_convert`に`jpg_output_dir`引数追加
+- JPG出力ディレクトリの重複回避ロジック追加
+- 設定JSONの出力パス書き換えロジック改善
+- ハートビートベースのタイムアウト制御
+  - 初期タイムアウト: 600秒（PS起動待ち）
+  - 処理中: タイムアウトなし
+  - 完了後: 120秒（結果ファイル待ち）
+
+#### フロントエンド更新（App.tsx）
+- invoke呼び出しに`jpgOutputDir`引数追加
+
+#### 新機能の利用方法
+設定JSONで以下のオプションを有効化可能:
+```typescript
+globalSettings: {
+  separateTextAndBackground: true,  // テキスト/背景分離
+  reorganizeText: true,              // テキスト整理
+  flattenImage: true,                // レイヤー統合
+  proceedAsTiff: true,               // TIFF出力
+  outputJpg: false,                  // JPG同時出力
+  targetDpiMono: 600,                // モノクロDPI
+  targetDpiColor: 350,               // カラーDPI
+}
+files: [{
+  applyBlur: true,                   // ぼかし適用
+  blurRadius: 2.5,                   // ぼかし半径
+  cropBounds: { left, top, right, bottom },  // クロップ範囲
+}]
+```

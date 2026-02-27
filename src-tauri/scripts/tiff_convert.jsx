@@ -1,11 +1,16 @@
 // Photoshop JSX Script for TIFF Conversion
-// Daidori Manager - PSD to TIFF batch conversion
+// Daidori Manager - Based on COMIC-Bridge TIPPY v2.92 processing pipeline
 
 #target photoshop
 
 var originalDialogs = app.displayDialogs;
 app.displayDialogs = DialogModes.NO;
 app.preferences.rulerUnits = Units.PIXELS;
+
+/* -----------------------------------------------------
+  Text Group Names (for consolidation)
+ ----------------------------------------------------- */
+var TEXT_GROUP_NAMES = ["#text#", "text", "写植", "セリフ", "テキスト", "台詞"];
 
 /* -----------------------------------------------------
   Main Processing
@@ -127,60 +132,251 @@ function processFile(fileConfig, globalSettings) {
         // 2. Unlock all layers
         unlockAllLayers(doc);
 
-        // 3. Flatten image (merge all layers)
-        if (globalSettings.flattenImage) {
-            doc.flatten();
+        // 3. Find existing text group for text/background separation
+        var textGroup = null;
+        for (var gi = 0; gi < doc.layerSets.length; gi++) {
+            var gName = doc.layerSets[gi].name;
+            for (var gj = 0; gj < TEXT_GROUP_NAMES.length; gj++) {
+                if (gName === TEXT_GROUP_NAMES[gj] || gName.toLowerCase() === TEXT_GROUP_NAMES[gj].toLowerCase()) {
+                    textGroup = doc.layerSets[gi];
+                    break;
+                }
+            }
+            if (textGroup) break;
         }
 
-        // 4. Color mode conversion
-        // 元のドキュメントのカラーモードを保存
-        var originalMode = doc.mode;
-        var targetColorMode = fileConfig.colorMode || globalSettings.colorMode;
+        // Text layer organization (if enabled)
+        if (globalSettings.reorganizeText) {
+            if (!textGroup) {
+                textGroup = findOrCreateTextGroup(doc);
+            }
+            if (textGroup) {
+                consolidateTextLayers(doc, textGroup);
+            }
+        }
 
-        // グレースケール設定でも、元がRGBの場合はRGBを維持する
-        if (targetColorMode === "grayscale") {
+        // Move text group to top of layer stack
+        if (textGroup) {
+            try { textGroup.move(doc, ElementPlacement.PLACEATBEGINNING); } catch (e) {}
+        }
+
+        // 4. Separate text and background, convert both to smart objects
+        var backgroundSO = null;
+        var textSO = null;
+
+        if (doc.layers.length > 1 && globalSettings.separateTextAndBackground) {
+            var bgLayers = collectNonTextLayers(doc, textGroup);
+
+            // Background: Select all non-text layers -> convert to SO
+            if (bgLayers.length > 0) {
+                var bgVisibility = [];
+                for (var vi = 0; vi < bgLayers.length; vi++) {
+                    bgVisibility.push(bgLayers[vi].visible);
+                }
+
+                selectLayers(bgLayers);
+
+                for (var vi = 0; vi < bgLayers.length; vi++) {
+                    try { bgLayers[vi].visible = bgVisibility[vi]; } catch (e) {}
+                }
+
+                backgroundSO = convertToSmartObject();
+                if (backgroundSO) backgroundSO.name = "背景";
+            }
+
+            // Text: Select text group with all children -> convert to SO
+            if (textGroup) {
+                try {
+                    var textGroupVisible = textGroup.visible;
+                    selectLayerWithChildren(textGroup);
+                    try { textGroup.visible = textGroupVisible; } catch (e) {}
+                    textSO = convertToSmartObject();
+                    if (textSO) textSO.name = "テキスト";
+                } catch (e) {
+                    textSO = null;
+                }
+            }
+        }
+
+        // 5. Rasterize both smart objects
+        var textLayer = null;
+        if (textSO) {
+            try {
+                doc.activeLayer = textSO;
+                textSO.rasterize(RasterizeType.ENTIRELAYER);
+                textLayer = doc.activeLayer;
+                textLayer.name = "テキスト";
+            } catch (e) {}
+        }
+        var backgroundLayer = null;
+        if (backgroundSO) {
+            try {
+                doc.activeLayer = backgroundSO;
+                backgroundSO.rasterize(RasterizeType.ENTIRELAYER);
+                backgroundLayer = doc.activeLayer;
+                backgroundLayer.name = "背景";
+            } catch (e) {}
+        }
+
+        // 6. Color mode conversion
+        var targetColorMode = fileConfig.colorMode || globalSettings.colorMode;
+        var originalMode = doc.mode;
+
+        if (targetColorMode === "mono" || targetColorMode === "grayscale") {
+            // グレースケール設定でも、元がRGBの場合はRGBを維持
             if (originalMode === DocumentMode.RGB) {
-                // 元がRGBの場合はRGBを維持（変換しない）
-                // RGBのままTIFF出力される
+                // RGBのまま維持
             } else if (doc.mode !== DocumentMode.GRAYSCALE) {
-                // 元がRGB以外（CMYKなど）の場合はグレースケールに変換
                 doc.changeMode(ChangeMode.GRAYSCALE);
             }
-        } else if (targetColorMode === "rgb" && doc.mode !== DocumentMode.RGB) {
-            doc.changeMode(ChangeMode.RGB);
+        } else if (targetColorMode === "color" || targetColorMode === "rgb") {
+            if (doc.mode !== DocumentMode.RGB) {
+                doc.changeMode(ChangeMode.RGB);
+            }
         }
 
-        // 5. Resize if specified
+        // 7. Re-convert rasterized text to smart object
+        var textSOFinal = null;
+        if (textLayer) {
+            try {
+                doc.activeLayer = textLayer;
+                textSOFinal = convertToSmartObject();
+                if (textSOFinal) textSOFinal.name = "テキスト";
+            } catch (e) {}
+        }
+
+        // 8. Hide text SO
+        if (textSOFinal) {
+            try { textSOFinal.visible = false; } catch (e) {}
+        }
+
+        // 9. Apply Gaussian blur to background only (if enabled)
+        if (fileConfig.applyBlur && fileConfig.blurRadius > 0) {
+            if (backgroundLayer) {
+                try {
+                    doc.activeLayer = backgroundLayer;
+                    if (backgroundLayer.allLocked) backgroundLayer.allLocked = false;
+                } catch (e) {}
+            } else if (doc.layers.length > 0) {
+                doc.activeLayer = doc.layers[doc.layers.length - 1];
+            }
+
+            if (fileConfig.partialBlur && fileConfig.partialBlur.blurRadius !== undefined) {
+                applyPartialBlur(doc, fileConfig);
+            } else {
+                doc.activeLayer.applyGaussianBlur(fileConfig.blurRadius);
+            }
+        }
+
+        // 10. Show text SO
+        if (textSOFinal) {
+            try { textSOFinal.visible = true; } catch (e) {}
+        }
+
+        // 11. Final merge
+        var layersToMerge = [];
+        if (textSOFinal) {
+            try { layersToMerge.push(doc.layers.getByName("テキスト")); } catch (e) {}
+        }
+        if (backgroundLayer) {
+            try { layersToMerge.push(doc.layers.getByName("背景")); } catch (e) {}
+        }
+
+        if (layersToMerge.length > 0) {
+            try {
+                selectLayers(layersToMerge);
+                convertToSmartObject();
+            } catch (e) {}
+        }
+
+        // Flatten if not using text separation or if option is set
+        if (!globalSettings.separateTextAndBackground || globalSettings.flattenImage) {
+            if (doc.layers.length > 1) {
+                doc.flatten();
+            }
+        }
+
+        // 12. Crop (if specified)
+        if (!fileConfig.skipCrop && fileConfig.cropBounds) {
+            var cb = fileConfig.cropBounds;
+            doc.crop([
+                new UnitValue(cb.left, "px"),
+                new UnitValue(cb.top, "px"),
+                new UnitValue(cb.right, "px"),
+                new UnitValue(cb.bottom, "px")
+            ]);
+        }
+
+        // 13. Resize
         if (globalSettings.targetWidth && globalSettings.targetHeight) {
             var targetW = new UnitValue(globalSettings.targetWidth, "px");
             var targetH = new UnitValue(globalSettings.targetHeight, "px");
-            var targetDPI = globalSettings.targetDPI || doc.resolution;
+
+            // DPI based on color mode
+            var targetDPI;
+            if (targetColorMode === "mono" || targetColorMode === "grayscale") {
+                targetDPI = globalSettings.targetDpiMono || 600;
+            } else if (targetColorMode === "color" || targetColorMode === "rgb") {
+                targetDPI = globalSettings.targetDpiColor || 350;
+            } else {
+                targetDPI = globalSettings.targetDpi || doc.resolution;
+            }
+
             doc.resizeImage(targetW, targetH, targetDPI, ResampleMethod.AUTOMATIC);
         }
 
-        // 6. Remove alpha channels
+        // 14. Remove alpha channels
         while (doc.channels.length > getExpectedChannelCount(doc)) {
             doc.channels[doc.channels.length - 1].remove();
         }
 
-        // 7. Save
+        // 15. Save
         var outputDir = new Folder(fileConfig.outputPath);
         if (!outputDir.exists) outputDir.create();
         var outputFile = new File(fileConfig.outputPath + "/" + fileConfig.outputName);
-
-        // TIFF with LZW compression
-        var tiffOpts = new TiffSaveOptions();
-        tiffOpts.imageCompression = TIFFEncoding.TIFFLZW;
-        tiffOpts.layers = false;
-        tiffOpts.alphaChannels = false;
-        tiffOpts.byteOrder = ByteOrder.IBM;
+        var baseName = fileConfig.outputName.replace(/\.[^.]+$/, "");
 
         // 保存時のカラーモードを取得
         var finalColorMode = getColorModeName(doc.mode);
 
-        doc.saveAs(outputFile, tiffOpts, true, Extension.LOWERCASE);
+        if (globalSettings.proceedAsTiff !== false) {
+            // TIFF with LZW compression
+            var tiffOpts = new TiffSaveOptions();
+            tiffOpts.imageCompression = TIFFEncoding.TIFFLZW;
+            tiffOpts.layers = false;
+            tiffOpts.alphaChannels = false;
+            tiffOpts.byteOrder = ByteOrder.IBM;
+            doc.saveAs(outputFile, tiffOpts, true, Extension.LOWERCASE);
+        } else if (globalSettings.outputJpg) {
+            // JPG only
+            var jpgOpts = new JPEGSaveOptions();
+            jpgOpts.quality = 12;
+            jpgOpts.embedColorProfile = true;
+            jpgOpts.formatOptions = FormatOptions.STANDARDBASELINE;
+            var jpgFile = new File(fileConfig.outputPath + "/" + baseName + ".jpg");
+            doc.saveAs(jpgFile, jpgOpts, true, Extension.LOWERCASE);
+            outputFile = jpgFile;
+        } else {
+            // PSD
+            var psdOpts = new PhotoshopSaveOptions();
+            psdOpts.layers = false;
+            psdOpts.alphaChannels = false;
+            doc.saveAs(outputFile, psdOpts, true, Extension.LOWERCASE);
+        }
 
-        // 8. Close
+        // TIFF+JPG: save JPG copy to separate folder
+        if (globalSettings.proceedAsTiff !== false && globalSettings.outputJpg && fileConfig.jpgOutputPath) {
+            var jpgDir2 = new Folder(fileConfig.jpgOutputPath);
+            if (!jpgDir2.exists) jpgDir2.create();
+            var jpgFile2 = new File(fileConfig.jpgOutputPath + "/" + baseName + ".jpg");
+            var jpgOpts2 = new JPEGSaveOptions();
+            jpgOpts2.quality = 12;
+            jpgOpts2.embedColorProfile = true;
+            jpgOpts2.formatOptions = FormatOptions.STANDARDBASELINE;
+            doc.saveAs(jpgFile2, jpgOpts2, true, Extension.LOWERCASE);
+        }
+
+        // 16. Close
         doc.close(SaveOptions.DONOTSAVECHANGES);
 
         return {
@@ -227,13 +423,191 @@ function unlockRecursive(container) {
         try {
             var originalVisibility = layer.visible;
             layer.allLocked = false;
-            layer.pixelsLocked = false;
-            layer.positionLocked = false;
-            layer.transparentPixelsLocked = false;
             layer.visible = originalVisibility;
         } catch (e) {}
         if (layer.typename === "LayerSet") {
             unlockRecursive(layer);
+        }
+    }
+}
+
+function findOrCreateTextGroup(doc) {
+    // Search existing text group
+    for (var i = 0; i < doc.layerSets.length; i++) {
+        var groupName = doc.layerSets[i].name;
+        for (var j = 0; j < TEXT_GROUP_NAMES.length; j++) {
+            if (groupName === TEXT_GROUP_NAMES[j] || groupName.toLowerCase() === TEXT_GROUP_NAMES[j].toLowerCase()) {
+                return doc.layerSets[i];
+            }
+        }
+    }
+
+    // Check if any text layers exist
+    var hasTextLayers = false;
+    checkForTextLayers(doc, function() { hasTextLayers = true; });
+    if (!hasTextLayers) return null;
+
+    // Create new text group at top
+    var textGroup = doc.layerSets.add();
+    textGroup.name = "#text#";
+    return textGroup;
+}
+
+function checkForTextLayers(container, callback) {
+    for (var i = 0; i < container.layers.length; i++) {
+        var layer = container.layers[i];
+        if (layer.kind === LayerKind.TEXT) {
+            callback();
+            return;
+        }
+        if (layer.typename === "LayerSet") {
+            checkForTextLayers(layer, callback);
+        }
+    }
+}
+
+function consolidateTextLayers(doc, targetGroup) {
+    var layersToMove = [];
+    findTextLayersOutside(doc, targetGroup, layersToMove);
+    for (var i = 0; i < layersToMove.length; i++) {
+        try {
+            layersToMove[i].move(targetGroup, ElementPlacement.INSIDE);
+        } catch (e) {}
+    }
+}
+
+function findTextLayersOutside(container, excludeGroup, list) {
+    for (var i = 0; i < container.layers.length; i++) {
+        var layer = container.layers[i];
+        if (excludeGroup && layer.id === excludeGroup.id) continue;
+        if (layer.kind === LayerKind.TEXT) {
+            list.push(layer);
+        } else if (layer.typename === "LayerSet") {
+            var allText = true;
+            checkAllText(layer, function() { allText = false; });
+            if (allText && layer.layers.length > 0) {
+                list.push(layer);
+            } else {
+                findTextLayersOutside(layer, excludeGroup, list);
+            }
+        }
+    }
+}
+
+function checkAllText(container, onNonText) {
+    for (var i = 0; i < container.layers.length; i++) {
+        var layer = container.layers[i];
+        if (layer.kind !== LayerKind.TEXT && layer.typename !== "LayerSet") {
+            onNonText();
+            return;
+        }
+        if (layer.typename === "LayerSet") {
+            checkAllText(layer, onNonText);
+        }
+    }
+}
+
+function collectNonTextLayers(doc, textGroup) {
+    var layers = [];
+    for (var i = 0; i < doc.layers.length; i++) {
+        if (!textGroup || doc.layers[i].id !== textGroup.id) {
+            layers.push(doc.layers[i]);
+        }
+    }
+    return layers;
+}
+
+function selectLayerWithChildren(layer) {
+    var descendants = [];
+    function collectDescendants(parent) {
+        if (parent.typename === "LayerSet") {
+            descendants.push(parent);
+            for (var i = 0; i < parent.layers.length; i++) {
+                collectDescendants(parent.layers[i]);
+            }
+        } else {
+            descendants.push(parent);
+        }
+    }
+    collectDescendants(layer);
+    selectLayers(descendants);
+}
+
+function selectLayers(layers) {
+    if (layers.length === 0) return;
+    var desc = new ActionDescriptor();
+    var ref = new ActionReference();
+    ref.putIdentifier(charIDToTypeID("Lyr "), layers[0].id);
+    desc.putReference(charIDToTypeID("null"), ref);
+    desc.putBoolean(stringIDToTypeID("makeVisible"), false);
+    executeAction(charIDToTypeID("slct"), desc, DialogModes.NO);
+
+    for (var i = 1; i < layers.length; i++) {
+        var addDesc = new ActionDescriptor();
+        var addRef = new ActionReference();
+        addRef.putIdentifier(charIDToTypeID("Lyr "), layers[i].id);
+        addDesc.putReference(charIDToTypeID("null"), addRef);
+        addDesc.putEnumerated(
+            stringIDToTypeID("selectionModifier"),
+            stringIDToTypeID("selectionModifierType"),
+            stringIDToTypeID("addToSelection")
+        );
+        addDesc.putBoolean(stringIDToTypeID("makeVisible"), false);
+        executeAction(charIDToTypeID("slct"), addDesc, DialogModes.NO);
+    }
+}
+
+function convertToSmartObject() {
+    try {
+        executeAction(stringIDToTypeID("newPlacedLayer"), new ActionDescriptor(), DialogModes.NO);
+        return app.activeDocument.activeLayer;
+    } catch (e) { return null; }
+}
+
+/* -----------------------------------------------------
+  Blur Operations
+ ----------------------------------------------------- */
+function applyPartialBlur(doc, fileConfig) {
+    try {
+        var activeLayer = doc.activeLayer;
+        var pb = fileConfig.partialBlur;
+        var defaultBlur = fileConfig.blurRadius;
+        var partialBlurRadius = pb.blurRadius;
+        var bounds = pb.bounds;
+
+        // 1. Apply default blur to OUTSIDE the selection region
+        if (defaultBlur > 0) {
+            var selRegion = [
+                [bounds.left, bounds.top],
+                [bounds.right, bounds.top],
+                [bounds.right, bounds.bottom],
+                [bounds.left, bounds.bottom]
+            ];
+            doc.selection.select(selRegion);
+            doc.selection.invert();
+
+            if (doc.selection.bounds) {
+                activeLayer.applyGaussianBlur(defaultBlur);
+            }
+
+            doc.selection.deselect();
+        }
+
+        // 2. Apply partial blur to INSIDE the selection region
+        if (partialBlurRadius > 0) {
+            var selRegion2 = [
+                [bounds.left, bounds.top],
+                [bounds.right, bounds.top],
+                [bounds.right, bounds.bottom],
+                [bounds.left, bounds.bottom]
+            ];
+            doc.selection.select(selRegion2);
+            activeLayer.applyGaussianBlur(partialBlurRadius);
+            doc.selection.deselect();
+        }
+    } catch (e) {
+        if (fileConfig.blurRadius > 0) {
+            try { doc.activeLayer.applyGaussianBlur(fileConfig.blurRadius); } catch (e2) {}
         }
     }
 }

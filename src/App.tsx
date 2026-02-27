@@ -878,9 +878,10 @@ function App() {
         };
 
         console.log('TIFF変換開始:', { config, outputDir: outputPath });
-        const response = await invoke<{ results: { fileName: string; success: boolean; colorMode?: string; error?: string }[]; outputDir: string }>('run_photoshop_tiff_convert', {
+        const response = await invoke<{ results: { fileName: string; success: boolean; colorMode?: string; error?: string }[]; outputDir: string; jpgOutputDir?: string }>('run_photoshop_tiff_convert', {
           config,
           outputDir: outputPath,
+          jpgOutputDir: null,
         });
         console.log('TIFF変換完了:', response);
 
