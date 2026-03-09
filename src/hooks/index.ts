@@ -1,2 +1,3 @@
 export { queueThumbnail } from './useThumbnailQueue';
-export { useDarkMode } from './useDarkMode';
+export { useWindowCloseHandler } from './useWindowCloseHandler';
+export { useKeyboardShortcuts } from './useKeyboardShortcuts';

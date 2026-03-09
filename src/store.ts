@@ -68,7 +68,6 @@ interface AppState {
   selectPageRange: (fromPageId: string, toPageId: string) => void;  // Shift+クリック用
   clearPageSelection: () => void;
   removeSelectedPages: () => void;  // 一括削除
-  setViewMode: (mode: 'selection' | 'all') => void;
   setThumbnailSize: (size: ThumbnailSize) => void;
 
   // アクション: サムネイル
@@ -522,11 +521,6 @@ export const useStore = create<AppState>((set, get) => {
       selectedPageIds: [],
       selectedPageId: null,
     }));
-  },
-
-  // ビューモード切り替え
-  setViewMode: (mode) => {
-    set({ viewMode: mode });
   },
 
   // サムネイルサイズ切り替え

@@ -1,8 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { open } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
-import { desktopDir, join } from '@tauri-apps/api/path';
 import {
   DndContext,
   DragEndEvent,
@@ -22,6 +21,7 @@ import {
 } from '@dnd-kit/sortable';
 import { useStore, FileInfo, THUMBNAIL_SIZES, ThumbnailSize } from './store';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { useWindowCloseHandler, useKeyboardShortcuts } from './hooks';
 import {
   Chapter,
   ChapterType,
@@ -29,27 +29,21 @@ import {
   CHAPTER_TYPE_COLORS,
   Page,
   PageType,
-  PAGE_TYPE_LABELS,
   DaidoriProjectFile,
-  SavedChapter,
-  SavedPage,
   FileValidationResult,
   RecentFile,
 } from './types';
 import {
-  FileIcon,
   FolderIcon,
   PlusIcon,
   PlusCircleIcon,
   BookOpenIcon,
   AlertTriangleIcon,
-  BooksIcon,
   SunIcon,
   MoonIcon,
   ExportIcon,
   SinglePageIcon,
   MonitorIcon,
-  ExternalAppIcon,
   TrashIcon,
   EyeIcon,
   EyeOffIcon,
@@ -63,7 +57,6 @@ import {
   DragOverlayThumbnail,
   DragOverlaySidebarItem,
   DragOverlayChapterItem,
-  NewChapterDropZone,
   SidebarNewChapterDropZone,
   SidebarChapterReorderDropZone,
 } from './components/dnd';
@@ -78,6 +71,10 @@ import {
   CHAPTER_REORDER_DROP_ZONE_START_ID,
   CHAPTER_REORDER_DROP_ZONE_END_ID,
 } from './constants/dnd';
+
+// EPUB_makerのパス（ディレクトリ）
+// TODO: 設定ファイルまたはlocalStorageから読み込むように変更
+const EPUB_MAKER_DIR = 'C:\\Users\\noguchi-kosei\\Desktop\\参考ネイティブデータ\\EPUB_maker';
 
 // ファイルドロップ関連のグローバル状態（windowオブジェクトで管理してHMR対策）
 declare global {
@@ -118,10 +115,8 @@ function App() {
     selectedChapterId,
     selectedPageId,
     selectedPageIds,
-    viewMode,
     thumbnailSize,
     // プロジェクト状態
-    currentProjectPath,
     projectName,
     isModified,
     // チャプター管理
@@ -155,8 +150,6 @@ function App() {
     setProjectName,
   } = useStore();
 
-  // TODO: ホーム画面とエディター画面の切り替えに使用
-  const [_currentView, setCurrentView] = useState<'home' | 'editor'>('home');
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeDragType, setActiveDragType] = useState<'chapter' | 'page' | null>(null);
@@ -187,7 +180,6 @@ function App() {
   const [fileDropMode, setFileDropMode] = useState<'insert' | 'append-chapter' | 'new-chapter' | 'new-chapter-start' | null>(null);
   const [fileDropTargetChapterId, setFileDropTargetChapterId] = useState<string | null>(null);
   const [insertPosition, setInsertPosition] = useState<'before' | 'after' | null>(null);
-  const [isNearPreviewTop, setIsNearPreviewTop] = useState(false);
   // プレビューエリアのチャプター折りたたみ状態（チャプターID -> 折りたたみ状態）
   const [previewCollapsedChapters, setPreviewCollapsedChapters] = useState<Set<string>>(new Set());
 
@@ -253,6 +245,8 @@ function App() {
     details?: string;
     outputDir?: string;
     isError?: boolean;
+    // EPUB_maker連携用のページ情報
+    exportedPages?: { filename: string; pageType: string; chapterName?: string; label?: string }[];
   }>({ show: false, title: '', message: '' });
   const [deleteConfirmDialog, setDeleteConfirmDialog] = useState<{
     show: boolean;
@@ -262,12 +256,6 @@ function App() {
     pageCount?: number;
   }>({ show: false, type: 'chapter' });
   const projectMenuRef = useRef<HTMLDivElement>(null);
-  const isModifiedRef = useRef(isModified);
-
-  // isModifiedRefを常に最新に保つ
-  useEffect(() => {
-    isModifiedRef.current = isModified;
-  }, [isModified]);
 
   // スプラッシュスクリーンを一定時間後に非表示
   useEffect(() => {
@@ -289,62 +277,6 @@ function App() {
     }
     return result;
   }, [chapters]);
-
-  // プロジェクトファイルへの変換
-  const createProjectFile = async (savePath: string): Promise<DaidoriProjectFile> => {
-    const basePath = savePath.replace(/[\\\/][^\\\/]+$/, '');
-    const name = savePath.split(/[\\\/]/).pop()?.replace(/\.daidori$/, '') || '新規プロジェクト';
-
-    const savedChapters: SavedChapter[] = chapters.map(ch => ({
-      id: ch.id,
-      name: ch.name,
-      type: ch.type,
-      pages: ch.pages.map(page => {
-        const savedPage: SavedPage = {
-          id: page.id,
-          pageType: page.pageType,
-          label: page.label,
-        };
-        if (page.filePath) {
-          // 相対パスを計算
-          let relativePath = page.filePath;
-          const normalizedBase = basePath.replace(/\\/g, '/');
-          const normalizedFile = page.filePath.replace(/\\/g, '/');
-          if (normalizedFile.startsWith(normalizedBase + '/')) {
-            relativePath = normalizedFile.slice(normalizedBase.length + 1);
-          }
-          savedPage.file = {
-            absolutePath: page.filePath,
-            relativePath,
-            fileName: page.fileName || '',
-            fileType: page.fileType || 'unknown',
-            fileSize: page.fileSize || 0,
-            modifiedTime: page.modifiedTime || 0,
-          };
-        }
-        return savedPage;
-      }),
-      folderPath: ch.folderPath,
-    }));
-
-    const collapsedChapterIds = chapters.filter(ch => ch.collapsed).map(ch => ch.id);
-
-    return {
-      version: '1.0',
-      name,
-      createdAt: new Date().toISOString(),
-      modifiedAt: new Date().toISOString(),
-      basePath,
-      chapters: savedChapters,
-      uiState: {
-        selectedChapterId,
-        selectedPageId,
-        viewMode,
-        thumbnailSize,
-        collapsedChapterIds,
-      },
-    };
-  };
 
   // プロジェクトファイルから状態への変換
   const loadFromProjectFile = (project: DaidoriProjectFile, _basePath: string): Chapter[] => {
@@ -507,42 +439,12 @@ function App() {
     setIsDarkMode(!isDarkMode);
   };
 
-  // ウィンドウ終了ハンドラ（一度だけ登録、isModifiedはrefで参照）
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    let isMounted = true;
-
-    const setupCloseHandler = async () => {
-      console.log('Setting up close handler...');
-      const appWindow = getCurrentWindow();
-      unlisten = await appWindow.onCloseRequested(async (event) => {
-        console.log('Close requested, isModified:', isModifiedRef.current);
-        if (isModifiedRef.current) {
-          console.log('Preventing close, showing dialog');
-          event.preventDefault();
-          setPendingAction('close');
-          setShowUnsavedDialog(true);
-        } else {
-          console.log('Allowing close');
-          // 明示的にウィンドウを閉じる
-          await appWindow.destroy();
-        }
-      });
-      if (isMounted) {
-        console.log('Close handler setup complete');
-      }
-    };
-
-    setupCloseHandler();
-
-    return () => {
-      isMounted = false;
-      console.log('Cleaning up close handler');
-      if (unlisten) {
-        unlisten();
-      }
-    };
-  }, []); // 空の依存配列で一度だけ登録
+  // ウィンドウ終了時の未保存確認
+  const handleWindowClose = useCallback(() => {
+    setPendingAction('close');
+    setShowUnsavedDialog(true);
+  }, []);
+  useWindowCloseHandler(isModified, handleWindowClose);
 
   // プロジェクトメニューの外側クリックで閉じる
   useEffect(() => {
@@ -574,125 +476,28 @@ function App() {
     removeChapter(chapterId);
   }, [chapters, removeChapter]);
 
-  // キーボードナビゲーション（削除・矢印移動・Undo/Redo）
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // 入力フィールドにフォーカスがある場合は無視
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
-      ) {
-        return;
-      }
-
-      // F1: 閲覧モード切替（見開き表示時のみ）
-      if (e.key === 'F1') {
-        e.preventDefault();
-        if (previewMode === 'spread') {
-          setIsViewerMode(prev => !prev);
-        }
-        return;
-      }
-
-      // Ctrl+N: 新規プロジェクト
-      if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
-        e.preventDefault();
-        handleNewProject();
-        return;
-      }
-
-      // Ctrl+O: プロジェクトを開く
-      if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
-        e.preventDefault();
-        if (isModified) {
-          setPendingAction('open');
-          setShowUnsavedDialog(true);
-        } else {
-          handleOpenProject();
-        }
-        return;
-      }
-
-      // Ctrl+Z: 元に戻す
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-        e.preventDefault();
-        undo();
-        return;
-      }
-
-      // Ctrl+Y または Ctrl+Shift+Z: やり直し
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
-        e.preventDefault();
-        redo();
-        return;
-      }
-
-      // 削除キー
-      if (e.key === 'Backspace' || e.key === 'Delete') {
-        e.preventDefault();
-
-        // 複数ページが選択されている場合は一括削除
-        if (selectedPageIds.length > 1) {
-          removeSelectedPages();
-        }
-        // ページが選択されている場合はページを削除
-        else if (selectedPageId) {
-          const pageInfo = allPages.find((p) => p.page.id === selectedPageId);
-          if (pageInfo) {
-            removePage(pageInfo.chapter.id, selectedPageId);
-          }
-        }
-        // チャプターが選択されている場合はチャプターを削除
-        else if (selectedChapterId) {
-          handleDeleteChapter(selectedChapterId);
-        }
-      }
-
-      // 矢印キーでナビゲーション
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-        e.preventDefault();
-        const isNext = e.key === 'ArrowDown' || e.key === 'ArrowRight';
-        const isPrev = e.key === 'ArrowUp' || e.key === 'ArrowLeft';
-
-        // ページが選択されている場合
-        if (selectedPageId) {
-          const currentIndex = allPages.findIndex((p) => p.page.id === selectedPageId);
-          if (currentIndex !== -1) {
-            let newIndex = currentIndex;
-            if (isNext && currentIndex < allPages.length - 1) {
-              newIndex = currentIndex + 1;
-            } else if (isPrev && currentIndex > 0) {
-              newIndex = currentIndex - 1;
-            }
-            if (newIndex !== currentIndex) {
-              const newPage = allPages[newIndex];
-              selectChapter(newPage.chapter.id);
-              selectPage(newPage.page.id);
-            }
-          }
-        }
-        // チャプターのみ選択されている場合
-        else if (selectedChapterId) {
-          const currentIndex = chapters.findIndex((c) => c.id === selectedChapterId);
-          if (currentIndex !== -1) {
-            let newIndex = currentIndex;
-            if (isNext && currentIndex < chapters.length - 1) {
-              newIndex = currentIndex + 1;
-            } else if (isPrev && currentIndex > 0) {
-              newIndex = currentIndex - 1;
-            }
-            if (newIndex !== currentIndex) {
-              selectChapter(chapters[newIndex].id);
-              selectPage(null);
-            }
-          }
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedChapterId, selectedPageId, selectedPageIds, chapters, allPages, removePage, removeChapter, removeSelectedPages, selectChapter, selectPage, undo, redo, previewMode, handleDeleteChapter]);
+  // キーボードショートカット
+  useKeyboardShortcuts({
+    selectedChapterId,
+    selectedPageId,
+    selectedPageIds,
+    chapters,
+    allPages,
+    previewMode,
+    isModified,
+    removePage,
+    removeSelectedPages,
+    selectChapter,
+    selectPage,
+    undo,
+    redo,
+    handleDeleteChapter,
+    handleNewProject,
+    handleOpenProject,
+    setIsViewerMode,
+    setPendingAction,
+    setShowUnsavedDialog,
+  });
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -828,13 +633,14 @@ function App() {
   };
 
   const handleExport = async (options: ExportOptions) => {
-    const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameMode, startNumber, digits, prefix, perChapterSettings } = options;
+    const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, convertToJpgPhotoshop, renameMode, startNumber, digits, prefix, perChapterSettings } = options;
 
     // TIFF変換モードの場合
     if (convertToTiff) {
       // PSD・JPEGファイルを抽出（Photoshopで開いてTIFFに変換）
+      // EPUB_maker連携用にページ情報も保持
       const convertibleTypes = ['psd', 'jpg'];
-      const convertiblePages: { path: string; outputName: string }[] = [];
+      const convertiblePages: { path: string; outputName: string; pageType: string; chapterName?: string; label?: string }[] = [];
 
       if (renameMode === 'unified') {
         allPages.forEach((item, index) => {
@@ -842,6 +648,9 @@ function App() {
             convertiblePages.push({
               path: item.page.filePath,
               outputName: `${prefix}${String(startNumber + index).padStart(digits, '0')}.tif`,
+              pageType: item.page.pageType,
+              chapterName: item.chapter.name,
+              label: item.page.label,
             });
           }
         });
@@ -854,6 +663,9 @@ function App() {
               convertiblePages.push({
                 path: page.filePath,
                 outputName: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}.tif`,
+                pageType: page.pageType,
+                chapterName: chapter.name,
+                label: page.label,
               });
             }
           });
@@ -904,6 +716,14 @@ function App() {
           console.error('TIFF変換エラー:', details);
         }
 
+        // EPUB_maker連携用のページ情報を生成
+        const exportedPages = convertiblePages.map(p => ({
+          filename: p.outputName,
+          pageType: p.pageType,
+          chapterName: p.chapterName,
+          label: p.label,
+        }));
+
         setExportResultDialog({
           show: true,
           title: errorResults.length > 0 ? 'TIFF変換完了（一部エラー）' : 'TIFF変換完了',
@@ -911,6 +731,7 @@ function App() {
           details: errorResults.length > 0 ? `エラー: ${errorResults.length}件\n${details}` : undefined,
           outputDir: response.outputDir,
           isError: errorResults.length > 0,
+          exportedPages,
         });
       } catch (error) {
         setExportResultDialog({
@@ -923,9 +744,108 @@ function App() {
       return;
     }
 
+    // PhotoshopでJPEG変換モードの場合
+    if (convertToJpgPhotoshop) {
+      // PSDファイルを抽出（Photoshopで開いてJPEGに変換）
+      // EPUB_maker連携用にページ情報も保持
+      const convertiblePages: { path: string; outputName: string; pageType: string; chapterName?: string; label?: string }[] = [];
+
+      if (renameMode === 'unified') {
+        allPages.forEach((item, index) => {
+          if (item.page.fileType === 'psd' && item.page.filePath) {
+            convertiblePages.push({
+              path: item.page.filePath,
+              outputName: `${prefix}${String(startNumber + index).padStart(digits, '0')}.jpg`,
+              pageType: item.page.pageType,
+              chapterName: item.chapter.name,
+              label: item.page.label,
+            });
+          }
+        });
+      } else {
+        for (const chapter of chapters) {
+          const settings = perChapterSettings[chapter.id] || { enabled: true, startNumber: 1, digits: 4, prefix: '' };
+          if (settings.enabled === false) continue;
+          chapter.pages.forEach((page, pageIndex) => {
+            if (page.fileType === 'psd' && page.filePath) {
+              convertiblePages.push({
+                path: page.filePath,
+                outputName: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}.jpg`,
+                pageType: page.pageType,
+                chapterName: chapter.name,
+                label: page.label,
+              });
+            }
+          });
+        }
+      }
+
+      if (convertiblePages.length === 0) {
+        alert('変換可能なファイル（PSD）がありません');
+        return;
+      }
+
+      try {
+        const config = {
+          globalSettings: {
+            jpgQuality: 12,  // 最高品質
+          },
+          files: convertiblePages.map(p => ({
+            path: p.path,
+            outputPath: outputPath,
+            outputName: p.outputName,
+          })),
+        };
+
+        console.log('JPEG変換開始:', { config, outputDir: outputPath });
+        const response = await invoke<{ results: { fileName: string; success: boolean; error?: string }[]; outputDir: string }>('run_photoshop_jpeg_convert', {
+          config,
+          outputDir: outputPath,
+        });
+        console.log('JPEG変換完了:', response);
+
+        const successResults = response.results.filter(r => r.success);
+        const errorResults = response.results.filter(r => !r.success);
+
+        const message = `${successResults.length}ファイルをJPEGに変換しました`;
+
+        let details = '';
+        if (errorResults.length > 0) {
+          details = errorResults.map(r => `${r.fileName}: ${r.error}`).join('\n');
+          console.error('JPEG変換エラー:', details);
+        }
+
+        // EPUB_maker連携用のページ情報を生成
+        const exportedPages = convertiblePages.map(p => ({
+          filename: p.outputName,
+          pageType: p.pageType,
+          chapterName: p.chapterName,
+          label: p.label,
+        }));
+
+        setExportResultDialog({
+          show: true,
+          title: errorResults.length > 0 ? 'JPEG変換完了（一部エラー）' : 'JPEG変換完了',
+          message,
+          details: errorResults.length > 0 ? `エラー: ${errorResults.length}件\n${details}` : undefined,
+          outputDir: response.outputDir,
+          isError: errorResults.length > 0,
+          exportedPages,
+        });
+      } catch (error) {
+        setExportResultDialog({
+          show: true,
+          title: 'JPEG変換エラー',
+          message: String(error),
+          isError: true,
+        });
+      }
+      return;
+    }
+
     // 通常のエクスポート処理
-    // エクスポートページを生成
-    let exportPages: { source_path: string | null; output_name: string; page_type: string; subfolder?: string }[] = [];
+    // エクスポートページを生成（EPUB_maker連携用にchapterName, labelも保持）
+    let exportPages: { source_path: string | null; output_name: string; page_type: string; subfolder?: string; chapter_name?: string; label?: string; file_type?: string }[] = [];
 
     if (renameMode === 'unified') {
       // 一括設定: 全ページを通し番号でリネーム
@@ -933,6 +853,9 @@ function App() {
         source_path: item.page.filePath || null,
         output_name: `${prefix}${String(startNumber + index).padStart(digits, '0')}`,
         page_type: item.page.pageType,
+        chapter_name: item.chapter.name,
+        label: item.page.label,
+        file_type: item.page.fileType,
       }));
     } else {
       // チャプターごとの設定: 各チャプター内で個別にリネーム、サブフォルダに出力
@@ -946,6 +869,9 @@ function App() {
             output_name: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}`,
             page_type: page.pageType,
             subfolder: chapter.name, // チャプター名をサブフォルダとして使用
+            chapter_name: chapter.name,
+            label: page.label,
+            file_type: page.fileType,
           });
         });
       }
@@ -971,9 +897,34 @@ function App() {
       if (skippedCount > 0) {
         message += `（${skippedCount}件スキップ）`;
       }
-      alert(message);
+
+      // EPUB_maker連携用のページ情報を生成
+      const exportedPages = exportPages.map((p) => {
+        // 拡張子を決定: JPG変換時は.jpg、それ以外は元のファイルタイプ
+        const ext = convertToJpg ? 'jpg' : (p.file_type || 'jpg');
+        return {
+          filename: `${p.output_name}.${ext}`,
+          pageType: p.page_type,
+          chapterName: p.chapter_name,
+          label: p.label,
+        };
+      });
+
+      setExportResultDialog({
+        show: true,
+        title: 'エクスポート完了',
+        message,
+        outputDir: outputPath,
+        isError: false,
+        exportedPages,
+      });
     } catch (error) {
-      alert(`エクスポートエラー: ${error}`);
+      setExportResultDialog({
+        show: true,
+        title: 'エクスポートエラー',
+        message: String(error),
+        isError: true,
+      });
     }
   };
 
@@ -1261,22 +1212,6 @@ function App() {
       }
     }
   }, [highlightedPageId]);
-
-  // プレビューエリア上部付近かどうかを追跡（「先頭にチャプターを追加」の表示制御用）
-  useEffect(() => {
-    if (activeDragType !== 'page' || isDraggingFiles) {
-      setIsNearPreviewTop(false);
-      return;
-    }
-    const handlePointerMove = (e: PointerEvent) => {
-      const previewArea = previewAreaRef.current;
-      if (!previewArea) return;
-      const rect = previewArea.getBoundingClientRect();
-      setIsNearPreviewTop(e.clientY <= rect.top + 100);
-    };
-    window.addEventListener('pointermove', handlePointerMove);
-    return () => window.removeEventListener('pointermove', handlePointerMove);
-  }, [activeDragType, isDraggingFiles]);
 
   const thumbnailSizeValue = THUMBNAIL_SIZES[thumbnailSize].value;
 
@@ -2334,6 +2269,32 @@ function App() {
                   }}
                 >
                   フォルダを開く
+                </button>
+              )}
+              {exportResultDialog.outputDir && !exportResultDialog.isError && exportResultDialog.exportedPages && (
+                <button
+                  className="btn-secondary btn-small"
+                  onClick={async () => {
+                    try {
+                      // EPUB_maker連携用のページデータを作成
+                      const pages = exportResultDialog.exportedPages!.map(p => ({
+                        filename: p.filename,
+                        pageType: p.pageType,
+                        chapterName: p.chapterName,
+                        label: p.label,
+                      }));
+                      await invoke('launch_epub_maker_with_daidori', {
+                        imageFolder: exportResultDialog.outputDir,
+                        pages,
+                        epubMakerPath: EPUB_MAKER_DIR,
+                      });
+                    } catch (e) {
+                      console.error('EPUB_makerを開けませんでした:', e);
+                      alert(`EPUB_makerの起動に失敗しました: ${e}`);
+                    }
+                  }}
+                >
+                  EPUB_makerを開く
                 </button>
               )}
               <button

@@ -20,7 +20,10 @@ pub async fn get_recent_files() -> Result<Vec<RecentFile>, String> {
     }
 
     let content = fs::read_to_string(&recent_path).map_err(|e| format!("読み込みエラー: {}", e))?;
-    let recent: Vec<RecentFile> = serde_json::from_str(&content).unwrap_or_default();
+    let recent: Vec<RecentFile> = serde_json::from_str(&content).unwrap_or_else(|e| {
+        eprintln!("Warning: recent_files.json parse error: {}", e);
+        Vec::new()
+    });
 
     // 存在しないファイルをフィルタリング
     let valid: Vec<RecentFile> = recent
@@ -39,7 +42,10 @@ pub async fn add_recent_file(path: String, name: String) -> Result<(), String> {
 
     let mut recent = if recent_path.exists() {
         let content = fs::read_to_string(&recent_path).map_err(|e| format!("読み込みエラー: {}", e))?;
-        serde_json::from_str::<Vec<RecentFile>>(&content).unwrap_or_default()
+        serde_json::from_str::<Vec<RecentFile>>(&content).unwrap_or_else(|e| {
+            eprintln!("Warning: recent_files.json parse error: {}", e);
+            Vec::new()
+        })
     } else {
         Vec::new()
     };

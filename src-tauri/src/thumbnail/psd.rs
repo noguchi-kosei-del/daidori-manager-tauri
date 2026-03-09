@@ -37,7 +37,8 @@ fn extract_psd_embedded_thumbnail(data: &[u8]) -> Option<Vec<u8>> {
 
         // リソースシグネチャ "8BIM"
         let mut resource_sig = [0u8; 4];
-        if cursor.read_exact(&mut resource_sig).is_err() {
+        if let Err(e) = cursor.read_exact(&mut resource_sig) {
+            eprintln!("PSD thumbnail: resource signature read error: {}", e);
             break;
         }
         if &resource_sig != b"8BIM" {
@@ -53,7 +54,8 @@ fn extract_psd_embedded_thumbnail(data: &[u8]) -> Option<Vec<u8>> {
         let mut name_len = [0u8; 1];
         cursor.read_exact(&mut name_len).ok()?;
         let skip_len = if name_len[0] % 2 == 0 { name_len[0] as i64 + 1 } else { name_len[0] as i64 };
-        if cursor.seek(SeekFrom::Current(skip_len)).is_err() {
+        if let Err(e) = cursor.seek(SeekFrom::Current(skip_len)) {
+            eprintln!("PSD thumbnail: seek error (name skip): {}", e);
             break;
         }
 
@@ -88,7 +90,8 @@ fn extract_psd_embedded_thumbnail(data: &[u8]) -> Option<Vec<u8>> {
 
         // 次のリソースへ（偶数バウンダリにアライン）
         let padded_size = if resource_size % 2 == 0 { resource_size } else { resource_size + 1 };
-        if cursor.seek(SeekFrom::Current(padded_size as i64)).is_err() {
+        if let Err(e) = cursor.seek(SeekFrom::Current(padded_size as i64)) {
+            eprintln!("PSD thumbnail: seek error (next resource): {}", e);
             break;
         }
 

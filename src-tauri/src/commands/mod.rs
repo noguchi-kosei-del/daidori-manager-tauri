@@ -3,4 +3,7 @@ pub mod export;
 pub mod project;
 pub mod recent;
 pub mod open_file;
+pub mod photoshop;
 pub mod tiff;
+pub mod jpeg;
+pub mod epub_integration;

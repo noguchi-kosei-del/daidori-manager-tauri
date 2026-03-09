@@ -159,7 +159,7 @@ npm run tauri build
 ```
 daidori-manager-tauri/
 ├── src/                           # Reactフロントエンド
-│   ├── App.tsx                    # メインAppコンポーネント (~2,100行)
+│   ├── App.tsx                    # メインAppコンポーネント (~2,400行)
 │   ├── store.ts                   # Zustand状態管理
 │   ├── types.ts                   # 型定義
 │   ├── icons.tsx                  # アイコンコンポーネント
@@ -168,7 +168,9 @@ daidori-manager-tauri/
 │   ├── constants/
 │   │   └── dnd.ts                 # D&D関連定数
 │   ├── hooks/
-│   │   └── useThumbnailQueue.ts   # サムネイルキュー処理
+│   │   ├── useThumbnailQueue.ts   # サムネイルキュー処理
+│   │   ├── useWindowCloseHandler.ts # ウィンドウ終了ハンドラ
+│   │   └── useKeyboardShortcuts.ts  # キーボードショートカット
 │   └── components/
 │       ├── preview/
 │       │   ├── SpreadViewer.tsx   # 見開きビューア
@@ -210,7 +212,12 @@ daidori-manager-tauri/
 │   │       ├── folder.rs          # get_folder_contents
 │   │       ├── export.rs          # export_pages
 │   │       ├── project.rs         # save/load/validate
-│   │       └── recent.rs          # recent files
+│   │       ├── recent.rs          # recent files
+│   │       ├── open_file.rs       # open_file_with_default_app
+│   │       ├── photoshop.rs       # Photoshop共通処理
+│   │       ├── tiff.rs            # TIFF変換
+│   │       ├── jpeg.rs            # JPEG変換
+│   │       └── epub_integration.rs # EPUB_maker連携
 │   ├── Cargo.toml                 # Rust依存関係
 │   └── tauri.conf.json            # Tauri設定
 ├── package.json                   # npm依存関係
@@ -248,7 +255,7 @@ style-src 'self' 'unsafe-inline'
 | `components/sidebar/` | サイドバーコンポーネント（ChapterItem, SortablePageItem） |
 | `components/dnd/` | ドラッグ&ドロップ関連（DragOverlays, DropZones） |
 | `components/modals/` | モーダルダイアログ（ExportModal） |
-| `hooks/` | カスタムフック（useThumbnailQueue） |
+| `hooks/` | カスタムフック（useThumbnailQueue, useWindowCloseHandler, useKeyboardShortcuts） |
 | `constants/` | 定数定義（D&D用ID、並列処理数など） |
 
 ### バックエンド (Rust/Tauri)
@@ -258,7 +265,7 @@ style-src 'self' 'unsafe-inline'
 | `types/` | 型定義（FileInfo, ExportPage, ProjectFile等） |
 | `cache/` | キャッシュ管理（ディスクキャッシュ、メモリLRUキャッシュ） |
 | `thumbnail/` | サムネイル生成（画像処理、PSD対応） |
-| `commands/` | Tauriコマンド（folder, export, project, recent） |
+| `commands/` | Tauriコマンド（folder, export, project, recent, photoshop, tiff, jpeg, epub_integration） |
 | `image_utils.rs` | 画像ユーティリティ（サイズ検証、ファイルタイプ判定） |
 | `state.rs` | アプリケーション状態管理 |
 | `constants.rs` | 定数定義（キャッシュサイズ、対応拡張子等） |
@@ -644,3 +651,32 @@ files: [{
   cropBounds: { left, top, right, bottom },  // クロップ範囲
 }]
 ```
+
+### 2026-03-09: コードリファクタリング
+
+#### デッドコード削除（App.tsx, store.ts）
+- App.tsxから未使用変数を削除: `_currentView`, `_setCurrentView`, `_isNearPreviewTop`, `setIsNearPreviewTop`, `isModifiedRef`
+- store.tsから未使用関数`setViewMode`を削除
+- App.tsx: 約2,539行 → 約2,389行（-150行）
+
+#### カスタムフック抽出（hooks/）
+- **useWindowCloseHandler.ts**: ウィンドウ終了時の未保存確認ダイアログ管理（55行）
+  - `isModifiedRef`を使用してクロージャ問題を回避
+- **useKeyboardShortcuts.ts**: キーボードショートカット管理（199行）
+  - F1（閲覧モード）、Ctrl+N/O/Z/Y、Delete、矢印キーを一元管理
+- useDarkMode.ts削除（App.tsxで直接実装済みのため未使用）
+
+#### Photoshop処理の共通化（commands/photoshop.rs）
+- tiff.rsとjpeg.rsの重複コードを共通モジュールに抽出（176行）
+- `find_photoshop_path()`: Photoshopインストールパス検索
+- `find_script_path()`: リソースディレクトリからスクリプトパス検索
+- `create_unique_output_dir()`: 出力ディレクトリ作成（連番対応）
+- `copy_script_with_bom()`: スクリプトをtempにコピー（UTF-8 BOM付き）
+- `get_script_run_path()`: tempスクリプトのフルパス取得
+- `write_settings_json()`: 設定JSONをファイルに書き込み
+- tiff.rs: 335行 → 211行（-124行）
+- jpeg.rs: 290行 → 165行（-125行）
+
+#### エラーログ追加（コード品質改善）
+- recent.rs: JSONパースエラー時にログ出力追加
+- psd.rs: バイナリパースエラー時にデバッグログ追加
