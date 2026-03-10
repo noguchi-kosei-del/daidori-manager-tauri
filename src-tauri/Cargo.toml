@@ -42,6 +42,10 @@ rayon = "1.10"
 thiserror = "1"
 anyhow = "1"
 
+# EPUB生成
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+uuid = { version = "1", features = ["v4"] }
+
 # ========== プロファイル設定 ==========
 
 # 開発モードでも依存クレートは最適化（画像処理を高速化）

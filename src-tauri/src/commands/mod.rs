@@ -6,4 +6,4 @@ pub mod open_file;
 pub mod photoshop;
 pub mod tiff;
 pub mod jpeg;
-pub mod epub_integration;
+pub mod epub;

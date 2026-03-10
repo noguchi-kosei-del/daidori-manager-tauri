@@ -3547,3 +3547,182 @@ body.light-mode .save-menu-dropdown button:hover {
 body.light-mode .save-menu-dropdown kbd {
   background: rgba(0, 0, 0, 0.08);
 }
+
+/* ==================== EPUBモーダル ==================== */
+
+.epub-modal {
+  width: 600px;
+  max-width: 90vw;
+  max-height: 85vh;
+}
+
+.epub-modal-body {
+  max-height: calc(85vh - 140px);
+  overflow-y: auto;
+  padding-right: var(--spacing-sm);
+}
+
+.epub-modal .form-section {
+  margin-top: var(--spacing-lg);
+  padding-top: var(--spacing-lg);
+  border-top: 1px solid var(--color-border);
+}
+
+.epub-modal .form-section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.epub-modal .form-section h3 {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+  margin-bottom: var(--spacing-md);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.epub-modal .form-row {
+  display: flex;
+  gap: var(--spacing-md);
+}
+
+.epub-modal .form-row .form-group {
+  flex: 1;
+}
+
+.epub-modal .form-group.flex-grow {
+  flex: 2;
+}
+
+.epub-modal textarea {
+  width: 100%;
+  padding: var(--spacing-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  resize: vertical;
+}
+
+.epub-modal select {
+  width: 100%;
+  padding: var(--spacing-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.epub-modal .uuid-input {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.epub-modal .form-hint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-top: var(--spacing-xs);
+}
+
+/* 著者エントリー */
+.author-entry {
+  margin-bottom: var(--spacing-md);
+  padding: var(--spacing-sm);
+  background: var(--color-bg-tertiary);
+  border-radius: var(--border-radius);
+}
+
+.author-entry .form-row {
+  align-items: flex-end;
+}
+
+.author-entry .form-group {
+  margin-bottom: 0;
+}
+
+.author-remove {
+  flex-shrink: 0;
+  margin-bottom: var(--spacing-xs);
+}
+
+/* EPUB統計 */
+.epub-preview-info {
+  background: var(--color-bg-tertiary);
+  border-radius: var(--border-radius);
+  padding: var(--spacing-md);
+  margin-top: var(--spacing-lg);
+}
+
+.epub-stats {
+  display: flex;
+  gap: var(--spacing-xl);
+}
+
+.epub-stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.epub-stat .stat-label {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.epub-stat .stat-value {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-accent);
+}
+
+/* EPUBボタン */
+.btn-epub {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  border: none;
+  border-radius: var(--border-radius);
+  color: white;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: all var(--transition-base);
+}
+
+.btn-epub:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+}
+
+.btn-epub:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-epub svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ライトモード対応 */
+body.light-mode .epub-modal textarea,
+body.light-mode .epub-modal select {
+  background: white;
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+body.light-mode .author-entry,
+body.light-mode .epub-preview-info {
+  background: rgba(0, 0, 0, 0.03);
+}

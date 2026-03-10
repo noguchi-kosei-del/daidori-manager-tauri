@@ -185,3 +185,102 @@ export interface TiffConvertResponse {
   results: TiffConvertResult[];
   outputDir: string;
 }
+
+// ========== EPUB生成関連 ==========
+
+// EPUB出力形式
+export type EpubFormat = 'kadokawa' | 'hybrid' | 'oebps';
+
+// EPUB形式のラベル
+export const EPUB_FORMAT_LABELS: Record<EpubFormat, string> = {
+  kadokawa: 'KADOKAWA（電書協準拠）',
+  hybrid: 'Hybrid（EPUB2/3両対応）',
+  oebps: 'OEBPS（シンプル）',
+};
+
+// EPUB形式のデフォルトビューポート
+export const EPUB_FORMAT_VIEWPORTS: Record<EpubFormat, { width: number; height: number }> = {
+  kadokawa: { width: 1442, height: 2048 },
+  hybrid: { width: 1127, height: 1600 },
+  oebps: { width: 1352, height: 1920 },
+};
+
+// ページ綴じ方向
+export type PageDirection = 'rtl' | 'ltr';
+
+// 綴じ方向ラベル
+export const PAGE_DIRECTION_LABELS: Record<PageDirection, string> = {
+  rtl: '右綴じ（日本の漫画）',
+  ltr: '左綴じ（西洋式）',
+};
+
+// 見開きモード
+export type SpreadMode = 'landscape' | 'portrait' | 'auto';
+
+// 見開きモードラベル
+export const SPREAD_MODE_LABELS: Record<SpreadMode, string> = {
+  landscape: '見開き表示',
+  portrait: '単ページ表示',
+  auto: '自動',
+};
+
+// 画面向き
+export type Orientation = 'auto' | 'portrait' | 'landscape';
+
+// 著者の役割
+export type AuthorRole = 'aut' | 'ill' | 'edt' | 'trl';
+
+// 著者役割ラベル
+export const AUTHOR_ROLE_LABELS: Record<AuthorRole, string> = {
+  aut: '著者',
+  ill: 'イラスト',
+  edt: '編集',
+  trl: '翻訳',
+};
+
+// 著者情報
+export interface AuthorInfo {
+  name: string;
+  fileAs?: string;
+  role: AuthorRole;
+  roleDisplay?: string;
+}
+
+// EPUBメタデータ
+export interface EpubMetadata {
+  title: string;
+  titleFileAs?: string;
+  authors: AuthorInfo[];
+  publisher: string;
+  publisherFileAs?: string;
+  isbn?: string;
+  language: string;
+  pageDirection: PageDirection;
+  viewportWidth: number;
+  viewportHeight: number;
+  spreadMode: SpreadMode;
+  orientation: Orientation;
+  bookUuid: string;
+  outputFormat: EpubFormat;
+  description?: string;
+}
+
+// EPUBページ情報
+export interface EpubPage {
+  id: string;
+  filename: string;
+  sourcePath: string;
+  width: number;
+  height: number;
+  isCover: boolean;
+  isColophon: boolean;
+}
+
+// EPUB生成結果
+export interface EpubGenerateResponse {
+  success: boolean;
+  outputPath: string;
+  pageCount: number;
+  fileSize: number;
+  error?: string;
+}

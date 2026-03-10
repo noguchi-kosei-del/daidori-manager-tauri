@@ -21,6 +21,7 @@ export interface ExportOptions {
   convertToJpg: boolean;  // JPGに変換するか
   jpgQuality: number;  // JPG品質（1-100）
   convertToTiff: boolean;  // PhotoshopでTIFFに変換するか
+  convertToJpgPhotoshop: boolean;  // PhotoshopでJPEGに変換するか
   renameMode: 'unified' | 'perChapter';
   // 一括設定
   startNumber: number;
@@ -47,6 +48,7 @@ export function ExportModal({
   const [convertToJpg, setConvertToJpg] = useState(false);
   const [jpgQuality, setJpgQuality] = useState(100);
   const [convertToTiff, setConvertToTiff] = useState(false);
+  const [convertToJpgPhotoshop, setConvertToJpgPhotoshop] = useState(false);
   const [photoshopInstalled, setPhotoshopInstalled] = useState<boolean | null>(null);
   const [renameMode, setRenameMode] = useState<'unified' | 'perChapter'>('unified');
   const [startNumber, setStartNumber] = useState(1);
@@ -90,8 +92,13 @@ export function ExportModal({
   }, [isOpen, photoshopInstalled]);
 
   // PSD・JPEGファイルがあるかチェック（TIFF変換対象）
-  const hasConvertibleFiles = chapters.some(chapter =>
+  const hasTiffConvertibleFiles = chapters.some(chapter =>
     chapter.pages.some(page => page.fileType === 'psd' || page.fileType === 'jpg')
+  );
+
+  // PSDファイルがあるかチェック（JPEG変換対象）
+  const hasPsdFiles = chapters.some(chapter =>
+    chapter.pages.some(page => page.fileType === 'psd')
   );
 
   // チャプターごとの設定を初期化
@@ -127,7 +134,7 @@ export function ExportModal({
   const handleExport = async () => {
     if (!outputPath) return;
     setIsExporting(true);
-    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameMode, startNumber, digits, prefix, perChapterSettings });
+    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, convertToJpgPhotoshop, renameMode, startNumber, digits, prefix, perChapterSettings });
     setIsExporting(false);
     onClose();
   };
@@ -204,7 +211,10 @@ export function ExportModal({
                 checked={convertToJpg}
                 onChange={(e) => {
                   setConvertToJpg(e.target.checked);
-                  if (e.target.checked) setConvertToTiff(false);
+                  if (e.target.checked) {
+                    setConvertToTiff(false);
+                    setConvertToJpgPhotoshop(false);
+                  }
                 }}
               />
               高画質JPGに変換して出力
@@ -228,21 +238,24 @@ export function ExportModal({
           </div>
 
           <div className="form-group">
-            <label className={`checkbox-label ${!hasConvertibleFiles || !photoshopInstalled ? 'disabled' : ''}`}>
+            <label className={`checkbox-label ${!hasTiffConvertibleFiles || !photoshopInstalled ? 'disabled' : ''}`}>
               <input
                 type="checkbox"
                 checked={convertToTiff}
-                disabled={!hasConvertibleFiles || !photoshopInstalled}
+                disabled={!hasTiffConvertibleFiles || !photoshopInstalled}
                 onChange={(e) => {
                   setConvertToTiff(e.target.checked);
-                  if (e.target.checked) setConvertToJpg(false);
+                  if (e.target.checked) {
+                    setConvertToJpg(false);
+                    setConvertToJpgPhotoshop(false);
+                  }
                 }}
               />
               PhotoshopでTIFFに変換（PSD・JPEG）
               {!photoshopInstalled && photoshopInstalled !== null && (
                 <span className="option-note"> - Photoshopが見つかりません</span>
               )}
-              {photoshopInstalled && !hasConvertibleFiles && (
+              {photoshopInstalled && !hasTiffConvertibleFiles && (
                 <span className="option-note"> - 変換可能なファイルがありません</span>
               )}
             </label>
@@ -250,6 +263,37 @@ export function ExportModal({
               <div className="tiff-options">
                 <div className="tiff-note">
                   ※ LZW圧縮、レイヤー統合で出力（カラーモードは元ファイルを維持）
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="form-group">
+            <label className={`checkbox-label ${!hasPsdFiles || !photoshopInstalled ? 'disabled' : ''}`}>
+              <input
+                type="checkbox"
+                checked={convertToJpgPhotoshop}
+                disabled={!hasPsdFiles || !photoshopInstalled}
+                onChange={(e) => {
+                  setConvertToJpgPhotoshop(e.target.checked);
+                  if (e.target.checked) {
+                    setConvertToJpg(false);
+                    setConvertToTiff(false);
+                  }
+                }}
+              />
+              PhotoshopでJPEGに変換（PSD）
+              {!photoshopInstalled && photoshopInstalled !== null && (
+                <span className="option-note"> - Photoshopが見つかりません</span>
+              )}
+              {photoshopInstalled && !hasPsdFiles && (
+                <span className="option-note"> - PSDファイルがありません</span>
+              )}
+            </label>
+            {convertToJpgPhotoshop && (
+              <div className="tiff-options">
+                <div className="tiff-note">
+                  ※ 最高画質（品質12）、レイヤー統合で出力
                 </div>
               </div>
             )}
@@ -457,7 +501,7 @@ export function ExportModal({
           <button
             className="btn-primary btn-small"
             onClick={handleExport}
-            disabled={!outputPath || isExporting || (!convertToJpg && !convertToTiff)}
+            disabled={!outputPath || isExporting || (!convertToJpg && !convertToTiff && !convertToJpgPhotoshop)}
           >
             {isExporting ? 'エクスポート中...' : 'エクスポート'}
           </button>

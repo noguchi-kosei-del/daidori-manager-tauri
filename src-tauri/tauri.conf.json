@@ -41,7 +41,8 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "scripts/"
+      "scripts/",
+      "resources/kadokawa_css/"
     ],
     "windows": {
       "nsis": {

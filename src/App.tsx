@@ -47,6 +47,7 @@ import {
   TrashIcon,
   EyeIcon,
   EyeOffIcon,
+  BookIcon,
 } from './icons';
 
 // 抽出したコンポーネント
@@ -60,8 +61,9 @@ import {
   SidebarNewChapterDropZone,
   SidebarChapterReorderDropZone,
 } from './components/dnd';
-import { ExportModal } from './components/modals/ExportModal';
+import { ExportModal, EpubMetadataModal } from './components/modals';
 import type { ExportOptions } from './components/modals/ExportModal';
+import { EpubMetadata, EpubPage, EpubGenerateResponse } from './types';
 import {
   SIDEBAR_PREFIX,
   NEW_CHAPTER_DROP_ZONE_ID,
@@ -72,9 +74,6 @@ import {
   CHAPTER_REORDER_DROP_ZONE_END_ID,
 } from './constants/dnd';
 
-// EPUB_makerのパス（ディレクトリ）
-// TODO: 設定ファイルまたはlocalStorageから読み込むように変更
-const EPUB_MAKER_DIR = 'C:\\Users\\noguchi-kosei\\Desktop\\参考ネイティブデータ\\EPUB_maker';
 
 // ファイルドロップ関連のグローバル状態（windowオブジェクトで管理してHMR対策）
 declare global {
@@ -151,6 +150,7 @@ function App() {
   } = useStore();
 
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [isEpubModalOpen, setIsEpubModalOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeDragType, setActiveDragType] = useState<'chapter' | 'page' | null>(null);
   const [draggedPageIds, setDraggedPageIds] = useState<string[]>([]);  // 複数ページドラッグ用
@@ -629,6 +629,101 @@ function App() {
       }
     } catch (error) {
       console.error('ファイル選択エラー:', error);
+    }
+  };
+
+  // EPUB生成ハンドラ
+  const handleEpubGenerate = async (metadata: EpubMetadata, outputPath: string) => {
+    try {
+      // ページ情報を構築
+      const epubPages: EpubPage[] = [];
+      let pageNumber = 1;
+
+      for (const chapter of chapters) {
+        for (const page of chapter.pages) {
+          // ファイルページのみ（白紙はスキップ）
+          if (page.pageType === 'blank' || !page.filePath) {
+            continue;
+          }
+
+          // 画像サイズを取得
+          let width = metadata.viewportWidth;
+          let height = metadata.viewportHeight;
+          try {
+            const dimensions = await invoke<[number, number]>('get_image_dimensions', {
+              path: page.filePath,
+            });
+            width = dimensions[0];
+            height = dimensions[1];
+          } catch {
+            console.warn(`画像サイズ取得失敗: ${page.filePath}`);
+          }
+
+          // ページIDを生成
+          const pageId = page.pageType === 'cover'
+            ? 'p-cover'
+            : page.pageType === 'colophon'
+            ? 'p-colophon'
+            : `p-${String(pageNumber).padStart(3, '0')}`;
+
+          // ファイル名を生成
+          const ext = page.filePath.split('.').pop()?.toLowerCase() || 'jpg';
+          const filename = page.pageType === 'cover'
+            ? `cover.${ext}`
+            : page.pageType === 'colophon'
+            ? `colophon.${ext}`
+            : `${String(pageNumber).padStart(4, '0')}.${ext}`;
+
+          epubPages.push({
+            id: pageId,
+            filename,
+            sourcePath: page.filePath,
+            width,
+            height,
+            isCover: page.pageType === 'cover',
+            isColophon: page.pageType === 'colophon',
+          });
+
+          if (page.pageType !== 'cover' && page.pageType !== 'colophon') {
+            pageNumber++;
+          }
+        }
+      }
+
+      // EPUB生成
+      const response = await invoke<EpubGenerateResponse>('generate_epub', {
+        metadata,
+        pages: epubPages,
+        outputPath,
+        customCss: null,
+      });
+
+      if (response.success) {
+        // ファイルサイズを人間が読みやすい形式に
+        const fileSizeMB = (response.fileSize / (1024 * 1024)).toFixed(2);
+        setExportResultDialog({
+          show: true,
+          title: 'EPUB生成完了',
+          message: `EPUBを生成しました\n${response.pageCount}ページ / ${fileSizeMB}MB`,
+          outputDir: outputPath,
+        });
+        setIsEpubModalOpen(false);
+      } else {
+        setExportResultDialog({
+          show: true,
+          title: 'EPUB生成失敗',
+          message: response.error || 'EPUB生成中にエラーが発生しました',
+          isError: true,
+        });
+      }
+    } catch (error) {
+      console.error('EPUB生成エラー:', error);
+      setExportResultDialog({
+        show: true,
+        title: 'EPUB生成失敗',
+        message: `エラー: ${error}`,
+        isError: true,
+      });
     }
   };
 
@@ -1857,6 +1952,16 @@ function App() {
                 </button>
 
                 <button
+                  className="btn-epub"
+                  onClick={() => setIsEpubModalOpen(true)}
+                  title="EPUBを生成"
+                  disabled={allPages.length === 0}
+                >
+                  <BookIcon size={16} />
+                  <span>EPUB</span>
+                </button>
+
+                <button
                   className="theme-toggle-btn"
                   onClick={toggleDarkMode}
                   title={isDarkMode ? 'ライトモードに切り替え' : 'ダークモードに切り替え'}
@@ -2199,6 +2304,14 @@ function App() {
         chapters={chapters}
       />
 
+      <EpubMetadataModal
+        isOpen={isEpubModalOpen}
+        onClose={() => setIsEpubModalOpen(false)}
+        onGenerate={handleEpubGenerate}
+        chapters={chapters}
+        projectName={projectName}
+      />
+
       {/* 未保存確認ダイアログ */}
       {showUnsavedDialog && (
         <div className="modal-overlay">
@@ -2273,28 +2386,14 @@ function App() {
               )}
               {exportResultDialog.outputDir && !exportResultDialog.isError && exportResultDialog.exportedPages && (
                 <button
-                  className="btn-secondary btn-small"
-                  onClick={async () => {
-                    try {
-                      // EPUB_maker連携用のページデータを作成
-                      const pages = exportResultDialog.exportedPages!.map(p => ({
-                        filename: p.filename,
-                        pageType: p.pageType,
-                        chapterName: p.chapterName,
-                        label: p.label,
-                      }));
-                      await invoke('launch_epub_maker_with_daidori', {
-                        imageFolder: exportResultDialog.outputDir,
-                        pages,
-                        epubMakerPath: EPUB_MAKER_DIR,
-                      });
-                    } catch (e) {
-                      console.error('EPUB_makerを開けませんでした:', e);
-                      alert(`EPUB_makerの起動に失敗しました: ${e}`);
-                    }
+                  className="btn-epub btn-small"
+                  onClick={() => {
+                    setExportResultDialog({ show: false, title: '', message: '' });
+                    setIsEpubModalOpen(true);
                   }}
                 >
-                  EPUB_makerを開く
+                  <BookIcon size={14} />
+                  EPUBを生成
                 </button>
               )}
               <button
