@@ -21,7 +21,7 @@ use commands::recent::{get_recent_files, add_recent_file};
 use commands::open_file::open_file_with_default_app;
 use commands::tiff::{check_photoshop_installed, run_photoshop_tiff_convert};
 use commands::jpeg::run_photoshop_jpeg_convert;
-use commands::epub::{generate_epub, generate_book_uuid, get_image_dimensions};
+use commands::epub::{generate_epub, generate_book_uuid, get_image_dimensions, create_epub_metadata, get_default_viewport};
 use thumbnail::generate_thumbnail;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -63,6 +63,8 @@ pub fn run() {
             generate_epub,
             generate_book_uuid,
             get_image_dimensions,
+            create_epub_metadata,
+            get_default_viewport,
         ])
         .run(tauri::generate_context!())
     {

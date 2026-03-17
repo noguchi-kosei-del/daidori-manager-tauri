@@ -37,7 +37,7 @@ pub fn generate_opf(metadata: &EpubMetadata, pages: &[EpubPage], css_files: &[&s
     opf.push('\n');
 
     // metadata セクション
-    opf.push_str(&generate_opf_metadata(metadata));
+    opf.push_str(&generate_opf_metadata(metadata, &metadata.output_format));
 
     // manifest セクション
     opf.push_str(&generate_opf_manifest(metadata, pages, css_files));
@@ -50,7 +50,7 @@ pub fn generate_opf(metadata: &EpubMetadata, pages: &[EpubPage], css_files: &[&s
 }
 
 /// OPFのmetadataセクションを生成
-fn generate_opf_metadata(metadata: &EpubMetadata) -> String {
+fn generate_opf_metadata(metadata: &EpubMetadata, format: &EpubFormat) -> String {
     let mut meta = String::new();
     meta.push_str("  <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n");
 
@@ -92,11 +92,15 @@ fn generate_opf_metadata(metadata: &EpubMetadata) -> String {
                 escape_xml(file_as)
             ));
         }
-        if let Some(ref role_display) = author.role_display {
+        // 役割の日本語表示名（カスタム設定があればそれを使用、なければデフォルト）
+        let display_name = author.role_display
+            .as_deref()
+            .unwrap_or_else(|| author.role.display_name_ja());
+        if *format == EpubFormat::Kadokawa || author.role_display.is_some() {
             meta.push_str(&format!(
                 "    <meta refines=\"#{}\" property=\"role\">{}</meta>\n",
                 id,
-                escape_xml(role_display)
+                escape_xml(display_name)
             ));
         }
     }

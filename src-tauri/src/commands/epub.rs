@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
 use crate::epub::EpubBuilder;
-use crate::types::{EpubGenerateConfig, EpubGenerateResponse, EpubMetadata, EpubPage};
+use crate::types::{EpubFormat, EpubGenerateConfig, EpubGenerateResponse, EpubMetadata, EpubPage};
 
 /// EPUB生成コマンド
 #[tauri::command]
@@ -116,6 +116,18 @@ fn get_css_resource_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
 #[tauri::command]
 pub fn generate_book_uuid() -> String {
     uuid::Uuid::new_v4().to_string()
+}
+
+/// デフォルトメタデータを作成（UUID自動生成・ビューポート自動設定）
+#[tauri::command]
+pub fn create_epub_metadata(title: String, publisher: String) -> EpubMetadata {
+    EpubMetadata::new(title, publisher)
+}
+
+/// 形式に応じたデフォルトビューポートサイズを返す
+#[tauri::command]
+pub fn get_default_viewport(format: EpubFormat) -> (u32, u32) {
+    format.default_viewport()
 }
 
 /// 画像サイズを取得

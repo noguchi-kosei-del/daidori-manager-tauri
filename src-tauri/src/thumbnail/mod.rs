@@ -28,7 +28,7 @@ pub async fn generate_thumbnail(
     file_path: String,
     modified_time: u64,
     cache: State<'_, ThumbnailCache>,
-    _app_state: State<'_, AppState>,
+    app_state: State<'_, AppState>,
 ) -> Result<ThumbnailResult, String> {
     let cache_dir = cache.cache_dir.clone();
 
@@ -36,8 +36,22 @@ pub async fn generate_thumbnail(
     let input = format!("{}:{}:{}:png", file_path, modified_time, THUMBNAIL_SIZE);
     let cache_key = format!("{:x}", md5::compute(&input));
 
+    // メモリキャッシュをチェック
+    {
+        let mut mem = app_state.memory_cache.lock().map_err(|e| e.to_string())?;
+        if let Some(cached_path) = mem.get(&cache_key) {
+            if Path::new(&cached_path).exists() {
+                return Ok(ThumbnailResult {
+                    cache_key,
+                    cache_path: cached_path,
+                    status: "cached".to_string(),
+                });
+            }
+        }
+    }
+
     // ディスクキャッシュをチェック & サムネイル生成
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         let path = Path::new(&file_path);
 
         if !path.exists() {
@@ -79,5 +93,13 @@ pub async fn generate_thumbnail(
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    // メモリキャッシュに保存
+    {
+        let mut mem = app_state.memory_cache.lock().map_err(|e| e.to_string())?;
+        mem.insert(result.cache_key.clone(), result.cache_path.clone());
+    }
+
+    Ok(result)
 }

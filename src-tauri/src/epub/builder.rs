@@ -128,12 +128,9 @@ impl EpubBuilder {
     /// META-INF/container.xml を作成
     fn write_container_xml(&self) -> Result<(), String> {
         let format = &self.config.metadata.output_format;
-        let opf_path = match format {
-            EpubFormat::Kadokawa | EpubFormat::Hybrid => "item/standard.opf",
-            EpubFormat::Oebps => "OEBPS/content.opf",
-        };
+        let opf_path = format!("{}/{}", format.content_folder(), format.opf_filename());
 
-        let content = generate_container_xml(opf_path);
+        let content = generate_container_xml(&opf_path);
         let path = self.temp_dir.join("META-INF/container.xml");
         fs::write(&path, content)
             .map_err(|e| format!("Failed to write container.xml: {}", e))
@@ -276,10 +273,7 @@ svg {
 
         let content = generate_opf(&self.config.metadata, &self.config.pages, &css_files);
 
-        let opf_path = match format {
-            EpubFormat::Kadokawa | EpubFormat::Hybrid => self.temp_dir.join("item/standard.opf"),
-            EpubFormat::Oebps => self.temp_dir.join("OEBPS/content.opf"),
-        };
+        let opf_path = self.temp_dir.join(format.content_folder()).join(format.opf_filename());
 
         fs::write(&opf_path, content).map_err(|e| format!("Failed to write OPF: {}", e))
     }

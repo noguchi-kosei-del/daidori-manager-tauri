@@ -36,6 +36,14 @@ impl EpubFormat {
         }
     }
 
+    /// コンテンツルートフォルダを返す
+    pub fn content_folder(&self) -> &'static str {
+        match self {
+            EpubFormat::Kadokawa | EpubFormat::Hybrid => "item",
+            EpubFormat::Oebps => "OEBPS",
+        }
+    }
+
     /// 画像フォルダのパスを返す
     pub fn image_folder(&self) -> &'static str {
         match self {
