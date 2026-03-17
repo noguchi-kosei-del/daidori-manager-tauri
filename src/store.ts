@@ -1,6 +1,17 @@
 import { create } from 'zustand';
 import { v4 as uuidv4 } from 'uuid';
-import { Chapter, ChapterType, Page, PageType, PAGE_TYPE_LABELS, SavedUiState } from './types';
+import {
+  Chapter,
+  ChapterType,
+  Page,
+  PageType,
+  PAGE_TYPE_LABELS,
+  SavedUiState,
+  AppMode,
+  EpubPageInfo,
+  EpubMetadata,
+  EPUB_FORMAT_VIEWPORTS,
+} from './types';
 
 // Tauri用のファイル情報型
 export interface FileInfo {
@@ -23,6 +34,9 @@ export const THUMBNAIL_SIZES: Record<ThumbnailSize, { value: number; label: stri
 const MAX_HISTORY_SIZE = 50;
 
 interface AppState {
+  // アプリモード
+  appMode: AppMode;
+
   // プロジェクトデータ
   chapters: Chapter[];
 
@@ -42,6 +56,15 @@ interface AppState {
   selectedPageIds: string[];  // 複数選択
   viewMode: 'selection' | 'all';
   thumbnailSize: ThumbnailSize;
+
+  // EPUB_maker状態
+  epubPages: EpubPageInfo[];
+  epubMetadata: EpubMetadata | null;
+  epubCustomCss: string;
+  epubCurrentSpread: number;
+  epubImageFolder: string | null;
+  epubSelectedPageId: string | null;
+  isEpubModified: boolean;
 
   // アクション: チャプター管理
   addChapter: (type: ChapterType, name?: string, skipInitialPage?: boolean, insertAt?: number) => string;
@@ -91,6 +114,26 @@ interface AppState {
   // ヘルパー
   getAllPages: () => { page: Page; chapter: Chapter; globalIndex: number }[];
   getTotalPageCount: () => number;
+
+  // アクション: アプリモード
+  setAppMode: (mode: AppMode) => void;
+
+  // アクション: EPUB_maker
+  setEpubPages: (pages: EpubPageInfo[]) => void;
+  setEpubMetadata: (metadata: EpubMetadata | null) => void;
+  updateEpubMetadata: (updates: Partial<EpubMetadata>) => void;
+  setEpubCustomCss: (css: string) => void;
+  setEpubCurrentSpread: (index: number) => void;
+  setEpubImageFolder: (folder: string | null) => void;
+  setEpubSelectedPageId: (id: string | null) => void;
+  reorderEpubPage: (fromIndex: number, toIndex: number) => void;
+  setEpubPageAsCover: (pageId: string) => void;
+  setEpubPageAsColophon: (pageId: string) => void;
+  clearEpubPageCover: () => void;
+  clearEpubPageColophon: (pageId: string) => void;
+  loadEpubFromDaidori: () => void;
+  resetEpubState: () => void;
+  markEpubAsModified: () => void;
 }
 
 // デフォルトのチャプター名
@@ -127,6 +170,7 @@ export const useStore = create<AppState>((set, get) => {
 
   return {
   // 初期状態
+  appMode: 'daidori' as AppMode,
   chapters: [],
   currentProjectPath: null,
   projectName: '新規プロジェクト',
@@ -139,6 +183,15 @@ export const useStore = create<AppState>((set, get) => {
   selectedPageIds: [],
   viewMode: 'all',
   thumbnailSize: 'medium',
+
+  // EPUB_maker初期状態
+  epubPages: [],
+  epubMetadata: null,
+  epubCustomCss: '',
+  epubCurrentSpread: 0,
+  epubImageFolder: null,
+  epubSelectedPageId: null,
+  isEpubModified: false,
 
   // チャプター追加
   addChapter: (type, name, _skipInitialPage = false, insertAt) => {
@@ -671,5 +724,167 @@ export const useStore = create<AppState>((set, get) => {
       viewMode: uiState?.viewMode ?? 'all',
       thumbnailSize: uiState?.thumbnailSize ?? 'medium',
     });
+  },
+
+  // アプリモード切り替え
+  setAppMode: (mode) => {
+    set({ appMode: mode });
+  },
+
+  // EPUB_makerアクション
+  setEpubPages: (pages) => {
+    set({ epubPages: pages, isEpubModified: true });
+  },
+
+  setEpubMetadata: (metadata) => {
+    set({ epubMetadata: metadata, isEpubModified: true });
+  },
+
+  updateEpubMetadata: (updates) => {
+    set((state) => ({
+      epubMetadata: state.epubMetadata
+        ? { ...state.epubMetadata, ...updates }
+        : null,
+      isEpubModified: true,
+    }));
+  },
+
+  setEpubCustomCss: (css) => {
+    set({ epubCustomCss: css, isEpubModified: true });
+  },
+
+  setEpubCurrentSpread: (index) => {
+    set({ epubCurrentSpread: index });
+  },
+
+  setEpubImageFolder: (folder) => {
+    set({ epubImageFolder: folder });
+  },
+
+  setEpubSelectedPageId: (id) => {
+    set({ epubSelectedPageId: id });
+  },
+
+  reorderEpubPage: (fromIndex, toIndex) => {
+    set((state) => {
+      const pages = [...state.epubPages];
+      const [removed] = pages.splice(fromIndex, 1);
+      pages.splice(toIndex, 0, removed);
+      return { epubPages: pages, isEpubModified: true };
+    });
+  },
+
+  setEpubPageAsCover: (pageId) => {
+    set((state) => ({
+      epubPages: state.epubPages.map((p) => ({
+        ...p,
+        isCover: p.id === pageId,
+      })),
+      isEpubModified: true,
+    }));
+  },
+
+  setEpubPageAsColophon: (pageId) => {
+    set((state) => ({
+      epubPages: state.epubPages.map((p) => ({
+        ...p,
+        isColophon: p.id === pageId ? true : p.isColophon,
+      })),
+      isEpubModified: true,
+    }));
+  },
+
+  clearEpubPageCover: () => {
+    set((state) => ({
+      epubPages: state.epubPages.map((p) => ({
+        ...p,
+        isCover: false,
+      })),
+      isEpubModified: true,
+    }));
+  },
+
+  clearEpubPageColophon: (pageId) => {
+    set((state) => ({
+      epubPages: state.epubPages.map((p) => ({
+        ...p,
+        isColophon: p.id === pageId ? false : p.isColophon,
+      })),
+      isEpubModified: true,
+    }));
+  },
+
+  // 台割データからEPUBデータへ変換
+  loadEpubFromDaidori: () => {
+    const { chapters, projectName } = get();
+    let pageIndex = 1;
+    const epubPages: EpubPageInfo[] = [];
+
+    for (const chapter of chapters) {
+      for (const page of chapter.pages) {
+        // 白紙ページはスキップ
+        if (page.pageType === 'blank') continue;
+        // ファイルがないページもスキップ
+        if (!page.filePath) continue;
+
+        const epubPage: EpubPageInfo = {
+          id: uuidv4(),
+          filename: `p${String(pageIndex).padStart(3, '0')}.jpg`,
+          sourcePath: page.filePath,
+          width: 0,
+          height: 0,
+          isCover: page.pageType === 'cover',
+          isColophon: page.pageType === 'colophon',
+          thumbnailPath: page.thumbnailCachePath,
+          thumbnailStatus: page.thumbnailStatus,
+          originalPageId: page.id,
+          originalChapterName: chapter.name,
+          originalPageType: page.pageType,
+        };
+
+        epubPages.push(epubPage);
+        pageIndex++;
+      }
+    }
+
+    // デフォルトメタデータを作成
+    const defaultViewport = EPUB_FORMAT_VIEWPORTS['kadokawa'];
+    const metadata: EpubMetadata = {
+      title: projectName,
+      authors: [{ name: '', role: 'aut' }],
+      publisher: '',
+      language: 'ja',
+      pageDirection: 'rtl',
+      viewportWidth: defaultViewport.width,
+      viewportHeight: defaultViewport.height,
+      spreadMode: 'landscape',
+      orientation: 'auto',
+      bookUuid: uuidv4(),
+      outputFormat: 'kadokawa',
+    };
+
+    set({
+      epubPages,
+      epubMetadata: metadata,
+      epubCurrentSpread: 0,
+      epubSelectedPageId: null,
+      isEpubModified: false,
+    });
+  },
+
+  resetEpubState: () => {
+    set({
+      epubPages: [],
+      epubMetadata: null,
+      epubCustomCss: '',
+      epubCurrentSpread: 0,
+      epubImageFolder: null,
+      epubSelectedPageId: null,
+      isEpubModified: false,
+    });
+  },
+
+  markEpubAsModified: () => {
+    set({ isEpubModified: true });
   },
 }});

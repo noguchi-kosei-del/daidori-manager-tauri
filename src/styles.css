@@ -3726,3 +3726,644 @@ body.light-mode .author-entry,
 body.light-mode .epub-preview-info {
   background: rgba(0, 0, 0, 0.03);
 }
+
+/* ========================================
+   EPUB_maker Mode Styles
+   ======================================== */
+
+/* アプリモード切り替えボタン */
+.app-mode-toggle {
+  display: flex;
+  gap: 2px;
+  background: var(--color-bg-tertiary);
+  border-radius: 8px;
+  padding: 3px;
+  margin-right: 16px;
+}
+
+.app-mode-btn {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.app-mode-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.app-mode-btn.active {
+  background: var(--color-accent);
+  color: white;
+  box-shadow: 0 2px 8px rgba(92, 156, 255, 0.3);
+}
+
+/* EPUB_maker メインビュー */
+.epub-maker-view {
+  display: flex;
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* EPUB サイドバー */
+.epub-sidebar {
+  width: 320px;
+  background: var(--color-bg-secondary);
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  transition: width var(--transition-base);
+}
+
+.epub-sidebar.collapsed {
+  width: 40px;
+}
+
+/* EPUB メタデータパネル */
+.epub-metadata-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.epub-metadata-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.epub-metadata-panel .form-section {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.epub-metadata-panel .form-section:last-child {
+  border-bottom: none;
+}
+
+.epub-metadata-panel h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin: 0 0 12px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.epub-metadata-panel .form-group {
+  margin-bottom: 12px;
+}
+
+.epub-metadata-panel label {
+  display: block;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+
+.epub-metadata-panel input,
+.epub-metadata-panel select,
+.epub-metadata-panel textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.epub-metadata-panel input:focus,
+.epub-metadata-panel select:focus,
+.epub-metadata-panel textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.epub-metadata-panel .form-row {
+  display: flex;
+  gap: 12px;
+}
+
+.epub-metadata-panel .form-row .form-group {
+  flex: 1;
+}
+
+.epub-metadata-panel .author-entry {
+  background: var(--color-bg-tertiary);
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  position: relative;
+}
+
+.epub-metadata-panel .author-entry .btn-delete {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+.epub-metadata-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--color-text-muted);
+}
+
+/* EPUB メインエリア */
+.epub-main-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* EPUB ツールバー */
+.epub-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.epub-toolbar-spacer {
+  flex: 1;
+}
+
+/* EPUB 空状態 */
+.epub-empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--color-text-muted);
+}
+
+.epub-empty-state svg {
+  opacity: 0.5;
+}
+
+/* EPUB 見開きプレビュー */
+.epub-spread-preview {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-primary);
+  position: relative;
+  outline: none;
+}
+
+.epub-zoom-control {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--color-glass-bg);
+  backdrop-filter: blur(10px);
+  border-radius: 8px;
+  z-index: 10;
+}
+
+.epub-zoom-control .zoom-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.epub-zoom-control .zoom-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+
+.epub-zoom-control .zoom-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.epub-zoom-control .zoom-slider {
+  width: 100px;
+}
+
+.epub-zoom-control .zoom-value {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  min-width: 40px;
+  text-align: center;
+}
+
+.epub-spread-container {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: center center;
+}
+
+.epub-spread-pages {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-height: 90%;
+}
+
+.epub-spread-page {
+  position: relative;
+  cursor: pointer;
+  transition: transform var(--transition-fast);
+}
+
+.epub-spread-page:hover {
+  transform: scale(1.02);
+}
+
+.epub-spread-page.selected {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 4px;
+}
+
+.epub-spread-page img {
+  max-height: 60vh;
+  max-width: 40vw;
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: var(--shadow-lg);
+}
+
+.epub-spread-gutter {
+  width: 8px;
+  height: 60vh;
+  background: linear-gradient(90deg,
+    rgba(0,0,0,0.3) 0%,
+    rgba(0,0,0,0.1) 50%,
+    rgba(0,0,0,0.3) 100%
+  );
+}
+
+.epub-page-label {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.7);
+  border-radius: 4px;
+}
+
+.epub-page-label .page-badge {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.epub-page-label .page-badge.cover {
+  background: var(--color-cover);
+  color: white;
+}
+
+.epub-page-label .page-badge.colophon {
+  background: var(--color-colophon);
+  color: white;
+}
+
+.epub-page-label .page-number {
+  font-size: 12px;
+  color: white;
+}
+
+.epub-spread-nav {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  background: var(--color-glass-bg);
+  backdrop-filter: blur(10px);
+  border-radius: 8px;
+}
+
+.epub-spread-nav .nav-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.epub-spread-nav .nav-btn:hover:not(:disabled) {
+  background: var(--color-accent);
+  color: white;
+}
+
+.epub-spread-nav .nav-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.epub-spread-nav .nav-info {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.epub-spread-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--color-text-muted);
+}
+
+/* EPUB サムネイルバー */
+.epub-thumbnail-bar {
+  height: 100px;
+  background: var(--color-bg-secondary);
+  border-top: 1px solid var(--color-border);
+  padding: 8px;
+}
+
+.epub-thumbnail-scroll {
+  display: flex;
+  gap: 8px;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0 8px;
+}
+
+.epub-thumbnail-item {
+  flex-shrink: 0;
+  width: 56px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all var(--transition-fast);
+  border: 2px solid transparent;
+}
+
+.epub-thumbnail-item:hover {
+  background: var(--color-bg-hover);
+}
+
+.epub-thumbnail-item.selected {
+  border-color: var(--color-accent);
+  background: var(--color-accent-subtle);
+}
+
+.epub-thumbnail-item.current-spread {
+  background: var(--color-accent-subtle);
+}
+
+.epub-thumbnail-item.drop-target {
+  border-color: var(--color-success);
+}
+
+.epub-thumbnail-image {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+}
+
+.epub-thumbnail-image img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 2px;
+}
+
+.epub-thumbnail-info {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 2px;
+  font-size: 10px;
+}
+
+.epub-thumbnail-info .page-badge {
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-size: 8px;
+  font-weight: 600;
+}
+
+.epub-thumbnail-info .page-badge.cover {
+  background: var(--color-cover);
+  color: white;
+}
+
+.epub-thumbnail-info .page-badge.colophon {
+  background: var(--color-colophon);
+  color: white;
+}
+
+.epub-thumbnail-info .page-number {
+  color: var(--color-text-secondary);
+}
+
+/* EPUB コンテキストメニュー */
+.epub-context-menu {
+  position: fixed;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 140px;
+  box-shadow: var(--shadow-lg);
+  z-index: 1000;
+}
+
+.epub-context-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.epub-context-menu button:hover {
+  background: var(--color-bg-hover);
+}
+
+/* CSS エディタモーダル */
+.css-editor-modal {
+  width: 700px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.css-editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.css-editor-toolbar .preset-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.css-editor-toolbar label {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.css-editor-toolbar select {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+.css-editor-body {
+  flex: 1;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.css-editor-textarea {
+  width: 100%;
+  height: 100%;
+  min-height: 300px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: none;
+  box-sizing: border-box;
+}
+
+.css-editor-textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+/* EPUB 統計表示 */
+.epub-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.epub-stat {
+  padding: 8px;
+  background: var(--color-bg-tertiary);
+  border-radius: 6px;
+  text-align: center;
+}
+
+.epub-stat .stat-label {
+  display: block;
+  font-size: 10px;
+  color: var(--color-text-muted);
+  margin-bottom: 4px;
+}
+
+.epub-stat .stat-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+/* ライトモード対応 */
+body.light-mode .app-mode-toggle {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+body.light-mode .app-mode-btn {
+  color: var(--color-text-secondary);
+}
+
+body.light-mode .app-mode-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+body.light-mode .epub-sidebar {
+  background: #f5f5f7;
+}
+
+body.light-mode .epub-toolbar {
+  background: #f5f5f7;
+}
+
+body.light-mode .epub-metadata-panel input,
+body.light-mode .epub-metadata-panel select,
+body.light-mode .epub-metadata-panel textarea {
+  background: white;
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+body.light-mode .epub-metadata-panel .author-entry {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+body.light-mode .epub-spread-preview {
+  background: #e8eaed;
+}
+
+body.light-mode .epub-thumbnail-bar {
+  background: #f5f5f7;
+}
+
+body.light-mode .epub-context-menu {
+  background: white;
+}
+
+body.light-mode .css-editor-textarea {
+  background: white;
+}

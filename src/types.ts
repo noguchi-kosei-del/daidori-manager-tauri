@@ -284,3 +284,43 @@ export interface EpubGenerateResponse {
   fileSize: number;
   error?: string;
 }
+
+// ========== EPUB_makerモード関連 ==========
+
+// アプリモード
+export type AppMode = 'daidori' | 'epub';
+
+// アプリモードラベル
+export const APP_MODE_LABELS: Record<AppMode, string> = {
+  daidori: '台割作成',
+  epub: 'EPUB作成',
+};
+
+// EPUB_maker用ページ情報（EpubPageを拡張）
+export interface EpubPageInfo {
+  id: string;
+  filename: string;
+  sourcePath: string;
+  width: number;
+  height: number;
+  isCover: boolean;
+  isColophon: boolean;
+  // サムネイル（base64 or ファイルパス）
+  thumbnailPath?: string;
+  thumbnailStatus?: ThumbnailStatus;
+  // 元の台割情報（変換元）
+  originalPageId?: string;
+  originalChapterName?: string;
+  originalPageType?: PageType;
+}
+
+// EPUBプロジェクトファイル形式
+export interface EpubProjectFile {
+  version: '1.0';
+  metadata: EpubMetadata;
+  pages: EpubPageInfo[];
+  customCss?: string;
+  imageFolder?: string;
+  createdAt: string;
+  modifiedAt: string;
+}

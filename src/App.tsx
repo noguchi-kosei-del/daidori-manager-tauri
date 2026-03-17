@@ -32,6 +32,7 @@ import {
   DaidoriProjectFile,
   FileValidationResult,
   RecentFile,
+  APP_MODE_LABELS,
 } from './types';
 import {
   FolderIcon,
@@ -62,6 +63,7 @@ import {
   SidebarChapterReorderDropZone,
 } from './components/dnd';
 import { ExportModal, EpubMetadataModal } from './components/modals';
+import { EpubMakerView } from './components/epub';
 import type { ExportOptions } from './components/modals/ExportModal';
 import { EpubMetadata, EpubPage, EpubGenerateResponse } from './types';
 import {
@@ -110,6 +112,9 @@ if (typeof window !== 'undefined') {
 // メインApp
 function App() {
   const {
+    // アプリモード
+    appMode,
+    setAppMode,
     chapters,
     selectedChapterId,
     selectedPageId,
@@ -147,6 +152,8 @@ function App() {
     resetProject,
     loadProjectState,
     setProjectName,
+    // EPUB_maker
+    loadEpubFromDaidori,
   } = useStore();
 
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -1847,6 +1854,30 @@ function App() {
                 </div>
               )}
 
+              {/* アプリモード切り替え */}
+              <div className="app-mode-toggle">
+                <button
+                  className={`app-mode-btn ${appMode === 'daidori' ? 'active' : ''}`}
+                  onClick={() => setAppMode('daidori')}
+                  title="台割作成モード"
+                >
+                  {APP_MODE_LABELS.daidori}
+                </button>
+                <button
+                  className={`app-mode-btn ${appMode === 'epub' ? 'active' : ''}`}
+                  onClick={() => {
+                    if (appMode !== 'epub') {
+                      loadEpubFromDaidori();
+                    }
+                    setAppMode('epub');
+                  }}
+                  title="EPUB作成モード"
+                >
+                  {APP_MODE_LABELS.epub}
+                </button>
+              </div>
+
+              {appMode === 'daidori' && (
               <div className="preview-mode-toggle">
                 <button
                   className={`view-mode-btn ${previewMode === 'grid' ? 'active' : ''}`}
@@ -1863,6 +1894,7 @@ function App() {
                   <BookOpenIcon size={14} /> 見開き
                 </button>
               </div>
+              )}
 
               {previewMode === 'spread' && (
                 <>
@@ -1972,6 +2004,10 @@ function App() {
             </div>
           </div>
 
+          {/* モードに応じたコンテンツ表示 */}
+          {appMode === 'epub' ? (
+            <EpubMakerView onGenerateEpub={() => setIsEpubModalOpen(true)} />
+          ) : (
           <div className="preview-container">
             <aside className={`sidebar ${isSidebarCollapsed ? 'collapsed' : ''}`}>
               <div className="sidebar-header">
@@ -2273,6 +2309,7 @@ function App() {
             )}
             </div>
           </div>
+          )}
 
         </main>
       </div>
