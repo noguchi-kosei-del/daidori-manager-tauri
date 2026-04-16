@@ -17,6 +17,7 @@ interface EpubSpreadPreviewProps {
   isViewerMode?: boolean;
   onExitViewerMode?: () => void;
   isPageBarVisible?: boolean;
+  bindingDirection?: 'rtl' | 'ltr';
 }
 
 export function EpubSpreadPreview({
@@ -30,7 +31,9 @@ export function EpubSpreadPreview({
   isViewerMode = false,
   onExitViewerMode,
   isPageBarVisible = true,
+  bindingDirection = 'rtl',
 }: EpubSpreadPreviewProps) {
+  const isRTL = bindingDirection === 'rtl';
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -97,19 +100,23 @@ export function EpubSpreadPreview({
     return () => container.removeEventListener('wheel', handleWheel);
   }, [zoom, onZoomChange]);
 
-  // ハンドル位置（右始まり）
+  // ハンドル位置
   const scrollHandlePosition = useMemo(() => {
     if (totalSpreads <= 1) return 0;
-    return 1 - currentSpread / (totalSpreads - 1);
-  }, [currentSpread, totalSpreads]);
+    if (isRTL) {
+      return 1 - currentSpread / (totalSpreads - 1);
+    } else {
+      return currentSpread / (totalSpreads - 1);
+    }
+  }, [currentSpread, totalSpreads, isRTL]);
 
   const displayHandlePosition = isDragging ? dragHandlePosition : scrollHandlePosition;
 
   const displaySpreadIndex = isDragging
-    ? Math.round((1 - dragHandlePosition) * (totalSpreads - 1))
+    ? Math.round((isRTL ? 1 - dragHandlePosition : dragHandlePosition) * (totalSpreads - 1))
     : currentSpread;
 
-  // キーボードナビゲーション（左で進む、右で戻る）
+  // キーボードナビゲーション
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape' && isViewerMode) {
       e.preventDefault();
@@ -131,19 +138,24 @@ export function EpubSpreadPreview({
       return;
     }
 
+    // 右綴じ：←で進む、→で戻る / 左綴じ：→で進む、←で戻る
     if (e.key === 'ArrowLeft') {
       e.preventDefault();
       if (e.ctrlKey || e.metaKey) {
-        onSpreadChange(totalSpreads - 1);
-      } else if (currentSpread < totalSpreads - 1) {
+        onSpreadChange(isRTL ? totalSpreads - 1 : 0);
+      } else if (isRTL && currentSpread < totalSpreads - 1) {
         onSpreadChange(currentSpread + 1);
+      } else if (!isRTL && currentSpread > 0) {
+        onSpreadChange(currentSpread - 1);
       }
     } else if (e.key === 'ArrowRight') {
       e.preventDefault();
       if (e.ctrlKey || e.metaKey) {
-        onSpreadChange(0);
-      } else if (currentSpread > 0) {
+        onSpreadChange(isRTL ? 0 : totalSpreads - 1);
+      } else if (isRTL && currentSpread > 0) {
         onSpreadChange(currentSpread - 1);
+      } else if (!isRTL && currentSpread < totalSpreads - 1) {
+        onSpreadChange(currentSpread + 1);
       }
     } else if (e.key === 'Home') {
       e.preventDefault();
@@ -152,7 +164,7 @@ export function EpubSpreadPreview({
       e.preventDefault();
       onSpreadChange(totalSpreads - 1);
     }
-  }, [currentSpread, totalSpreads, onSpreadChange, isViewerMode, onExitViewerMode]);
+  }, [currentSpread, totalSpreads, onSpreadChange, isViewerMode, onExitViewerMode, isRTL]);
 
   useEffect(() => {
     document.addEventListener('keydown', handleKeyDown);
@@ -237,10 +249,9 @@ export function EpubSpreadPreview({
 
     setDragHandlePosition(ratio);
 
-    // 右始まりなので反転
-    const targetIndex = Math.round((1 - ratio) * (totalSpreads - 1));
+    const targetIndex = Math.round((isRTL ? 1 - ratio : ratio) * (totalSpreads - 1));
     onSpreadChange(targetIndex);
-  }, [totalSpreads, onSpreadChange]);
+  }, [totalSpreads, onSpreadChange, isRTL]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -307,51 +318,80 @@ export function EpubSpreadPreview({
       <div className="epub-spread-container" style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom / 100})`, transformOrigin: 'center center' }}>
         {currentPages.length === 0 ? (
           <div className="epub-spread-empty">
-            <p>ページがありません</p>
+            <p>ページがありません。チャプターを追加してください</p>
           </div>
         ) : (
-          <div className="epub-spread-pages">
-            {/* 右ページ（日本式：右から左へ読む） */}
-            {currentPages[0] && (
-              <div
-                className={`epub-spread-page right-page ${selectedPageId === currentPages[0].id ? 'selected' : ''}`}
-                onClick={() => !isViewerMode && onSelectPage(currentPages[0].id)}
-              >
-                <img
-                  src={getImageSrc(currentPages[0])}
-                  alt={`Page ${getPageIndex(currentPages[0])}`}
-                />
-                {!isViewerMode && (
-                  <div className="epub-page-label">
-                    {currentPages[0].isCover && <span className="page-badge cover">表紙</span>}
-                    {currentPages[0].isColophon && <span className="page-badge colophon">奥付</span>}
-                    <span className="page-number">{getPageIndex(currentPages[0])}p</span>
+          <div className={`epub-spread-pages ${isRTL ? 'rtl' : 'ltr'}`}>
+            {isRTL ? (
+              <>
+                {/* 右綴じ：右ページ（先） → ノド → 左ページ（後）、CSSのrow-reverseで視覚的に反転 */}
+                {currentPages[0] && (
+                  <div
+                    className={`epub-spread-page right-page ${selectedPageId === currentPages[0].id ? 'selected' : ''}`}
+                    onClick={() => !isViewerMode && onSelectPage(currentPages[0].id)}
+                  >
+                    <img src={getImageSrc(currentPages[0])} alt={`Page ${getPageIndex(currentPages[0])}`} />
+                    {!isViewerMode && (
+                      <div className="epub-page-label">
+                        {currentPages[0].isCover && <span className="page-badge cover">表紙</span>}
+                        {currentPages[0].isColophon && <span className="page-badge colophon">奥付</span>}
+                        <span className="page-number">{getPageIndex(currentPages[0])}p</span>
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
-            )}
-
-            {/* ノド */}
-            <div className="epub-spread-gutter" />
-
-            {/* 左ページ */}
-            {currentPages[1] && (
-              <div
-                className={`epub-spread-page left-page ${selectedPageId === currentPages[1].id ? 'selected' : ''}`}
-                onClick={() => !isViewerMode && onSelectPage(currentPages[1].id)}
-              >
-                <img
-                  src={getImageSrc(currentPages[1])}
-                  alt={`Page ${getPageIndex(currentPages[1])}`}
-                />
-                {!isViewerMode && (
-                  <div className="epub-page-label">
-                    {currentPages[1].isCover && <span className="page-badge cover">表紙</span>}
-                    {currentPages[1].isColophon && <span className="page-badge colophon">奥付</span>}
-                    <span className="page-number">{getPageIndex(currentPages[1])}p</span>
+                <div className="epub-spread-gutter" />
+                {currentPages[1] && (
+                  <div
+                    className={`epub-spread-page left-page ${selectedPageId === currentPages[1].id ? 'selected' : ''}`}
+                    onClick={() => !isViewerMode && onSelectPage(currentPages[1].id)}
+                  >
+                    <img src={getImageSrc(currentPages[1])} alt={`Page ${getPageIndex(currentPages[1])}`} />
+                    {!isViewerMode && (
+                      <div className="epub-page-label">
+                        {currentPages[1].isCover && <span className="page-badge cover">表紙</span>}
+                        {currentPages[1].isColophon && <span className="page-badge colophon">奥付</span>}
+                        <span className="page-number">{getPageIndex(currentPages[1])}p</span>
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
+              </>
+            ) : (
+              <>
+                {/* 左綴じ：左ページ（先） → ノド → 右ページ（後）、CSS通常row */}
+                {currentPages[0] && (
+                  <div
+                    className={`epub-spread-page left-page ${selectedPageId === currentPages[0].id ? 'selected' : ''}`}
+                    onClick={() => !isViewerMode && onSelectPage(currentPages[0].id)}
+                  >
+                    <img src={getImageSrc(currentPages[0])} alt={`Page ${getPageIndex(currentPages[0])}`} />
+                    {!isViewerMode && (
+                      <div className="epub-page-label">
+                        {currentPages[0].isCover && <span className="page-badge cover">表紙</span>}
+                        {currentPages[0].isColophon && <span className="page-badge colophon">奥付</span>}
+                        <span className="page-number">{getPageIndex(currentPages[0])}p</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+                <div className="epub-spread-gutter" />
+                {currentPages[1] && (
+                  <div
+                    className={`epub-spread-page right-page ${selectedPageId === currentPages[1].id ? 'selected' : ''}`}
+                    onClick={() => !isViewerMode && onSelectPage(currentPages[1].id)}
+                  >
+                    <img src={getImageSrc(currentPages[1])} alt={`Page ${getPageIndex(currentPages[1])}`} />
+                    {!isViewerMode && (
+                      <div className="epub-page-label">
+                        {currentPages[1].isCover && <span className="page-badge cover">表紙</span>}
+                        {currentPages[1].isColophon && <span className="page-badge colophon">奥付</span>}
+                        <span className="page-number">{getPageIndex(currentPages[1])}p</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

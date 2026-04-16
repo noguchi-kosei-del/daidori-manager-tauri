@@ -149,8 +149,9 @@ export function ChapterItem({
           </button>
         </div>
       </div>
-      {!chapter.collapsed && (
+      <div className={`chapter-pages-outer ${chapter.collapsed ? 'collapsed' : ''}`}>
         <div className="chapter-pages">
+          <div className="chapter-pages-inner">
           {chapter.pages.length > 0 && (
             <SortableContext
               items={chapter.pages.map((p) => `${SIDEBAR_PREFIX}${p.id}`)}
@@ -237,8 +238,9 @@ export function ChapterItem({
                 document.body
               )}
             </div>
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

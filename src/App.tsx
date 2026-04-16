@@ -31,18 +31,15 @@ import {
   PageType,
   DaidoriProjectFile,
   FileValidationResult,
-  RecentFile,
 } from './types';
 import {
   FolderIcon,
   PlusIcon,
   PlusCircleIcon,
-  BookOpenIcon,
   AlertTriangleIcon,
   SunIcon,
   MoonIcon,
   ExportIcon,
-  GridViewIcon,
   MonitorIcon,
   TrashIcon,
   EyeIcon,
@@ -50,6 +47,16 @@ import {
   BookIcon,
   ZoomInIcon,
   ZoomOutIcon,
+  HamburgerIcon,
+  FlipIcon,
+  SettingsIcon,
+  CloseIcon,
+  GridViewIcon,
+  BookOpenIcon,
+  BindingRightIcon,
+  BindingLeftIcon,
+  CheckIcon2,
+  NoPageIcon,
 } from './icons';
 
 // 抽出したコンポーネント
@@ -149,7 +156,6 @@ function App() {
     markAsSaved,
     resetProject,
     loadProjectState,
-    setProjectName,
     // EPUB_maker
     loadEpubFromDaidori,
     epubPages,
@@ -191,6 +197,19 @@ function App() {
   });
   const [isToolbarCollapsed, setIsToolbarCollapsed] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [openDropdown, setOpenDropdown] = useState<'view' | 'size' | 'binding' | null>(null);
+  const viewDropdownRef = useRef<HTMLDivElement>(null);
+  const sizeDropdownRef = useRef<HTMLDivElement>(null);
+  const bindingDropdownRef = useRef<HTMLDivElement>(null);
+  const [isSidebarFlipped, setIsSidebarFlipped] = useState(() => {
+    const saved = localStorage.getItem('daidori_sidebar_flipped');
+    return saved === 'true';
+  });
+  const [bindingDirection, setBindingDirection] = useState<'rtl' | 'ltr'>(() => {
+    const saved = localStorage.getItem('daidori_binding_direction');
+    return saved === 'ltr' ? 'ltr' : 'rtl';
+  });
   const [isDarkMode, setIsDarkMode] = useState(() => {
     // 初期状態をlocalStorageから復元（デフォルトはダークモード）
     const saved = localStorage.getItem('daidori_dark_mode');
@@ -211,9 +230,6 @@ function App() {
   const [previewCollapsedChapters, setPreviewCollapsedChapters] = useState<Set<string>>(new Set());
 
   // プロジェクト名編集
-  const [isEditingProjectName, setIsEditingProjectName] = useState(false);
-  const [editingProjectName, setEditingProjectName] = useState('');
-  const projectNameInputRef = useRef<HTMLInputElement>(null);
 
   // プレビューエリアのチャプター折りたたみをトグル
   const togglePreviewChapterCollapse = (chapterId: string) => {
@@ -228,38 +244,8 @@ function App() {
     });
   };
 
-  // プロジェクト名編集の開始
-  const startEditingProjectName = () => {
-    setEditingProjectName(projectName);
-    setIsEditingProjectName(true);
-    setIsProjectMenuOpen(false);
-  };
-
-  // プロジェクト名編集の確定
-  const confirmProjectNameEdit = () => {
-    const trimmedName = editingProjectName.trim();
-    if (trimmedName && trimmedName !== projectName) {
-      setProjectName(trimmedName);
-    }
-    setIsEditingProjectName(false);
-  };
-
-  // プロジェクト名編集のキャンセル
-  const cancelProjectNameEdit = () => {
-    setIsEditingProjectName(false);
-  };
-
-  // プロジェクト名編集時にinputにフォーカス
-  useEffect(() => {
-    if (isEditingProjectName && projectNameInputRef.current) {
-      projectNameInputRef.current.focus();
-      projectNameInputRef.current.select();
-    }
-  }, [isEditingProjectName]);
 
   // プロジェクト関連のstate
-  const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
-  const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   const [pendingAction, setPendingAction] = useState<'new' | 'open' | 'close' | null>(null);
   const [pendingOpenPath, setPendingOpenPath] = useState<string | null>(null);
@@ -282,7 +268,6 @@ function App() {
     chapterName?: string;
     pageCount?: number;
   }>({ show: false, type: 'chapter' });
-  const projectMenuRef = useRef<HTMLDivElement>(null);
 
   // スプラッシュウィンドウを閉じてメインウィンドウを表示
   useEffect(() => {
@@ -371,7 +356,6 @@ function App() {
       const name = openPath.split(/[\\\/]/).pop()?.replace(/\.daidori$/, '') || '新規プロジェクト';
       markAsSaved(openPath);
       await invoke('add_recent_file', { path: openPath, name });
-      loadRecentFiles();
     } catch (error) {
       console.error('プロジェクト読み込みエラー:', error);
       alert(`読み込みに失敗しました: ${error}`);
@@ -388,15 +372,6 @@ function App() {
     }
   };
 
-  // 最近使ったファイルの読み込み
-  const loadRecentFiles = async () => {
-    try {
-      const files = await invoke<RecentFile[]>('get_recent_files');
-      setRecentFiles(files);
-    } catch (error) {
-      console.error('最近使ったファイル読み込みエラー:', error);
-    }
-  };
 
   // 未保存確認後のアクション実行
   const handleUnsavedDialogAction = async (action: 'discard' | 'cancel') => {
@@ -419,22 +394,6 @@ function App() {
     setPendingOpenPath(null);
   };
 
-  // 最近使ったファイルを開く
-  const handleOpenRecentFile = (path: string) => {
-    if (isModified) {
-      setPendingAction('open');
-      setPendingOpenPath(path);
-      setShowUnsavedDialog(true);
-    } else {
-      handleOpenProject(path);
-    }
-    setIsProjectMenuOpen(false);
-  };
-
-  // 最近使ったファイルの初期読み込み
-  useEffect(() => {
-    loadRecentFiles();
-  }, []);
 
   // ダークモード切替の適用
   useEffect(() => {
@@ -445,6 +404,47 @@ function App() {
     }
     localStorage.setItem('daidori_dark_mode', isDarkMode ? 'true' : 'false');
   }, [isDarkMode]);
+
+  // サイドバー反転の適用
+  useEffect(() => {
+    if (isSidebarFlipped) {
+      document.body.classList.add('sidebar-flipped');
+    } else {
+      document.body.classList.remove('sidebar-flipped');
+    }
+    localStorage.setItem('daidori_sidebar_flipped', isSidebarFlipped ? 'true' : 'false');
+  }, [isSidebarFlipped]);
+
+  // 綴じ方向の永続化
+  useEffect(() => {
+    localStorage.setItem('daidori_binding_direction', bindingDirection);
+  }, [bindingDirection]);
+
+  // ハンバーガーメニューのEscキー閉じ
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsMenuOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [isMenuOpen]);
+
+  // ヘッダードロップダウンの外側クリックで閉じる
+  useEffect(() => {
+    if (!openDropdown) return;
+    const handleClick = (e: MouseEvent) => {
+      const refs = { view: viewDropdownRef, size: sizeDropdownRef, binding: bindingDropdownRef };
+      const ref = refs[openDropdown];
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpenDropdown(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [openDropdown]);
 
   // 閲覧モード切替の適用（body classを追加/削除）
   useEffect(() => {
@@ -469,17 +469,6 @@ function App() {
     setShowUnsavedDialog(true);
   }, []);
   useWindowCloseHandler(isModified, handleWindowClose);
-
-  // プロジェクトメニューの外側クリックで閉じる
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (projectMenuRef.current && !projectMenuRef.current.contains(e.target as Node)) {
-        setIsProjectMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
 
   // チャプター削除（確認ダイアログ付き）
   const handleDeleteChapter = useCallback((chapterId: string) => {
@@ -1924,6 +1913,15 @@ function App() {
               {/* アプリアイコン */}
               <img src="/logo/daidori_icon.png" alt="台割マネージャー" className="app-icon" />
 
+              {/* ハンバーガーメニューボタン */}
+              <button
+                className="hamburger-menu-btn"
+                onClick={() => setIsMenuOpen(true)}
+                title="メニュー"
+              >
+                <HamburgerIcon size={18} />
+              </button>
+
               {/* ツールバー折りたたみボタン */}
               <button
                 className="toolbar-collapse-btn"
@@ -1935,120 +1933,84 @@ function App() {
                 </svg>
               </button>
 
-              <div className="project-menu-container" ref={projectMenuRef}>
-                {isEditingProjectName ? (
-                  <div className="project-name-edit">
-                    <input
-                      ref={projectNameInputRef}
-                      type="text"
-                      value={editingProjectName}
-                      onChange={(e) => setEditingProjectName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          confirmProjectNameEdit();
-                        } else if (e.key === 'Escape') {
-                          cancelProjectNameEdit();
-                        }
-                      }}
-                      onBlur={confirmProjectNameEdit}
-                      className="project-name-input"
-                    />
-                  </div>
-                ) : (
-                  <button
-                    className="project-menu-trigger"
-                    onClick={() => setIsProjectMenuOpen(!isProjectMenuOpen)}
-                    onDoubleClick={(e) => {
-                      e.stopPropagation();
-                      startEditingProjectName();
-                    }}
-                  >
-                    <span className="project-name-display">
-                      {isModified && <span className="modified-indicator">●</span>}
-                      {projectName}
-                    </span>
+              <div className="header-divider" />
+              {/* 表示モードドロップダウン */}
+              <div className="header-popup-container" ref={viewDropdownRef}>
+                <button
+                  className={`header-popup-trigger ${openDropdown === 'view' ? 'open' : ''}`}
+                  onClick={() => setOpenDropdown(openDropdown === 'view' ? null : 'view')}
+                >
+                  {previewMode === 'grid' ? <GridViewIcon size={14} /> : previewMode === 'spread' ? <BookOpenIcon size={14} /> : <BookIcon size={14} />}
+                  <span>{previewMode === 'grid' ? 'リスト' : previewMode === 'spread' ? '見開き' : 'EPUB'}</span>
+                  <svg className="header-popup-chevron" width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 4L5 6.5L7.5 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </button>
+                <div className={`header-popup-menu ${openDropdown === 'view' ? 'open' : ''}`}>
+                  <div className="header-popup-header">表示</div>
+                  <button className={`header-popup-item ${previewMode === 'grid' ? 'selected' : ''}`} onClick={() => { setPreviewMode('grid'); setOpenDropdown(null); }}>
+                    <GridViewIcon size={16} />
+                    <span>リスト</span>
+                    {previewMode === 'grid' && <span className="header-popup-check"><CheckIcon2 /></span>}
                   </button>
-                )}
-
-                {isProjectMenuOpen && !isEditingProjectName && (
-                  <div className="project-menu-dropdown">
-                    <button onClick={() => { handleNewProject(); setIsProjectMenuOpen(false); }}>
-                      <span>新規プロジェクト</span>
-                      <kbd>Ctrl+N</kbd>
-                    </button>
-                    <button onClick={() => {
-                      if (isModified) {
-                        setPendingAction('open');
-                        setShowUnsavedDialog(true);
-                      } else {
-                        handleOpenProject();
-                      }
-                      setIsProjectMenuOpen(false);
-                    }}>
-                      <span>開く...</span>
-                      <kbd>Ctrl+O</kbd>
-                    </button>
-                    {recentFiles.length > 0 && (
-                      <div className="project-menu-submenu">
-                        <button className="submenu-trigger">
-                          <span>最近使ったファイル</span>
-                          <svg width="12" height="12" viewBox="0 0 12 12">
-                            <path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" strokeWidth="1.5" fill="none"/>
-                          </svg>
-                        </button>
-                        <div className="submenu-content">
-                          {recentFiles.map(file => (
-                            <button key={file.path} onClick={() => handleOpenRecentFile(file.path)}>
-                              {file.name}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
+                  <button className={`header-popup-item ${previewMode === 'spread' ? 'selected' : ''}`} onClick={() => { setPreviewMode('spread'); setOpenDropdown(null); }}>
+                    <BookOpenIcon size={16} />
+                    <span>見開き</span>
+                    {previewMode === 'spread' && <span className="header-popup-check"><CheckIcon2 /></span>}
+                  </button>
+                  <button className={`header-popup-item ${previewMode === 'epub' ? 'selected' : ''}`} onClick={() => { loadEpubFromDaidori(); setPreviewMode('epub'); setOpenDropdown(null); }}>
+                    <BookIcon size={16} />
+                    <span>EPUB</span>
+                    {previewMode === 'epub' && <span className="header-popup-check"><CheckIcon2 /></span>}
+                  </button>
+                </div>
               </div>
 
               <div className="header-divider" />
-              <div className="preview-mode-toggle">
+              {/* サイズドロップダウン */}
+              <div className="header-popup-container" ref={sizeDropdownRef}>
                 <button
-                  className={`view-mode-btn ${previewMode === 'grid' ? 'active' : ''}`}
-                  onClick={() => setPreviewMode('grid')}
-                  title="単ページ表示"
+                  className={`header-popup-trigger ${openDropdown === 'size' ? 'open' : ''}`}
+                  onClick={() => setOpenDropdown(openDropdown === 'size' ? null : 'size')}
+                  disabled={previewMode !== 'grid' || chapters.length === 0}
                 >
-                  <GridViewIcon size={14} /> リスト
+                  <span>{THUMBNAIL_SIZES[thumbnailSize].label}</span>
+                  <svg className="header-popup-chevron" width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 4L5 6.5L7.5 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
                 </button>
-                <button
-                  className={`view-mode-btn ${previewMode === 'spread' ? 'active' : ''}`}
-                  onClick={() => setPreviewMode('spread')}
-                  title="見開き表示"
-                >
-                  <BookOpenIcon size={14} /> 見開き
-                </button>
-                <button
-                  className={`view-mode-btn ${previewMode === 'epub' ? 'active' : ''}`}
-                  onClick={() => {
-                    loadEpubFromDaidori();
-                    setPreviewMode('epub');
-                  }}
-                  title="EPUB表示"
-                >
-                  <BookIcon size={14} /> EPUB
-                </button>
+                <div className={`header-popup-menu ${openDropdown === 'size' ? 'open' : ''}`}>
+                  <div className="header-popup-header">サイズ</div>
+                  {(Object.keys(THUMBNAIL_SIZES) as ThumbnailSize[]).map((size) => (
+                    <button key={size} className={`header-popup-item ${thumbnailSize === size ? 'selected' : ''}`} onClick={() => { setThumbnailSize(size); setOpenDropdown(null); }}>
+                      <span>{THUMBNAIL_SIZES[size].label}</span>
+                      {thumbnailSize === size && <span className="header-popup-check"><CheckIcon2 /></span>}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="header-divider" />
-              <div className={`thumbnail-size-selector ${previewMode !== 'grid' || chapters.length === 0 ? 'disabled' : ''}`}>
-                {(Object.keys(THUMBNAIL_SIZES) as ThumbnailSize[]).map((size) => (
-                  <button
-                    key={size}
-                    className={`size-btn ${thumbnailSize === size ? 'active' : ''}`}
-                    onClick={() => setThumbnailSize(size)}
-                    disabled={previewMode !== 'grid' || chapters.length === 0}
-                  >
-                    {THUMBNAIL_SIZES[size].label}
+              {/* 綴じ方向ドロップダウン */}
+              <div className="header-popup-container" ref={bindingDropdownRef}>
+                <button
+                  className={`header-popup-trigger ${openDropdown === 'binding' ? 'open' : ''}`}
+                  onClick={() => setOpenDropdown(openDropdown === 'binding' ? null : 'binding')}
+                  disabled={previewMode === 'grid'}
+                >
+                  {bindingDirection === 'rtl' ? <BindingRightIcon size={14} /> : <BindingLeftIcon size={14} />}
+                  <span>{bindingDirection === 'rtl' ? '右綴じ' : '左綴じ'}</span>
+                  <svg className="header-popup-chevron" width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 4L5 6.5L7.5 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </button>
+                <div className={`header-popup-menu ${openDropdown === 'binding' ? 'open' : ''}`}>
+                  <div className="header-popup-header">綴じ方向</div>
+                  <button className={`header-popup-item ${bindingDirection === 'rtl' ? 'selected' : ''}`} onClick={() => { setBindingDirection('rtl'); setOpenDropdown(null); }}>
+                    <BindingRightIcon size={16} />
+                    <span>右綴じ</span>
+                    {bindingDirection === 'rtl' && <span className="header-popup-check"><CheckIcon2 /></span>}
                   </button>
-                ))}
+                  <button className={`header-popup-item ${bindingDirection === 'ltr' ? 'selected' : ''}`} onClick={() => { setBindingDirection('ltr'); setOpenDropdown(null); }}>
+                    <BindingLeftIcon size={16} />
+                    <span>左綴じ</span>
+                    {bindingDirection === 'ltr' && <span className="header-popup-check"><CheckIcon2 /></span>}
+                  </button>
+                </div>
               </div>
 
               <div className="header-divider" />
@@ -2071,15 +2033,6 @@ function App() {
                   <ZoomOutIcon size={16} />
                 </button>
               </div>
-
-              <div className="header-divider" />
-              <button
-                className="theme-toggle-btn"
-                onClick={toggleDarkMode}
-                title={isDarkMode ? 'ライトモードに切り替え' : 'ダークモードに切り替え'}
-              >
-                {isDarkMode ? <MoonIcon size={18} /> : <SunIcon size={18} />}
-              </button>
 
               {/* ウィンドウコントロールボタン（右側） */}
               <div className="window-controls">
@@ -2235,7 +2188,7 @@ function App() {
                   {chapters.length === 0 ? (
                     <div className="sidebar-empty-state">
                       <PlusCircleIcon size={48} />
-                      <p>チャプターを追加してください</p>
+                      <p>チャプターをここで追加</p>
                     </div>
                   ) : (
                     <>
@@ -2349,6 +2302,7 @@ function App() {
                 isViewerMode={isViewerMode}
                 onExitViewerMode={() => setIsViewerMode(false)}
                 isPageBarVisible={isPageBarVisible}
+                bindingDirection={bindingDirection}
               />
             ) : (
             <div className="preview-area" ref={previewAreaRef}>
@@ -2370,12 +2324,14 @@ function App() {
                 isPageBarVisible={isPageBarVisible}
                 zoom={spreadZoom}
                 onZoomChange={setSpreadZoom}
+                bindingDirection={bindingDirection}
               />
             ) : (
               <div className="thumbnail-grid-container">
                 {chapters.length === 0 ? (
                   <div className="spread-viewer-empty">
-                    <p>ページがありません</p>
+                    <NoPageIcon size={48} />
+                    <p>ページがありません。チャプターを追加してください</p>
                   </div>
                 ) : (
                 <SortableContext
@@ -2394,9 +2350,9 @@ function App() {
                       <div
                         className="thumbnail-grid-continuous"
                         onClick={(e) => {
-                          // thumbnail-wrapper以外の領域をクリックした場合は選択解除
+                          // thumbnail-card以外の領域をクリックした場合は選択解除
                           const target = e.target as HTMLElement;
-                          if (!target.closest('.thumbnail-wrapper')) {
+                          if (!target.closest('.thumbnail-card')) {
                             selectPage(null);
                           }
                         }}
@@ -2774,6 +2730,45 @@ function App() {
         </div>
       )}
     </DndContext>
+
+    {/* ハンバーガーメニュー */}
+    <div
+      className={`hamburger-overlay ${isMenuOpen ? 'open' : ''}`}
+      onClick={() => setIsMenuOpen(false)}
+    />
+    <div className={`hamburger-menu ${isMenuOpen ? 'open' : ''}`}>
+      <div className="hamburger-menu-header">
+        <span className="hamburger-menu-title">メニュー</span>
+        <button className="hamburger-menu-close" onClick={() => setIsMenuOpen(false)} title="閉じる">
+          <CloseIcon size={18} />
+        </button>
+      </div>
+      <div className="hamburger-menu-body">
+      </div>
+      <div className="hamburger-menu-footer">
+        <button
+          className="hamburger-footer-btn"
+          onClick={() => setIsSidebarFlipped(!isSidebarFlipped)}
+          title={isSidebarFlipped ? 'サイドバーを左に' : 'サイドバーを右に'}
+        >
+          <FlipIcon size={20} isFlipped={isSidebarFlipped} />
+        </button>
+        <button
+          className="hamburger-footer-btn"
+          onClick={toggleDarkMode}
+          title={isDarkMode ? 'ライトモードに切り替え' : 'ダークモードに切り替え'}
+        >
+          {isDarkMode ? <MoonIcon size={20} /> : <SunIcon size={20} />}
+        </button>
+        <button
+          className="hamburger-footer-btn"
+          onClick={() => {}}
+          title="環境設定"
+        >
+          <SettingsIcon size={20} />
+        </button>
+      </div>
+    </div>
     </>
   );
 }

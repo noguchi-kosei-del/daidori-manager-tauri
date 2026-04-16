@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { Chapter, Page, PAGE_TYPE_LABELS, PAGE_TYPE_COLORS } from '../../types';
 import { queueThumbnail } from '../../hooks';
-import { CloseIcon } from '../../icons';
+import { CloseIcon, NoPageIcon } from '../../icons';
 
 // 閉じるボタン自動非表示の遅延時間（ミリ秒）
 const CLOSE_BUTTON_HIDE_DELAY = 3000;
@@ -18,6 +18,7 @@ export function SpreadViewer({
   isPageBarVisible = true,
   zoom = 100,
   onZoomChange,
+  bindingDirection = 'rtl',
 }: {
   pages: { page: Page; chapter: Chapter; globalIndex: number }[];
   selectedPageId?: string | null;
@@ -27,7 +28,9 @@ export function SpreadViewer({
   isPageBarVisible?: boolean;
   zoom?: number;
   onZoomChange?: (zoom: number) => void;
+  bindingDirection?: 'rtl' | 'ltr';
 }) {
+  const isRTL = bindingDirection === 'rtl';
   const trackRef = useRef<HTMLDivElement>(null);
   const spreadPairRef = useRef<HTMLDivElement>(null);
   const [currentSpreadIndex, setCurrentSpreadIndex] = useState(0);
@@ -47,18 +50,28 @@ export function SpreadViewer({
   // 閲覧モード時のナビゲーションヒント表示制御
   const [navHintVisible, setNavHintVisible] = useState(false);
 
-  // 見開きのペアを計算（日本の漫画スタイル：右から左へ読む）
+  // 見開きのペアを計算
   const spreads = useMemo(() => {
     const result: { left?: typeof pages[0]; right?: typeof pages[0]; spreadIndex: number }[] = [];
     for (let i = 0; i < pages.length; i += 2) {
-      result.push({
-        right: pages[i],
-        left: pages[i + 1],
-        spreadIndex: Math.floor(i / 2),
-      });
+      if (isRTL) {
+        // 右綴じ：先のページが右、次のページが左
+        result.push({
+          right: pages[i],
+          left: pages[i + 1],
+          spreadIndex: Math.floor(i / 2),
+        });
+      } else {
+        // 左綴じ：先のページが左、次のページが右
+        result.push({
+          left: pages[i],
+          right: pages[i + 1],
+          spreadIndex: Math.floor(i / 2),
+        });
+      }
     }
     return result;
-  }, [pages]);
+  }, [pages, isRTL]);
 
   const totalSpreads = spreads.length;
 
@@ -137,19 +150,25 @@ export function SpreadViewer({
     setCurrentSpreadIndex(clamped);
   }, [totalSpreads]);
 
-  // ハンドル位置（右始まり: index 0 → 右端）
+  // ハンドル位置
   const scrollHandlePosition = useMemo(() => {
     if (totalSpreads <= 1) return 0;
-    return 1 - currentSpreadIndex / (totalSpreads - 1);
-  }, [currentSpreadIndex, totalSpreads]);
+    if (isRTL) {
+      // 右綴じ：index 0 → 右端
+      return 1 - currentSpreadIndex / (totalSpreads - 1);
+    } else {
+      // 左綴じ：index 0 → 左端
+      return currentSpreadIndex / (totalSpreads - 1);
+    }
+  }, [currentSpreadIndex, totalSpreads, isRTL]);
 
   const displayHandlePosition = isDragging ? dragHandlePosition : scrollHandlePosition;
 
   const displaySpreadIndex = isDragging
-    ? Math.round((1 - dragHandlePosition) * (totalSpreads - 1))
+    ? Math.round((isRTL ? 1 - dragHandlePosition : dragHandlePosition) * (totalSpreads - 1))
     : currentSpreadIndex;
 
-  // キーボードナビゲーション（左で進む、右で戻る）
+  // キーボードナビゲーション
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isViewerMode) {
@@ -172,19 +191,20 @@ export function SpreadViewer({
         return;
       }
 
+      // 右綴じ：←で進む(+1)、→で戻る(-1) / 左綴じ：→で進む(+1)、←で戻る(-1)
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
         if (e.ctrlKey || e.metaKey) {
-          navigateToSpread(totalSpreads - 1);
+          navigateToSpread(isRTL ? totalSpreads - 1 : 0);
         } else {
-          navigateToSpread(currentSpreadIndex + 1);
+          navigateToSpread(currentSpreadIndex + (isRTL ? 1 : -1));
         }
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
         if (e.ctrlKey || e.metaKey) {
-          navigateToSpread(0);
+          navigateToSpread(isRTL ? 0 : totalSpreads - 1);
         } else {
-          navigateToSpread(currentSpreadIndex - 1);
+          navigateToSpread(currentSpreadIndex + (isRTL ? -1 : 1));
         }
       } else if (e.key === 'Home') {
         e.preventDefault();
@@ -197,7 +217,7 @@ export function SpreadViewer({
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [currentSpreadIndex, totalSpreads, navigateToSpread, isViewerMode, onExitViewerMode]);
+  }, [currentSpreadIndex, totalSpreads, navigateToSpread, isViewerMode, onExitViewerMode, isRTL]);
 
   // ジャンプダイアログ
   useEffect(() => {
@@ -274,9 +294,9 @@ export function SpreadViewer({
     const ratio = relativeX / trackWidth;
 
     setDragHandlePosition(ratio);
-    const targetIndex = Math.round((1 - ratio) * (totalSpreads - 1));
+    const targetIndex = Math.round((isRTL ? 1 - ratio : ratio) * (totalSpreads - 1));
     navigateToSpread(targetIndex);
-  }, [totalSpreads, navigateToSpread]);
+  }, [totalSpreads, navigateToSpread, isRTL]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -360,7 +380,8 @@ export function SpreadViewer({
   if (pages.length === 0) {
     return (
       <div className="spread-viewer-empty">
-        <p>ページがありません</p>
+        <NoPageIcon size={48} />
+        <p>ページがありません。チャプターを追加してください</p>
       </div>
     );
   }
@@ -372,35 +393,73 @@ export function SpreadViewer({
         {currentSpread && (
           <div className="spread-item">
             {/* ページ情報バー */}
-            <div className="spread-info-bar">
-              {currentSpread.right && (
-                <span className="spread-page-label right">
-                  P.{currentSpread.right.globalIndex + 1}
-                  {currentSpread.right.page.fileName && ` - ${currentSpread.right.page.fileName}`}
-                </span>
-              )}
-              <div className="spread-number-label">
-                {currentSpread.right && currentSpread.left
-                  ? `見開き ${currentSpread.right.globalIndex + 1}～${currentSpread.left.globalIndex + 1}P`
-                  : currentSpread.right
-                    ? `見開き ${currentSpread.right.globalIndex + 1}P`
-                    : currentSpread.left
-                      ? `見開き ${currentSpread.left.globalIndex + 1}P`
-                      : `見開き ${currentSpreadIndex + 1} / ${totalSpreads}`}
-              </div>
-              {currentSpread.left && (
-                <span className="spread-page-label left">
-                  P.{currentSpread.left.globalIndex + 1}
-                  {currentSpread.left.page.fileName && ` - ${currentSpread.left.page.fileName}`}
-                </span>
+            <div className={`spread-info-bar ${isRTL ? 'rtl' : 'ltr'}`}>
+              {isRTL ? (
+                <>
+                  {currentSpread.right && (
+                    <span className="spread-page-label right">
+                      P.{currentSpread.right.globalIndex + 1}
+                      {currentSpread.right.page.fileName && ` - ${currentSpread.right.page.fileName}`}
+                    </span>
+                  )}
+                  <div className="spread-number-label">
+                    {currentSpread.right && currentSpread.left
+                      ? `見開き ${currentSpread.right.globalIndex + 1}～${currentSpread.left.globalIndex + 1}P`
+                      : currentSpread.right
+                        ? `見開き ${currentSpread.right.globalIndex + 1}P`
+                        : currentSpread.left
+                          ? `見開き ${currentSpread.left.globalIndex + 1}P`
+                          : `見開き ${currentSpreadIndex + 1} / ${totalSpreads}`}
+                  </div>
+                  {currentSpread.left && (
+                    <span className="spread-page-label left">
+                      P.{currentSpread.left.globalIndex + 1}
+                      {currentSpread.left.page.fileName && ` - ${currentSpread.left.page.fileName}`}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <>
+                  {currentSpread.left && (
+                    <span className="spread-page-label left">
+                      P.{currentSpread.left.globalIndex + 1}
+                      {currentSpread.left.page.fileName && ` - ${currentSpread.left.page.fileName}`}
+                    </span>
+                  )}
+                  <div className="spread-number-label">
+                    {currentSpread.left && currentSpread.right
+                      ? `見開き ${currentSpread.left.globalIndex + 1}～${currentSpread.right.globalIndex + 1}P`
+                      : currentSpread.left
+                        ? `見開き ${currentSpread.left.globalIndex + 1}P`
+                        : currentSpread.right
+                          ? `見開き ${currentSpread.right.globalIndex + 1}P`
+                          : `見開き ${currentSpreadIndex + 1} / ${totalSpreads}`}
+                  </div>
+                  {currentSpread.right && (
+                    <span className="spread-page-label right">
+                      P.{currentSpread.right.globalIndex + 1}
+                      {currentSpread.right.page.fileName && ` - ${currentSpread.right.page.fileName}`}
+                    </span>
+                  )}
+                </>
               )}
             </div>
 
             {/* 見開きコンテナ */}
-            <div className="spread-pair" ref={spreadPairRef} style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom / 100})`, transformOrigin: 'center center' }}>
-              {renderPage(currentSpread.right, 'right')}
-              <div className="spread-gutter" />
-              {renderPage(currentSpread.left, 'left')}
+            <div className={`spread-pair ${isRTL ? 'rtl' : 'ltr'}`} ref={spreadPairRef} style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom / 100})`, transformOrigin: 'center center' }}>
+              {isRTL ? (
+                <>
+                  {renderPage(currentSpread.right, 'right')}
+                  <div className="spread-gutter" />
+                  {renderPage(currentSpread.left, 'left')}
+                </>
+              ) : (
+                <>
+                  {renderPage(currentSpread.left, 'left')}
+                  <div className="spread-gutter" />
+                  {renderPage(currentSpread.right, 'right')}
+                </>
+              )}
             </div>
           </div>
         )}

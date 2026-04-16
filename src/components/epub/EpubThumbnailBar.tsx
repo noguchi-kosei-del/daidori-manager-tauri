@@ -9,6 +9,7 @@ interface EpubThumbnailBarProps {
   selectedPageId: string | null;
   onSelectPage: (pageId: string) => void;
   onSpreadChange: (index: number) => void;
+  bindingDirection?: 'rtl' | 'ltr';
 }
 
 export function EpubThumbnailBar({
@@ -17,6 +18,7 @@ export function EpubThumbnailBar({
   selectedPageId,
   onSelectPage,
   onSpreadChange,
+  bindingDirection = 'rtl',
 }: EpubThumbnailBarProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [contextMenu, setContextMenu] = useState<{
@@ -143,7 +145,7 @@ export function EpubThumbnailBar({
 
   return (
     <div className="epub-thumbnail-bar">
-      <div className="epub-thumbnail-scroll" ref={scrollRef}>
+      <div className={`epub-thumbnail-scroll ${bindingDirection === 'rtl' ? 'rtl' : 'ltr'}`} ref={scrollRef}>
         {pages.map((page, index) => (
           <div
             key={page.id}

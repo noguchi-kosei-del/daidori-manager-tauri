@@ -19,9 +19,9 @@ export const PAGE_TYPE_LABELS: Record<PageType, string> = {
 
 // ページ種別カラー
 export const PAGE_TYPE_COLORS: Record<PageType, string> = {
-  file: '#5c9cff',
-  cover: '#ff7a7a',
-  blank: '#8a8aa0',
+  file: '#0078d4',
+  cover: '#c62828',
+  blank: '#8a8a8a',
   intermission: '#a855f7',
   colophon: '#34d399',
 };
@@ -75,9 +75,9 @@ export const CHAPTER_TYPE_LABELS: Record<ChapterType, string> = {
 
 // 特殊ページのカラー
 export const CHAPTER_TYPE_COLORS: Record<ChapterType, string> = {
-  chapter: '#5c9cff',
-  cover: '#ff7a7a',
-  blank: '#8a8aa0',
+  chapter: '#0078d4',
+  cover: '#c62828',
+  blank: '#8a8a8a',
   intermission: '#a855f7',
   colophon: '#34d399',
 };

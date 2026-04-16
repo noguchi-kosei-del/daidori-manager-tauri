@@ -1,6 +1,7 @@
 import { useStore } from '../../store';
 import { EpubSpreadPreview } from './EpubSpreadPreview';
 import { EpubThumbnailBar } from './EpubThumbnailBar';
+import { NoPageIcon } from '../../icons';
 
 interface EpubMakerViewProps {
   zoom?: number;
@@ -8,6 +9,7 @@ interface EpubMakerViewProps {
   isViewerMode?: boolean;
   onExitViewerMode?: () => void;
   isPageBarVisible?: boolean;
+  bindingDirection?: 'rtl' | 'ltr';
 }
 
 export function EpubMakerView({
@@ -16,6 +18,7 @@ export function EpubMakerView({
   isViewerMode = false,
   onExitViewerMode,
   isPageBarVisible = true,
+  bindingDirection = 'rtl',
 }: EpubMakerViewProps) {
   const {
     epubPages,
@@ -48,7 +51,8 @@ export function EpubMakerView({
     <div className="preview-area">
       {epubPages.length === 0 ? (
         <div className="spread-viewer-empty">
-          <p>ページがありません</p>
+          <NoPageIcon size={48} />
+          <p>ページがありません。チャプターを追加してください</p>
         </div>
       ) : (
         <>
@@ -63,6 +67,7 @@ export function EpubMakerView({
             isViewerMode={isViewerMode}
             onExitViewerMode={onExitViewerMode}
             isPageBarVisible={isPageBarVisible}
+            bindingDirection={bindingDirection}
           />
           {!isViewerMode && (
             <EpubThumbnailBar
@@ -71,6 +76,7 @@ export function EpubMakerView({
               selectedPageId={epubSelectedPageId}
               onSelectPage={handleSelectPage}
               onSpreadChange={handleSpreadChange}
+              bindingDirection={bindingDirection}
             />
           )}
         </>

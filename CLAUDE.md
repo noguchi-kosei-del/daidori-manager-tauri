@@ -815,3 +815,70 @@ files: [{
 #### アイコン変更（icons.tsx）
 - `SinglePageIcon`→`GridViewIcon`（2x2角丸四角）に変更
 - `ZoomInIcon`（虫眼鏡+）・`ZoomOutIcon`（虫眼鏡-）を新規追加
+
+### 2026-04-16: ハンバーガーメニュー・ドロップダウン刷新・綴じ方向・UIカラー統一
+
+#### ハンバーガーメニュー追加（App.tsx, styles.css, icons.tsx）
+- ヘッダーのアプリアイコン右、ツールバー折りたたみボタンの左にハンバーガーメニューボタンを追加
+- 左からスライドインする280px幅のポップアップメニュー（MojiQ Pro準拠）
+  - ヘッダー: 「メニュー」タイトル + 閉じるボタン
+  - ボディ: 将来の拡張用（空）
+  - フッター: サイドバー反転（FlipIcon）・ダーク/ライト切替（Sun/MoonIcon）・環境設定（SettingsIcon）の3ボタン
+- オーバーレイクリック・Escキーでメニュー閉じ
+- 閲覧モード時はメニュー非表示
+- ヘッダーからテーマ切替ボタンを削除（メニューに移動）
+
+#### サイドバー位置反転（App.tsx, styles.css）
+- `isSidebarFlipped` state追加（localStorage永続化、キー: `daidori_sidebar_flipped`）
+- `body.sidebar-flipped .preview-container`に`flex-direction: row-reverse`
+- サイドバーのborder方向を反転
+
+#### ドロップダウンをカスタムポップアップメニューに変更（App.tsx, styles.css, icons.tsx）
+- ネイティブ`<select>`を廃止し、MojiQ Pro準拠の吹き出し型ポップアップメニューに置換
+- 3つのドロップダウン: 表示（リスト/見開き/EPUB）、サイズ（小/中/大）、綴じ方向（右綴じ/左綴じ）
+- 各メニュー: ヘッダー + アイコン付き項目 + 選択中チェックマーク
+- トリガーボタンにアイコン + テキスト + シェブロン（展開時に180°回転）
+- `openDropdown` stateで3メニューを排他制御、外側クリックで閉じ
+
+#### 綴じ方向切替機能（App.tsx, SpreadViewer.tsx, EpubSpreadPreview.tsx, EpubMakerView.tsx, EpubThumbnailBar.tsx, styles.css）
+- `bindingDirection` state追加（`'rtl' | 'ltr'`、デフォルト`'rtl'`、localStorage永続化）
+- 右綴じ/左綴じでページペアリング・DOM順序・CSS flex-direction・キーボードナビゲーション・スクロールバー位置を切替
+- 右綴じ: ←で進む(+1)、→で戻る(-1) / 左綴じ: →で進む(+1)、←で戻る(-1)
+- `.spread-pair.ltr`・`.epub-spread-pages.ltr`・`.epub-thumbnail-scroll.ltr`で`flex-direction: row`
+
+#### プロジェクトメニュー削除（App.tsx, styles.css）
+- `project-menu-container`のJSX・state・ref・関数・useEffect・CSSをすべて削除
+- 削除対象: `isEditingProjectName`, `editingProjectName`, `isProjectMenuOpen`, `recentFiles`, `projectMenuRef`, `projectNameInputRef`, `startEditingProjectName`, `confirmProjectNameEdit`, `cancelProjectNameEdit`, `handleOpenRecentFile`, `loadRecentFiles`
+
+#### ダークモードカラーをMojiQ Pro準拠に変更（styles.css, types.ts）
+- 紫系カラーパレットからニュートラルグレー系に全面変更
+- 主要変更: `--color-bg-primary: #1e1e1e`, `--color-bg-secondary: #2c2c2c`, `--color-bg-tertiary: #3c3c3c`, `--color-bg-hover: #4c4c4c`
+- テキスト: `--color-text-primary: #f6f6f6`, `--color-text-secondary: #aaaaaa`, `--color-text-muted: #777777`
+- アクセント: `--color-accent: #0078d4`（Microsoft blue）
+- ボーダー: `--color-border: #444444`, `--color-border-light: #555555`
+- types.tsのハードコード色もCSS変数と統一（`PAGE_TYPE_COLORS`, `CHAPTER_TYPE_COLORS`）
+- 表紙カラー: `#ff7a7a` → `#c62828`（濃い赤）
+- Photoshopボタン「Ps」の色を`--color-text-secondary`に統一
+- ライトモード: チャプターバッジ文字色を白に設定
+
+#### UI改善（App.tsx, styles.css, ChapterItem.tsx, icons.tsx）
+- リスト表示のページクリック判定を`.thumbnail-wrapper`→`.thumbnail-card`に修正（グラデーション部分のクリックが反応しない問題を修正）
+- ツールバー折りたたみボタンの`margin-right`を削除（ハンバーガーボタンとの間隔に統一）
+- 空状態メッセージに`NoPageIcon`（紙に斜線）を追加
+- 空状態メッセージを「ページがありません。チャプターを追加してください」に変更
+- サイドバー空状態メッセージを「チャプターをここで追加」に変更
+- チャプター折りたたみアニメーション追加（`grid-template-rows`トランジション、0.25s ease）
+
+#### アイコン追加（icons.tsx）
+- `HamburgerIcon`: 3本線メニューアイコン
+- `FlipIcon`: サイドバー反転アイコン（`isFlipped` prop対応）
+- `SettingsIcon`: 歯車アイコン
+- `BindingRightIcon`: 右綴じアイコン
+- `BindingLeftIcon`: 左綴じアイコン
+- `CheckIcon2`: チェックマークアイコン
+- `NoPageIcon`: 紙に斜線アイコン（ページなし）
+- `GridViewIcon`・`BookOpenIcon`を再利用（ドロップダウン表示用）
+
+#### コンポーネント構造変更（ChapterItem.tsx）
+- チャプターページリストの条件レンダリングを常時レンダリング + CSSクラスに変更
+- `.chapter-pages-outer`（gridコンテナ）→`.chapter-pages`（overflow制御）→`.chapter-pages-inner`（padding）の3層構造
