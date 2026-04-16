@@ -680,3 +680,54 @@ files: [{
 #### エラーログ追加（コード品質改善）
 - recent.rs: JSONパースエラー時にログ出力追加
 - psd.rs: バイナリパースエラー時にデバッグログ追加
+
+### 2026-04-16: スプラッシュウィンドウ・断ち切りエクスポート・UI改善
+
+#### スプラッシュウィンドウ化（lib.rs, tauri.conf.json, public/splash.html）
+- Reactコンポーネント方式のスプラッシュを独立したTauriウィンドウに変更
+- `setup`フックでスプラッシュウィンドウをプログラム的に作成（500x400, 装飾なし, 常に最前面）
+- メインウィンドウは`visible: false`で起動し、React準備完了後に`close_splash`コマンドで表示
+- スプラッシュは2秒間表示後にメインウィンドウへ切り替え
+- React側のスプラッシュCSS・state・JSXを削除
+
+#### 断ち切り（ブリード）エクスポート機能（BleedEditorModal.tsx, App.tsx, tiff_convert.jsx, jpeg_convert.jsx）
+- PSDファイルを含むチャプターのエクスポート時に断ち切り範囲設定エディタを表示
+- Tachimiアプリ準拠のガイドライン方式クロップエディタ:
+  - 上・左ルーラーからドラッグでガイド線を作成
+  - ガイドをロックした後、画像上でドラッグして選択範囲を設定（ガイドにスナップ）
+  - ガイドはドラッグで移動、ダブルクリックで削除
+- 表紙（cover）と本文（chapter）で別々の断ち切り範囲を設定可能
+- エクスポートフロー: ExportModal → BleedEditorModal（表紙） → BleedEditorModal（本文） → エクスポート実行
+- 「スキップしてエクスポート」で断ち切りなしでも直接エクスポート可能
+- tiff_convert.jsx / jpeg_convert.jsx にマージン方式crop処理を追加（`isMargin`フラグ対応）
+- get_image_dimensions コマンドをPSDファイル対応に拡張
+- Photoshop変換時に非PSDページ（白紙、JPEG等）も同じ出力先にエクスポート
+
+#### エクスポートモーダル改善（ExportModal.tsx）
+- リネームモードでもエクスポートボタンが有効に（変換チェック不要に）
+
+#### ページ選択トグル（App.tsx, SpreadViewer.tsx）
+- 選択中のページを再度クリックで選択解除（グリッド・サイドバー・見開き表示すべて対応）
+
+#### ページジャンプ機能（SpreadViewer.tsx, styles.css）
+- 見開き表示時にCtrl+Jでページジャンプダイアログを表示
+- ページ番号入力で該当する見開きへジャンプ
+
+#### アイコン追加（icons.tsx）
+- LockIcon: 錠前アイコン（ガイドロック用）
+- UnlockIcon: 解錠アイコン（ガイドロック解除用）
+
+#### 新規コンポーネント
+| コンポーネント | 説明 |
+|--------------|------|
+| `components/modals/BleedEditorModal.tsx` | 断ち切り範囲設定エディタ（ガイドライン方式） |
+
+#### Tauriコマンド追加・変更
+| コマンド | 説明 |
+|---------|------|
+| `close_splash` | スプラッシュウィンドウを閉じてメインウィンドウを表示 |
+| `get_image_dimensions` | PSDファイルのサイズ取得に対応（psdクレート使用） |
+
+#### Rust型変更
+- `TiffFileConfig.crop_bounds`: `Option<TiffCropBounds>` → `Option<serde_json::Value>`（追加フィールド透過対応）
+- `JpegFileConfig.crop_bounds`: 新規追加（`Option<serde_json::Value>`）

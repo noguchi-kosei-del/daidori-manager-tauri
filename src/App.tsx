@@ -62,9 +62,9 @@ import {
   SidebarNewChapterDropZone,
   SidebarChapterReorderDropZone,
 } from './components/dnd';
-import { ExportModal, EpubMetadataModal } from './components/modals';
+import { ExportModal, EpubMetadataModal, BleedEditorModal } from './components/modals';
 import { EpubMakerView } from './components/epub';
-import type { ExportOptions } from './components/modals/ExportModal';
+import type { ExportOptions, BleedMargins } from './components/modals/ExportModal';
 import { EpubMetadata, EpubPage, EpubGenerateResponse } from './types';
 import {
   SIDEBAR_PREFIX,
@@ -158,6 +158,26 @@ function App() {
 
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isEpubModalOpen, setIsEpubModalOpen] = useState(false);
+
+  // 断ち切りエディタの状態
+  const [bleedEditorState, setBleedEditorState] = useState<{
+    pendingExportOptions: ExportOptions | null;
+    // 表紙と本文のPSD情報
+    coverPsd: { thumbnailPath: string; filePath: string } | null;
+    bodyPsd: { thumbnailPath: string; filePath: string } | null;
+    // 現在表示中のエディタ
+    currentStep: 'cover' | 'body' | null;
+    // 確定済みのマージン
+    coverMargins: BleedMargins | null;
+    bodyMargins: BleedMargins | null;
+  }>({
+    pendingExportOptions: null,
+    coverPsd: null,
+    bodyPsd: null,
+    currentStep: null,
+    coverMargins: null,
+    bodyMargins: null,
+  });
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeDragType, setActiveDragType] = useState<'chapter' | 'page' | null>(null);
   const [draggedPageIds, setDraggedPageIds] = useState<string[]>([]);  // 複数ページドラッグ用
@@ -168,7 +188,6 @@ function App() {
     const saved = localStorage.getItem('daidori_pagebar_visible');
     return saved !== 'false';
   });
-  const [showSplash, setShowSplash] = useState(true);
   const [isToolbarCollapsed, setIsToolbarCollapsed] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -264,12 +283,9 @@ function App() {
   }>({ show: false, type: 'chapter' });
   const projectMenuRef = useRef<HTMLDivElement>(null);
 
-  // スプラッシュスクリーンを一定時間後に非表示
+  // スプラッシュウィンドウを閉じてメインウィンドウを表示
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowSplash(false);
-    }, 2000);
-    return () => clearTimeout(timer);
+    invoke('close_splash').catch(console.error);
   }, []);
 
   // chaptersからallPagesを計算（リアクティブに更新される）
@@ -734,15 +750,121 @@ function App() {
     }
   };
 
+  // エクスポート前に断ち切り確認が必要か判定し、必要ならエディタを表示
+  const handlePreExport = (options: ExportOptions) => {
+    const { convertToTiff, convertToJpgPhotoshop } = options;
+
+    // Photoshop変換モードでPSDファイルがある場合、断ち切りエディタを表示
+    if (convertToTiff || convertToJpgPhotoshop) {
+      // 表紙チャプターのPSD
+      let coverPsd: { thumbnailPath: string; filePath: string } | null = null;
+      // 本文チャプターのPSD
+      let bodyPsd: { thumbnailPath: string; filePath: string } | null = null;
+
+      for (const chapter of chapters) {
+        for (const page of chapter.pages) {
+          if (page.fileType === 'psd' && page.filePath && page.thumbnailCachePath) {
+            if (chapter.type === 'cover' && !coverPsd) {
+              coverPsd = { thumbnailPath: page.thumbnailCachePath, filePath: page.filePath };
+            } else if (chapter.type !== 'cover' && !bodyPsd) {
+              bodyPsd = { thumbnailPath: page.thumbnailCachePath, filePath: page.filePath };
+            }
+          }
+          if (coverPsd && bodyPsd) break;
+        }
+        if (coverPsd && bodyPsd) break;
+      }
+
+      if (coverPsd || bodyPsd) {
+        // 断ち切りエディタを表示
+        setBleedEditorState({
+          pendingExportOptions: options,
+          coverPsd,
+          bodyPsd,
+          currentStep: coverPsd ? 'cover' : 'body',
+          coverMargins: null,
+          bodyMargins: null,
+        });
+        return;
+      }
+    }
+
+    // PSDなし or 通常エクスポート → そのまま実行
+    handleExport(options);
+  };
+
+  // 断ち切りエディタ: 適用コールバック
+  const handleBleedApply = (margins: BleedMargins) => {
+    const state = bleedEditorState;
+    if (state.currentStep === 'cover') {
+      if (state.bodyPsd) {
+        // 表紙完了 → 本文PSDがあれば次へ
+        setBleedEditorState({ ...state, coverMargins: margins, currentStep: 'body' });
+        return;
+      }
+      // 本文なし → エクスポート実行
+      const opts = state.pendingExportOptions!;
+      const bleedSettings = { enabled: true, cover: margins, body: { top: 0, bottom: 0, left: 0, right: 0 } };
+      setBleedEditorState({ ...state, coverMargins: margins, currentStep: null, pendingExportOptions: null });
+      handleExport({ ...opts, bleedSettings });
+    } else {
+      // 本文完了 → エクスポート実行
+      const opts = state.pendingExportOptions!;
+      const coverMargins = state.coverMargins || { top: 0, bottom: 0, left: 0, right: 0 };
+      const bleedSettings = { enabled: true, cover: coverMargins, body: margins };
+      setBleedEditorState({ ...state, bodyMargins: margins, currentStep: null, pendingExportOptions: null });
+      handleExport({ ...opts, bleedSettings });
+    }
+  };
+
+  // 断ち切りエディタ: スキップコールバック
+  const handleBleedSkip = () => {
+    const state = bleedEditorState;
+    if (state.currentStep === 'cover') {
+      if (state.bodyPsd) {
+        // 表紙スキップ → 本文PSDがあれば次へ
+        setBleedEditorState({ ...state, coverMargins: null, currentStep: 'body' });
+        return;
+      }
+      // 本文なし → 断ち切りなしでエクスポート
+      const opts = state.pendingExportOptions!;
+      setBleedEditorState({ ...state, currentStep: null, pendingExportOptions: null });
+      handleExport(opts);
+    } else {
+      // 本文スキップ → エクスポート実行
+      const opts = state.pendingExportOptions!;
+      if (state.coverMargins) {
+        const bleedSettings = { enabled: true, cover: state.coverMargins, body: { top: 0, bottom: 0, left: 0, right: 0 } };
+        setBleedEditorState({ ...state, bodyMargins: null, currentStep: null, pendingExportOptions: null });
+        handleExport({ ...opts, bleedSettings });
+      } else {
+        setBleedEditorState({ ...state, bodyMargins: null, currentStep: null, pendingExportOptions: null });
+        handleExport(opts);
+      }
+    }
+  };
+
+  // 断ち切りエディタ: キャンセル（エクスポート中止）
+  const handleBleedCancel = () => {
+    setBleedEditorState({
+      pendingExportOptions: null,
+      coverPsd: null,
+      bodyPsd: null,
+      currentStep: null,
+      coverMargins: null,
+      bodyMargins: null,
+    });
+  };
+
   const handleExport = async (options: ExportOptions) => {
-    const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, convertToJpgPhotoshop, renameMode, startNumber, digits, prefix, perChapterSettings } = options;
+    const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, convertToJpgPhotoshop, renameMode, startNumber, digits, prefix, perChapterSettings, bleedSettings } = options;
 
     // TIFF変換モードの場合
     if (convertToTiff) {
       // PSD・JPEGファイルを抽出（Photoshopで開いてTIFFに変換）
       // EPUB_maker連携用にページ情報も保持
       const convertibleTypes = ['psd', 'jpg'];
-      const convertiblePages: { path: string; outputName: string; pageType: string; chapterName?: string; label?: string }[] = [];
+      const convertiblePages: { path: string; outputName: string; pageType: string; chapterType: string; chapterName?: string; label?: string }[] = [];
 
       if (renameMode === 'unified') {
         allPages.forEach((item, index) => {
@@ -751,6 +873,7 @@ function App() {
               path: item.page.filePath,
               outputName: `${prefix}${String(startNumber + index).padStart(digits, '0')}.tif`,
               pageType: item.page.pageType,
+              chapterType: item.chapter.type,
               chapterName: item.chapter.name,
               label: item.page.label,
             });
@@ -766,6 +889,7 @@ function App() {
                 path: page.filePath,
                 outputName: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}.tif`,
                 pageType: page.pageType,
+                chapterType: chapter.type,
                 chapterName: chapter.name,
                 label: page.label,
               });
@@ -788,6 +912,12 @@ function App() {
             path: p.path,
             outputPath: outputPath,
             outputName: p.outputName,
+            ...(bleedSettings?.enabled && {
+              cropBounds: {
+                ...(p.chapterType === 'cover' ? bleedSettings.cover : bleedSettings.body),
+                isMargin: true,
+              },
+            }),
           })),
         };
 
@@ -801,16 +931,6 @@ function App() {
 
         const successResults = response.results.filter(r => r.success);
         const errorResults = response.results.filter(r => !r.success);
-        const rgbCount = successResults.filter(r => r.colorMode === 'rgb').length;
-        const grayscaleCount = successResults.filter(r => r.colorMode === 'grayscale').length;
-
-        let message = `${successResults.length}ファイルをTIFFに変換しました`;
-        if (rgbCount > 0 || grayscaleCount > 0) {
-          const modeParts: string[] = [];
-          if (rgbCount > 0) modeParts.push(`RGB: ${rgbCount}件`);
-          if (grayscaleCount > 0) modeParts.push(`グレースケール: ${grayscaleCount}件`);
-          message += `（${modeParts.join('、')}）`;
-        }
 
         let details = '';
         if (errorResults.length > 0) {
@@ -826,9 +946,55 @@ function App() {
           label: p.label,
         }));
 
+        // TIFF変換対象外のファイル（白紙、PNGなど）も同じ出力先にエクスポート
+        const nonConvertiblePages: { source_path: string | null; output_name: string; page_type: string }[] = [];
+
+        if (renameMode === 'unified') {
+          allPages.forEach((item, index) => {
+            if (!item.page.fileType || !convertibleTypes.includes(item.page.fileType)) {
+              nonConvertiblePages.push({
+                source_path: item.page.filePath || null,
+                output_name: `${prefix}${String(startNumber + index).padStart(digits, '0')}`,
+                page_type: item.page.pageType,
+              });
+            }
+          });
+        } else {
+          for (const chapter of chapters) {
+            const settings = perChapterSettings[chapter.id] || { enabled: true, startNumber: 1, digits: 4, prefix: '' };
+            if (settings.enabled === false) continue;
+            chapter.pages.forEach((page, pageIndex) => {
+              if (!page.fileType || !convertibleTypes.includes(page.fileType)) {
+                nonConvertiblePages.push({
+                  source_path: page.filePath || null,
+                  output_name: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}`,
+                  page_type: page.pageType,
+                });
+              }
+            });
+          }
+        }
+
+        if (nonConvertiblePages.length > 0) {
+          try {
+            await invoke<number>('export_pages', {
+              outputPath: response.outputDir,
+              pages: nonConvertiblePages,
+              moveFiles: exportMode === 'move',
+              convertToJpg: false,
+              jpgQuality: 100,
+            });
+          } catch (e) {
+            console.error('非変換対象ページのエクスポートエラー:', e);
+          }
+        }
+
+        const totalPages = successResults.length + nonConvertiblePages.length;
+        const message = `${totalPages}ページのエクスポートが完了しました`;
+
         setExportResultDialog({
           show: true,
-          title: errorResults.length > 0 ? 'TIFF変換完了（一部エラー）' : 'TIFF変換完了',
+          title: errorResults.length > 0 ? 'エクスポート完了（一部エラー）' : 'エクスポート完了',
           message,
           details: errorResults.length > 0 ? `エラー: ${errorResults.length}件\n${details}` : undefined,
           outputDir: response.outputDir,
@@ -850,7 +1016,7 @@ function App() {
     if (convertToJpgPhotoshop) {
       // PSDファイルを抽出（Photoshopで開いてJPEGに変換）
       // EPUB_maker連携用にページ情報も保持
-      const convertiblePages: { path: string; outputName: string; pageType: string; chapterName?: string; label?: string }[] = [];
+      const convertiblePages: { path: string; outputName: string; pageType: string; chapterType: string; chapterName?: string; label?: string }[] = [];
 
       if (renameMode === 'unified') {
         allPages.forEach((item, index) => {
@@ -859,6 +1025,7 @@ function App() {
               path: item.page.filePath,
               outputName: `${prefix}${String(startNumber + index).padStart(digits, '0')}.jpg`,
               pageType: item.page.pageType,
+              chapterType: item.chapter.type,
               chapterName: item.chapter.name,
               label: item.page.label,
             });
@@ -874,6 +1041,7 @@ function App() {
                 path: page.filePath,
                 outputName: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}.jpg`,
                 pageType: page.pageType,
+                chapterType: chapter.type,
                 chapterName: chapter.name,
                 label: page.label,
               });
@@ -896,6 +1064,12 @@ function App() {
             path: p.path,
             outputPath: outputPath,
             outputName: p.outputName,
+            ...(bleedSettings?.enabled && {
+              cropBounds: {
+                ...(p.chapterType === 'cover' ? bleedSettings.cover : bleedSettings.body),
+                isMargin: true,
+              },
+            }),
           })),
         };
 
@@ -908,8 +1082,6 @@ function App() {
 
         const successResults = response.results.filter(r => r.success);
         const errorResults = response.results.filter(r => !r.success);
-
-        const message = `${successResults.length}ファイルをJPEGに変換しました`;
 
         let details = '';
         if (errorResults.length > 0) {
@@ -925,9 +1097,55 @@ function App() {
           label: p.label,
         }));
 
+        // PSD以外のファイル（白紙、その他画像）も同じ出力先にエクスポート
+        const nonPsdPages: { source_path: string | null; output_name: string; page_type: string }[] = [];
+
+        if (renameMode === 'unified') {
+          allPages.forEach((item, index) => {
+            if (item.page.fileType !== 'psd') {
+              nonPsdPages.push({
+                source_path: item.page.filePath || null,
+                output_name: `${prefix}${String(startNumber + index).padStart(digits, '0')}`,
+                page_type: item.page.pageType,
+              });
+            }
+          });
+        } else {
+          for (const chapter of chapters) {
+            const settings = perChapterSettings[chapter.id] || { enabled: true, startNumber: 1, digits: 4, prefix: '' };
+            if (settings.enabled === false) continue;
+            chapter.pages.forEach((page, pageIndex) => {
+              if (page.fileType !== 'psd') {
+                nonPsdPages.push({
+                  source_path: page.filePath || null,
+                  output_name: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}`,
+                  page_type: page.pageType,
+                });
+              }
+            });
+          }
+        }
+
+        if (nonPsdPages.length > 0) {
+          try {
+            await invoke<number>('export_pages', {
+              outputPath: response.outputDir,
+              pages: nonPsdPages,
+              moveFiles: exportMode === 'move',
+              convertToJpg: false,
+              jpgQuality: 100,
+            });
+          } catch (e) {
+            console.error('非PSDページのエクスポートエラー:', e);
+          }
+        }
+
+        const totalPages = successResults.length + nonPsdPages.length;
+        const message = `${totalPages}ページのエクスポートが完了しました`;
+
         setExportResultDialog({
           show: true,
-          title: errorResults.length > 0 ? 'JPEG変換完了（一部エラー）' : 'JPEG変換完了',
+          title: errorResults.length > 0 ? 'エクスポート完了（一部エラー）' : 'エクスポート完了',
           message,
           details: errorResults.length > 0 ? `エラー: ${errorResults.length}件\n${details}` : undefined,
           outputDir: response.outputDir,
@@ -988,17 +1206,7 @@ function App() {
         jpgQuality,
       });
 
-      // 統計情報
-      const blankCount = allPages.filter((p) => p.page.pageType === 'blank').length;
-      const skippedCount = exportPages.length - count;
-
-      let message = `${count}ページをエクスポートしました`;
-      if (blankCount > 0) {
-        message += `（白紙${blankCount}件を自動生成）`;
-      }
-      if (skippedCount > 0) {
-        message += `（${skippedCount}件スキップ）`;
-      }
+      const message = `${count}ページのエクスポートが完了しました`;
 
       // EPUB_maker連携用のページ情報を生成
       const exportedPages = exportPages.map((p) => {
@@ -1694,15 +1902,6 @@ function App() {
 
   return (
     <>
-      {/* スプラッシュスクリーン */}
-      {showSplash && (
-        <div className="splash-screen" data-tauri-drag-region>
-          <div className="splash-content">
-            <img src="/logo/daidori_icon.png" alt="アイコン" className="splash-icon" />
-            <img src="/logo/daidori_logo.png" alt="台割マネージャー" className="splash-logo" />
-          </div>
-        </div>
-      )}
       <DndContext
         sensors={sensors}
         collisionDetection={customCollisionDetection}
@@ -2043,12 +2242,16 @@ function App() {
                         isSelected={chapter.id === selectedChapterId}
                         selectedPageId={selectedPageId}
                         onSelect={() => {
-                          selectChapter(chapter.id);
+                          selectChapter(selectedChapterId === chapter.id ? null : chapter.id);
                           selectPage(null);
                         }}
                         onSelectPage={(pageId) => {
-                          selectChapter(chapter.id);
-                          selectPage(pageId);
+                          if (selectedPageId === pageId) {
+                            selectPage(null);
+                          } else {
+                            selectChapter(chapter.id);
+                            selectPage(pageId);
+                          }
                         }}
                         onToggle={() => toggleChapterCollapsed(chapter.id)}
                         onRename={(name) => renameChapter(chapter.id, name)}
@@ -2134,8 +2337,12 @@ function App() {
                 pages={displayPages}
                 selectedPageId={selectedPageId}
                 onPageSelect={(chapterId, pageId) => {
-                  selectChapter(chapterId);
-                  selectPage(pageId);
+                  if (selectedPageId === pageId) {
+                    selectPage(null);
+                  } else {
+                    selectChapter(chapterId);
+                    selectPage(pageId);
+                  }
                 }}
                 isViewerMode={isViewerMode}
                 onExitViewerMode={() => setIsViewerMode(false)}
@@ -2260,8 +2467,12 @@ function App() {
                                                 isSelected={item.page.id === selectedPageId}
                                                 isMultiSelected={selectedPageIds.includes(item.page.id)}
                                                 onSelect={() => {
-                                                  selectChapter(item.chapter.id);
-                                                  selectPage(item.page.id);
+                                                  if (selectedPageId === item.page.id) {
+                                                    selectPage(null);
+                                                  } else {
+                                                    selectChapter(item.chapter.id);
+                                                    selectPage(item.page.id);
+                                                  }
                                                 }}
                                                 onCtrlClick={() => {
                                                   selectChapter(item.chapter.id);
@@ -2337,8 +2548,30 @@ function App() {
       <ExportModal
         isOpen={isExportModalOpen}
         onClose={() => setIsExportModalOpen(false)}
-        onExport={handleExport}
+        onExport={handlePreExport}
         chapters={chapters}
+      />
+
+      {/* 断ち切りエディタ（表紙） */}
+      <BleedEditorModal
+        isOpen={bleedEditorState.currentStep === 'cover' && !!bleedEditorState.coverPsd}
+        label="表紙"
+        thumbnailPath={bleedEditorState.coverPsd?.thumbnailPath || ''}
+        originalFilePath={bleedEditorState.coverPsd?.filePath || ''}
+        onApply={handleBleedApply}
+        onSkip={handleBleedSkip}
+        onCancel={handleBleedCancel}
+      />
+
+      {/* 断ち切りエディタ（本文） */}
+      <BleedEditorModal
+        isOpen={bleedEditorState.currentStep === 'body' && !!bleedEditorState.bodyPsd}
+        label="本文"
+        thumbnailPath={bleedEditorState.bodyPsd?.thumbnailPath || ''}
+        originalFilePath={bleedEditorState.bodyPsd?.filePath || ''}
+        onApply={handleBleedApply}
+        onSkip={handleBleedSkip}
+        onCancel={handleBleedCancel}
       />
 
       <EpubMetadataModal

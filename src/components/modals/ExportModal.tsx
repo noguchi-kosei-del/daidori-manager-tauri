@@ -14,6 +14,21 @@ export interface ChapterRenameSettings {
   prefix: string;
 }
 
+// 断ち切りマージン
+export interface BleedMargins {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+// 断ち切り設定
+export interface BleedSettings {
+  enabled: boolean;
+  cover: BleedMargins;
+  body: BleedMargins;
+}
+
 // エクスポート設定
 export interface ExportOptions {
   outputPath: string;
@@ -29,6 +44,8 @@ export interface ExportOptions {
   prefix: string;
   // チャプターごとの設定
   perChapterSettings: Record<string, ChapterRenameSettings>;
+  // 断ち切り設定
+  bleedSettings?: BleedSettings;
 }
 
 // エクスポートモーダル
@@ -501,7 +518,7 @@ export function ExportModal({
           <button
             className="btn-primary btn-small"
             onClick={handleExport}
-            disabled={!outputPath || isExporting || (!convertToJpg && !convertToTiff && !convertToJpgPhotoshop)}
+            disabled={!outputPath || isExporting}
           >
             {isExporting ? 'エクスポート中...' : 'エクスポート'}
           </button>

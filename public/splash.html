@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      overflow: hidden;
+      background: transparent;
+    }
+    .splash-screen {
+      width: 100vw;
+      height: 100vh;
+      background: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: splash-scale-in 0.4s ease-out;
+    }
+    .splash-content {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 32px;
+    }
+    .splash-icon {
+      width: 160px;
+      height: 160px;
+      object-fit: contain;
+    }
+    .splash-logo {
+      height: 64px;
+      object-fit: contain;
+    }
+    @keyframes splash-scale-in {
+      from {
+        opacity: 0;
+        transform: scale(0.9);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="splash-screen" data-tauri-drag-region>
+    <div class="splash-content">
+      <img src="/logo/daidori_icon.png" alt="アイコン" class="splash-icon" />
+      <img src="/logo/daidori_logo.png" alt="台割マネージャー" class="splash-logo" />
+    </div>
+  </div>
+</body>
+</html>

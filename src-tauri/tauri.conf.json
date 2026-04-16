@@ -12,12 +12,14 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "台割マネージャー",
         "width": 1400,
         "height": 900,
         "minWidth": 1000,
         "minHeight": 700,
         "center": true,
+        "visible": false,
         "dragDropEnabled": true,
         "decorations": false
       }

@@ -45,9 +45,9 @@ pub struct TiffFileConfig {
     /// クロップをスキップするか
     #[serde(default)]
     pub skip_crop: bool,
-    /// クロップ範囲
+    /// クロップ範囲（JSXスクリプトに透過的に渡す）
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub crop_bounds: Option<TiffCropBounds>,
+    pub crop_bounds: Option<serde_json::Value>,
     /// JPG出力先（TIFF+JPG同時出力時）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jpg_output_path: Option<String>,

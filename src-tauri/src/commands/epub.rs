@@ -130,12 +130,21 @@ pub fn get_default_viewport(format: EpubFormat) -> (u32, u32) {
     format.default_viewport()
 }
 
-/// 画像サイズを取得
+/// 画像サイズを取得（PSD対応）
 #[tauri::command]
 pub async fn get_image_dimensions(path: String) -> Result<(u32, u32), String> {
     tokio::task::spawn_blocking(move || {
-        let img = image::open(&path).map_err(|e| format!("Failed to open image: {}", e))?;
-        Ok((img.width(), img.height()))
+        let lower = path.to_lowercase();
+        if lower.ends_with(".psd") {
+            let data = std::fs::read(&path)
+                .map_err(|e| format!("Failed to read PSD file: {}", e))?;
+            let psd = psd::Psd::from_bytes(&data)
+                .map_err(|e| format!("Failed to parse PSD: {:?}", e))?;
+            Ok((psd.width(), psd.height()))
+        } else {
+            let img = image::open(&path).map_err(|e| format!("Failed to open image: {}", e))?;
+            Ok((img.width(), img.height()))
+        }
     })
     .await
     .map_err(|e| format!("Task failed: {}", e))?

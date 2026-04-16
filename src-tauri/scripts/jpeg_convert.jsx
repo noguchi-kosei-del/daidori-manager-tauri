@@ -127,6 +127,32 @@ function processFile(fileConfig, globalSettings) {
             doc.flatten();
         }
 
+        // 2.5 Crop (if specified)
+        if (fileConfig.cropBounds) {
+            var cb = fileConfig.cropBounds;
+            if (cb.isMargin) {
+                // マージン方式: 各辺からの切り落とし幅
+                var docW = doc.width.as("px");
+                var docH = doc.height.as("px");
+                if (cb.top > 0 || cb.bottom > 0 || cb.left > 0 || cb.right > 0) {
+                    doc.crop([
+                        new UnitValue(cb.left, "px"),
+                        new UnitValue(cb.top, "px"),
+                        new UnitValue(docW - cb.right, "px"),
+                        new UnitValue(docH - cb.bottom, "px")
+                    ]);
+                }
+            } else {
+                // 絶対座標方式
+                doc.crop([
+                    new UnitValue(cb.left, "px"),
+                    new UnitValue(cb.top, "px"),
+                    new UnitValue(cb.right, "px"),
+                    new UnitValue(cb.bottom, "px")
+                ]);
+            }
+        }
+
         // 3. Convert to RGB if needed (JPEG requires RGB or Grayscale)
         if (doc.mode !== DocumentMode.RGB && doc.mode !== DocumentMode.GRAYSCALE) {
             doc.changeMode(ChangeMode.RGB);

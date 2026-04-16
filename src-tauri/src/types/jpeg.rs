@@ -10,6 +10,9 @@ pub struct JpegFileConfig {
     pub output_path: String,
     /// 出力ファイル名
     pub output_name: String,
+    /// クロップ範囲（JSXスクリプトに透過的に渡す）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crop_bounds: Option<serde_json::Value>,
 }
 
 /// JPEG変換のグローバル設定

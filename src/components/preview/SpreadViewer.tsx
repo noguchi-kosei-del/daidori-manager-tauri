@@ -36,6 +36,11 @@ export function SpreadViewer({
   const isProgrammaticScroll = useRef(false);
   const targetSpreadIndex = useRef<number | null>(null);
 
+  // ページジャンプダイアログ
+  const [showJumpDialog, setShowJumpDialog] = useState(false);
+  const [jumpPageInput, setJumpPageInput] = useState('');
+  const jumpInputRef = useRef<HTMLInputElement>(null);
+
   // 閲覧モード時の閉じるボタン表示制御
   const [closeButtonVisible, setCloseButtonVisible] = useState(true);
   const closeButtonTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -191,6 +196,14 @@ export function SpreadViewer({
         return;
       }
 
+      // Ctrl+J でページジャンプダイアログを開く
+      if (e.key === 'j' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setJumpPageInput('');
+        setShowJumpDialog(true);
+        return;
+      }
+
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         if (e.ctrlKey || e.metaKey) {
@@ -225,6 +238,27 @@ export function SpreadViewer({
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [currentSpreadIndex, totalSpreads, navigateToSpread, isViewerMode, onExitViewerMode]);
+
+  // ジャンプダイアログが開いたら入力欄にフォーカス
+  useEffect(() => {
+    if (showJumpDialog) {
+      setTimeout(() => jumpInputRef.current?.focus(), 0);
+    }
+  }, [showJumpDialog]);
+
+  // ページジャンプ実行
+  const handleJumpToPage = useCallback(() => {
+    const pageNum = parseInt(jumpPageInput, 10);
+    if (isNaN(pageNum) || pageNum < 1 || pageNum > pages.length) {
+      setShowJumpDialog(false);
+      return;
+    }
+    // ページ番号からスプレッドインデックスを計算（0始まり）
+    const spreadIndex = Math.floor((pageNum - 1) / 2);
+    const clampedIndex = Math.min(spreadIndex, totalSpreads - 1);
+    navigateToSpread(clampedIndex);
+    setShowJumpDialog(false);
+  }, [jumpPageInput, pages.length, totalSpreads, navigateToSpread]);
 
   // 閲覧モード時の閉じるボタン自動非表示（3秒後に非表示、マウス移動で再表示）
   useEffect(() => {
@@ -490,6 +524,43 @@ export function SpreadViewer({
       {isViewerMode && (
         <div className={`viewer-nav-hint ${navHintVisible ? 'show' : ''}`}>
           escまたは×ボタンで閲覧モード解除
+        </div>
+      )}
+
+      {/* ページジャンプダイアログ */}
+      {showJumpDialog && (
+        <div className="jump-dialog-overlay" onClick={() => setShowJumpDialog(false)}>
+          <div className="jump-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="jump-dialog-title">ページジャンプ</div>
+            <div className="jump-dialog-body">
+              <input
+                ref={jumpInputRef}
+                type="number"
+                className="jump-dialog-input"
+                min={1}
+                max={pages.length}
+                value={jumpPageInput}
+                onChange={(e) => setJumpPageInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleJumpToPage();
+                  } else if (e.key === 'Escape') {
+                    setShowJumpDialog(false);
+                  }
+                }}
+                placeholder={`1〜${pages.length}`}
+              />
+              <span className="jump-dialog-suffix">ページ</span>
+            </div>
+            <div className="jump-dialog-footer">
+              <button className="btn-secondary btn-small" onClick={() => setShowJumpDialog(false)}>
+                キャンセル
+              </button>
+              <button className="btn-primary btn-small" onClick={handleJumpToPage}>
+                ジャンプ
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

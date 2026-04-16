@@ -299,12 +299,27 @@ function processFile(fileConfig, globalSettings) {
         // 12. Crop (if specified)
         if (!fileConfig.skipCrop && fileConfig.cropBounds) {
             var cb = fileConfig.cropBounds;
-            doc.crop([
-                new UnitValue(cb.left, "px"),
-                new UnitValue(cb.top, "px"),
-                new UnitValue(cb.right, "px"),
-                new UnitValue(cb.bottom, "px")
-            ]);
+            if (cb.isMargin) {
+                // マージン方式: 各辺からの切り落とし幅
+                var docW = doc.width.as("px");
+                var docH = doc.height.as("px");
+                if (cb.top > 0 || cb.bottom > 0 || cb.left > 0 || cb.right > 0) {
+                    doc.crop([
+                        new UnitValue(cb.left, "px"),
+                        new UnitValue(cb.top, "px"),
+                        new UnitValue(docW - cb.right, "px"),
+                        new UnitValue(docH - cb.bottom, "px")
+                    ]);
+                }
+            } else {
+                // 絶対座標方式（既存互換）
+                doc.crop([
+                    new UnitValue(cb.left, "px"),
+                    new UnitValue(cb.top, "px"),
+                    new UnitValue(cb.right, "px"),
+                    new UnitValue(cb.bottom, "px")
+                ]);
+            }
         }
 
         // 13. Resize

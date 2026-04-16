@@ -1109,6 +1109,328 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
   color: var(--color-text-muted);
   margin-top: var(--spacing-sm);
 }
+/* ===== 断ち切りエディタ ===== */
+.bleed-editor-overlay {
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.bleed-editor-modal {
+  background: var(--color-bg-primary);
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.bleed-editor-header {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.bleed-editor-header h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.bleed-editor-hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+}
+
+.bleed-editor-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+/* ルーラー + 画像のグリッドレイアウト */
+.bleed-editor-ruler-wrapper {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  grid-template-rows: 24px 1fr;
+  min-height: 0;
+}
+
+.bleed-editor-ruler-corner {
+  background: #e0f7fa;
+  border-right: 1px solid #b2ebf2;
+  border-bottom: 1px solid #b2ebf2;
+}
+
+.bleed-editor-ruler {
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bleed-editor-ruler-h {
+  background: #e0f7fa;
+  border-bottom: 1px solid #b2ebf2;
+  cursor: s-resize;
+}
+
+.bleed-editor-ruler-v {
+  background: #e0f7fa;
+  border-right: 1px solid #b2ebf2;
+  cursor: e-resize;
+  writing-mode: vertical-rl;
+}
+
+.bleed-editor-ruler.locked {
+  cursor: not-allowed;
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.bleed-ruler-label {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
+
+.bleed-editor-preview {
+  position: relative;
+  background: #111;
+  user-select: none;
+  overflow: hidden;
+}
+
+.bleed-editor-preview.crosshair {
+  cursor: crosshair;
+}
+
+.bleed-editor-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+/* 選択範囲外の暗い領域 */
+.bleed-editor-dim {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+/* 選択枠 */
+.bleed-editor-selection {
+  position: absolute;
+  border: 2px solid #2196f3;
+  background: rgba(33, 150, 243, 0.08);
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15),
+              0 0 12px rgba(33, 150, 243, 0.3);
+}
+
+/* ガイドライン */
+.bleed-editor-guide {
+  position: absolute;
+  z-index: 10;
+}
+
+.bleed-editor-guide-h {
+  height: 2px;
+  background: #00bcd4;
+  cursor: ns-resize;
+  transform: translateY(-1px);
+}
+
+.bleed-editor-guide-h::before {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  top: -5px; bottom: -5px;
+}
+
+.bleed-editor-guide-v {
+  width: 2px;
+  background: #00bcd4;
+  cursor: ew-resize;
+  transform: translateX(-1px);
+}
+
+.bleed-editor-guide-v::before {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0;
+  left: -5px; right: -5px;
+}
+
+.bleed-editor-guide.preview {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.bleed-editor-guide.locked {
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+/* ロックボタン */
+.bleed-lock-btn {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.bleed-lock-btn:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+.bleed-lock-btn.active {
+  background: var(--color-accent);
+  color: #fff;
+  border-color: var(--color-accent);
+}
+
+.bleed-lock-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.bleed-reset-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.bleed-guide-label {
+  position: absolute;
+  font-size: 10px;
+  color: #00bcd4;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 1px 4px;
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.bleed-editor-guide-h .bleed-guide-label {
+  top: 4px;
+  left: 4px;
+}
+
+.bleed-editor-guide-v .bleed-guide-label {
+  left: 6px;
+  top: 4px;
+}
+
+/* ガイド情報 */
+.bleed-editor-guide-info {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bleed-value {
+  font-size: 13px;
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* サイドパネル */
+.bleed-editor-panel {
+  width: 220px;
+  flex-shrink: 0;
+  padding: 20px 16px;
+  border-left: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bleed-editor-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.bleed-editor-image-size {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.bleed-editor-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bleed-editor-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bleed-editor-input-row label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  min-width: 16px;
+  text-align: right;
+}
+
+.bleed-editor-input-row input[type="number"] {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-size: 13px;
+  -moz-appearance: textfield;
+}
+
+.bleed-editor-input-row input[type="number"]::-webkit-outer-spin-button,
+.bleed-editor-input-row input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.bleed-editor-result-size {
+  font-size: 11px;
+  color: var(--color-accent);
+  padding-top: 4px;
+  border-top: 1px solid var(--color-border);
+}
+
+.bleed-editor-footer {
+  padding: 12px 24px;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.bleed-unit {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
 .checkbox-label.disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -3397,64 +3719,75 @@ body.viewer-mode .spread-page-info {
   opacity: 1;
 }
 
-/* ===== スプラッシュスクリーン ===== */
-.splash-screen {
-  position: fixed;
+/* ===== ページジャンプダイアログ ===== */
+.jump-dialog-overlay {
+  position: absolute;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 99999;
-  animation: splash-fade-in 0.3s ease-out;
+  z-index: 1000;
 }
 
-.splash-content {
-  background: #ffffff;
-  border: 4px solid #33a4de;
-  border-radius: 20px;
-  padding: 64px 96px;
+.jump-dialog {
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 20px 24px;
+  min-width: 280px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.jump-dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 16px;
+}
+
+.jump-dialog-body {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 32px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-  animation: splash-scale-in 0.4s ease-out;
+  gap: 8px;
+  margin-bottom: 16px;
 }
 
-.splash-icon {
-  width: 160px;
-  height: 160px;
-  object-fit: contain;
+.jump-dialog-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-size: 16px;
+  outline: none;
+  -moz-appearance: textfield;
 }
 
-.splash-logo {
-  height: 64px;
-  object-fit: contain;
+.jump-dialog-input::-webkit-outer-spin-button,
+.jump-dialog-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
-@keyframes splash-fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
+.jump-dialog-input:focus {
+  border-color: var(--color-accent);
 }
 
-@keyframes splash-scale-in {
-  from {
-    opacity: 0;
-    transform: scale(0.9);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
+.jump-dialog-suffix {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.jump-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 /* ===== 保存メニュー ===== */
