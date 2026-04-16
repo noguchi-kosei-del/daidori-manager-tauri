@@ -32,7 +32,6 @@ import {
   DaidoriProjectFile,
   FileValidationResult,
   RecentFile,
-  APP_MODE_LABELS,
 } from './types';
 import {
   FolderIcon,
@@ -43,12 +42,14 @@ import {
   SunIcon,
   MoonIcon,
   ExportIcon,
-  SinglePageIcon,
+  GridViewIcon,
   MonitorIcon,
   TrashIcon,
   EyeIcon,
   EyeOffIcon,
   BookIcon,
+  ZoomInIcon,
+  ZoomOutIcon,
 } from './icons';
 
 // 抽出したコンポーネント
@@ -112,9 +113,6 @@ if (typeof window !== 'undefined') {
 // メインApp
 function App() {
   const {
-    // アプリモード
-    appMode,
-    setAppMode,
     chapters,
     selectedChapterId,
     selectedPageId,
@@ -154,6 +152,8 @@ function App() {
     setProjectName,
     // EPUB_maker
     loadEpubFromDaidori,
+    epubPages,
+    epubSelectedPageId,
   } = useStore();
 
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -181,8 +181,9 @@ function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeDragType, setActiveDragType] = useState<'chapter' | 'page' | null>(null);
   const [draggedPageIds, setDraggedPageIds] = useState<string[]>([]);  // 複数ページドラッグ用
-  const [previewMode, setPreviewMode] = useState<'grid' | 'spread'>('grid');
+  const [previewMode, setPreviewMode] = useState<'grid' | 'spread' | 'epub'>('grid');
   const [isViewerMode, setIsViewerMode] = useState(false);
+  const [spreadZoom, setSpreadZoom] = useState(100);
   const [isPageBarVisible, setIsPageBarVisible] = useState(() => {
     // 初期状態をlocalStorageから復元（デフォルトは表示）
     const saved = localStorage.getItem('daidori_pagebar_visible');
@@ -498,6 +499,13 @@ function App() {
     }
     removeChapter(chapterId);
   }, [chapters, removeChapter]);
+
+  // EPUBモード中にchaptersが変更されたら自動同期
+  useEffect(() => {
+    if (previewMode === 'epub') {
+      loadEpubFromDaidori();
+    }
+  }, [previewMode, chapters, loadEpubFromDaidori]);
 
   // キーボードショートカット
   useKeyboardShortcuts({
@@ -2001,6 +2009,78 @@ function App() {
                 )}
               </div>
 
+              <div className="header-divider" />
+              <div className="preview-mode-toggle">
+                <button
+                  className={`view-mode-btn ${previewMode === 'grid' ? 'active' : ''}`}
+                  onClick={() => setPreviewMode('grid')}
+                  title="単ページ表示"
+                >
+                  <GridViewIcon size={14} /> リスト
+                </button>
+                <button
+                  className={`view-mode-btn ${previewMode === 'spread' ? 'active' : ''}`}
+                  onClick={() => setPreviewMode('spread')}
+                  title="見開き表示"
+                >
+                  <BookOpenIcon size={14} /> 見開き
+                </button>
+                <button
+                  className={`view-mode-btn ${previewMode === 'epub' ? 'active' : ''}`}
+                  onClick={() => {
+                    loadEpubFromDaidori();
+                    setPreviewMode('epub');
+                  }}
+                  title="EPUB表示"
+                >
+                  <BookIcon size={14} /> EPUB
+                </button>
+              </div>
+
+              <div className="header-divider" />
+              <div className={`thumbnail-size-selector ${previewMode !== 'grid' || chapters.length === 0 ? 'disabled' : ''}`}>
+                {(Object.keys(THUMBNAIL_SIZES) as ThumbnailSize[]).map((size) => (
+                  <button
+                    key={size}
+                    className={`size-btn ${thumbnailSize === size ? 'active' : ''}`}
+                    onClick={() => setThumbnailSize(size)}
+                    disabled={previewMode !== 'grid' || chapters.length === 0}
+                  >
+                    {THUMBNAIL_SIZES[size].label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="header-divider" />
+              <div className="zoom-controls">
+                <button
+                  className="btn-icon btn-small"
+                  onClick={() => setSpreadZoom(Math.min(200, spreadZoom + 10))}
+                  disabled={previewMode === 'grid' || spreadZoom >= 200}
+                  title="ズームイン"
+                >
+                  <ZoomInIcon size={16} />
+                </button>
+                <span className={`zoom-value ${previewMode === 'grid' ? 'disabled' : ''}`}>{spreadZoom}%</span>
+                <button
+                  className="btn-icon btn-small"
+                  onClick={() => setSpreadZoom(Math.max(50, spreadZoom - 10))}
+                  disabled={previewMode === 'grid' || spreadZoom <= 50}
+                  title="ズームアウト"
+                >
+                  <ZoomOutIcon size={16} />
+                </button>
+              </div>
+
+              <div className="header-divider" />
+              <button
+                className="theme-toggle-btn"
+                onClick={toggleDarkMode}
+                title={isDarkMode ? 'ライトモードに切り替え' : 'ダークモードに切り替え'}
+              >
+                {isDarkMode ? <MoonIcon size={18} /> : <SunIcon size={18} />}
+              </button>
+
               {/* ウィンドウコントロールボタン（右側） */}
               <div className="window-controls">
                 <button
@@ -2053,160 +2133,92 @@ function App() {
                 </div>
               )}
 
-              {/* アプリモード切り替え */}
-              <div className="app-mode-toggle">
-                <button
-                  className={`app-mode-btn ${appMode === 'daidori' ? 'active' : ''}`}
-                  onClick={() => setAppMode('daidori')}
-                  title="台割作成モード"
-                >
-                  {APP_MODE_LABELS.daidori}
-                </button>
-                <button
-                  className={`app-mode-btn ${appMode === 'epub' ? 'active' : ''}`}
-                  onClick={() => {
-                    if (appMode !== 'epub') {
-                      loadEpubFromDaidori();
-                    }
-                    setAppMode('epub');
-                  }}
-                  title="EPUB作成モード"
-                >
-                  {APP_MODE_LABELS.epub}
-                </button>
-              </div>
+              <button
+                className="export-btn"
+                onClick={() => setIsExportModalOpen(true)}
+                title="エクスポート"
+                disabled={allPages.length === 0}
+              >
+                <ExportIcon size={18} />
+              </button>
 
-              {appMode === 'daidori' && (
-              <div className="preview-mode-toggle">
-                <button
-                  className={`view-mode-btn ${previewMode === 'grid' ? 'active' : ''}`}
-                  onClick={() => setPreviewMode('grid')}
-                  title="単ページ表示"
-                >
-                  <SinglePageIcon size={14} /> 単ページ
-                </button>
-                <button
-                  className={`view-mode-btn ${previewMode === 'spread' ? 'active' : ''}`}
-                  onClick={() => setPreviewMode('spread')}
-                  title="見開き表示"
-                >
-                  <BookOpenIcon size={14} /> 見開き
-                </button>
-              </div>
-              )}
+              <button
+                className="btn-epub"
+                onClick={() => setIsEpubModalOpen(true)}
+                title="EPUBを生成"
+                disabled={allPages.length === 0}
+              >
+                <BookIcon size={14} />
+              </button>
 
-              {previewMode === 'spread' && (
-                <>
-                  <button
-                    className="viewer-mode-btn"
-                    onClick={() => setIsViewerMode(true)}
-                    title="閲覧モード (F1)"
-                    disabled={displayPages.length === 0}
-                  >
-                    <MonitorIcon size={14} />
-                  </button>
-                  <button
-                    className="viewer-mode-btn"
-                    onClick={() => {
-                      const newValue = !isPageBarVisible;
-                      setIsPageBarVisible(newValue);
-                      localStorage.setItem('daidori_pagebar_visible', String(newValue));
-                    }}
-                    title={isPageBarVisible ? 'ページバーを隠す' : 'ページバーを表示'}
-                  >
-                    {isPageBarVisible ? <EyeIcon size={14} /> : <EyeOffIcon size={14} />}
-                  </button>
-                </>
-              )}
-
-              {previewMode === 'grid' && (
-                <div className={`thumbnail-size-selector ${chapters.length === 0 ? 'disabled' : ''}`}>
-                  {(Object.keys(THUMBNAIL_SIZES) as ThumbnailSize[]).map((size) => (
-                    <button
-                      key={size}
-                      className={`size-btn ${thumbnailSize === size ? 'active' : ''}`}
-                      onClick={() => setThumbnailSize(size)}
-                      disabled={chapters.length === 0}
-                    >
-                      {THUMBNAIL_SIZES[size].label}
-                    </button>
-                  ))}
-                </div>
-              )}
+              <button
+                className="viewer-mode-btn"
+                onClick={() => setIsViewerMode(true)}
+                title="閲覧モード (F1)"
+                disabled={previewMode === 'grid' || displayPages.length === 0}
+              >
+                <MonitorIcon size={14} />
+              </button>
+              <button
+                className="viewer-mode-btn"
+                onClick={() => {
+                  const newValue = !isPageBarVisible;
+                  setIsPageBarVisible(newValue);
+                  localStorage.setItem('daidori_pagebar_visible', String(newValue));
+                }}
+                title={isPageBarVisible ? 'ページバーを隠す' : 'ページバーを表示'}
+                disabled={previewMode === 'grid'}
+              >
+                {isPageBarVisible ? <EyeIcon size={14} /> : <EyeOffIcon size={14} />}
+              </button>
 
               {/* Photoshopで開くボタン */}
               {(() => {
-                // プロジェクト内にPSDファイルがあるかチェック
-                const projectHasPsd = allPages.some(p => p.page.filePath?.toLowerCase().endsWith('.psd'));
+                // EPUBモード時はepubPagesから、それ以外はallPagesから選択ページを取得
+                let psdPaths: string[] = [];
 
-                // 選択されているページを取得（複数選択対応）
-                const selectedPages = selectedPageIds.length > 0
-                  ? allPages.filter(p => selectedPageIds.includes(p.page.id))
-                  : selectedPageId
-                    ? allPages.filter(p => p.page.id === selectedPageId)
-                    : [];
-
-                // すべてがPSDファイルかチェック
-                const psdPages = selectedPages.filter(p => p.page.filePath?.toLowerCase().endsWith('.psd'));
-                const hasPsdFiles = psdPages.length > 0 && psdPages.length === selectedPages.length;
+                if (previewMode === 'epub') {
+                  const selected = epubSelectedPageId
+                    ? epubPages.find(p => p.id === epubSelectedPageId)
+                    : null;
+                  if (selected?.sourcePath?.toLowerCase().endsWith('.psd')) {
+                    psdPaths = [selected.sourcePath];
+                  }
+                } else {
+                  const selectedPages = selectedPageIds.length > 0
+                    ? allPages.filter(p => selectedPageIds.includes(p.page.id))
+                    : selectedPageId
+                      ? allPages.filter(p => p.page.id === selectedPageId)
+                      : [];
+                  const psdPages = selectedPages.filter(p => p.page.filePath?.toLowerCase().endsWith('.psd'));
+                  if (psdPages.length > 0 && psdPages.length === selectedPages.length) {
+                    psdPaths = psdPages.map(p => p.page.filePath!);
+                  }
+                }
 
                 return (
                   <button
                     className="photoshop-btn"
                     onClick={async () => {
-                      for (const pageInfo of psdPages) {
-                        if (pageInfo.page.filePath) {
-                          try {
-                            await invoke('open_file_with_default_app', { filePath: pageInfo.page.filePath });
-                          } catch (error) {
-                            console.error('ファイルを開けませんでした:', error);
-                          }
+                      for (const path of psdPaths) {
+                        try {
+                          await invoke('open_file_with_default_app', { filePath: path });
+                        } catch (error) {
+                          console.error('ファイルを開けませんでした:', error);
                         }
                       }
                     }}
-                    title={psdPages.length > 1 ? `Photoshopで開く (${psdPages.length})` : 'Photoshopで開く'}
-                    disabled={!projectHasPsd || !hasPsdFiles}
+                    title={psdPaths.length > 1 ? `Photoshopで開く (${psdPaths.length})` : 'Photoshopで開く'}
+                    disabled={psdPaths.length === 0}
                   >
-                    <img src="/logo/Photoshop_icon.png" alt="Ps" className="photoshop-icon" />
+                    <span className="photoshop-label">Ps</span>
                   </button>
                 );
               })()}
-
-              <div className="toolbar-right-actions">
-                <button
-                  className="export-btn"
-                  onClick={() => setIsExportModalOpen(true)}
-                  title="エクスポート"
-                  disabled={allPages.length === 0}
-                >
-                  <ExportIcon size={18} />
-                </button>
-
-                <button
-                  className="btn-epub"
-                  onClick={() => setIsEpubModalOpen(true)}
-                  title="EPUBを生成"
-                  disabled={allPages.length === 0}
-                >
-                  <BookIcon size={16} />
-                  <span>EPUB</span>
-                </button>
-
-                <button
-                  className="theme-toggle-btn"
-                  onClick={toggleDarkMode}
-                  title={isDarkMode ? 'ライトモードに切り替え' : 'ダークモードに切り替え'}
-                >
-                  {isDarkMode ? <MoonIcon size={18} /> : <SunIcon size={18} />}
-                </button>
-              </div>
             </div>
           </div>
 
           {/* モードに応じたコンテンツ表示 */}
-          {appMode === 'epub' ? (
-            <EpubMakerView onGenerateEpub={() => setIsEpubModalOpen(true)} />
-          ) : (
           <div className="preview-container">
             <aside className={`sidebar ${isSidebarCollapsed ? 'collapsed' : ''}`}>
               <div className="sidebar-header">
@@ -2330,6 +2342,15 @@ function App() {
               </div>
             </aside>
 
+            {previewMode === 'epub' ? (
+              <EpubMakerView
+                zoom={spreadZoom}
+                onZoomChange={setSpreadZoom}
+                isViewerMode={isViewerMode}
+                onExitViewerMode={() => setIsViewerMode(false)}
+                isPageBarVisible={isPageBarVisible}
+              />
+            ) : (
             <div className="preview-area" ref={previewAreaRef}>
               {previewMode === 'spread' ? (
               <SpreadViewer
@@ -2347,6 +2368,8 @@ function App() {
                 isViewerMode={isViewerMode}
                 onExitViewerMode={() => setIsViewerMode(false)}
                 isPageBarVisible={isPageBarVisible}
+                zoom={spreadZoom}
+                onZoomChange={setSpreadZoom}
               />
             ) : (
               <div className="thumbnail-grid-container">
@@ -2519,8 +2542,8 @@ function App() {
               </div>
             )}
             </div>
+            )}
           </div>
-          )}
 
         </main>
       </div>

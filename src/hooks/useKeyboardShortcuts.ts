@@ -14,7 +14,7 @@ interface UseKeyboardShortcutsOptions {
   selectedPageIds: string[];
   chapters: Chapter[];
   allPages: PageWithContext[];
-  previewMode: 'grid' | 'spread';
+  previewMode: 'grid' | 'spread' | 'epub';
   isModified: boolean;
 
   // アクション
@@ -131,8 +131,12 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
         }
       }
 
-      // 矢印キーでナビゲーション
+      // 矢印キーでナビゲーション（見開き・EPUBモードでは左右キーはSpreadViewerが処理）
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        if ((previewMode === 'spread' || previewMode === 'epub') &&
+            (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+          return;
+        }
         e.preventDefault();
         const isNext = e.key === 'ArrowDown' || e.key === 'ArrowRight';
         const isPrev = e.key === 'ArrowUp' || e.key === 'ArrowLeft';

@@ -731,3 +731,87 @@ files: [{
 #### Rust型変更
 - `TiffFileConfig.crop_bounds`: `Option<TiffCropBounds>` → `Option<serde_json::Value>`（追加フィールド透過対応）
 - `JpegFileConfig.crop_bounds`: 新規追加（`Option<serde_json::Value>`）
+
+### 2026-04-16: UI統合・見開きビューア刷新・EPUB表示統合
+
+#### app-mode-toggle廃止・preview-mode-toggle統合（App.tsx, store.ts, types.ts）
+- `AppMode`型・`APP_MODE_LABELS`定数・`appMode` storeを完全削除
+- `preview-mode-toggle`に「リスト | 見開き | EPUB」の3モードを統合
+- 「単ページ」→「リスト」に文言変更、`SinglePageIcon`→`GridViewIcon`（2x2角丸四角アイコン）に変更
+- EPUB切替時に`loadEpubFromDaidori()`を毎回実行し、chapters変更時も自動同期（useEffect）
+
+#### EPUB表示のサイドバー・ツールバー統合（EpubMakerView.tsx, EpubMetadataPanel.tsx）
+- EPUB表示時のサイドバーを台割モードと共通化（チャプターリストサイドバーを共有）
+- EPUB独自のサイドバー（`epub-sidebar`）・ツールバー（`epub-toolbar`）・CSSエディタモーダルを削除
+- `epub-metadata-scroll`ラッパーを削除（`sidebar-content`がスクロールを担当）
+- EpubMakerViewをプレビューエリアのみのシンプルなコンポーネントに整理
+
+#### 見開きビューアのステートベース化（SpreadViewer.tsx）
+- スクロール方式からステートベース方式に全面書き換え（現在のスプレッドのみ表示）
+- IntersectionObserver・スクロールイベント追跡・`isProgrammaticScroll`を削除
+- `currentSpreadIndex`で現在のスプレッドを管理し、`navigateToSpread`でindexを更新
+
+#### ページバー横配置・右始まり（SpreadViewer.tsx, EpubSpreadPreview.tsx, styles.css）
+- `spread-nav-bar`を縦配置（右端）から横配置（下部）に変更
+- ハンドルを右始まりに変更（日本式右綴じ対応、ratio反転）
+- ドラッグ/クリック計算を`clientY`→`clientX`に変更
+
+#### ページ情報バー上部移動（SpreadViewer.tsx, styles.css）
+- `spread-info-bar`（ページラベル）を見開き画像の下から上に移動
+- `spread-number-label`を`spread-info-bar`の中央に統合
+- 右ページ情報を左端、左ページ情報を右端に配置（右綴じ対応）
+
+#### キーボードナビゲーション統一（SpreadViewer.tsx, EpubSpreadPreview.tsx, useKeyboardShortcuts.ts）
+- 方向キーを上下から左右に変更（←で進む、→で戻る）
+- 見開き・EPUBモード時は左右キーを`useKeyboardShortcuts`からSpreadViewer/EpubSpreadPreviewに委譲
+- 統一ショートカット: ←/→（前後移動）、Ctrl+←/→（先頭/末尾）、Home/End、Ctrl+J（ジャンプ）、Ctrl+0（ズームリセット）、ESC（閲覧モード終了）
+
+#### ズーム機能（App.tsx, SpreadViewer.tsx, EpubSpreadPreview.tsx, icons.tsx）
+- ツールバーにズームイン/アウトボタン追加（`ZoomInIcon`/`ZoomOutIcon`新規作成）
+- リスト表示時はグレーアウト、見開き・EPUB時のみ操作可能
+- Alt+ホイールでポインター位置に向かってズームイン/アウト（MojiQ準拠のアルゴリズム）
+- `panOffset` stateでポインター位置固定のためのtranslateオフセットを管理
+- Ctrl+0で100%・パンオフセットリセット
+- EpubSpreadPreviewの内蔵ズームコントロール（`epub-zoom-control`）を削除し共通化
+
+#### EPUB表示の閲覧モード・ページバー非表示（EpubSpreadPreview.tsx, EpubMakerView.tsx）
+- EPUB表示にも閲覧モード（閉じるボタン・ナビヒント・ESC終了）を実装
+- ページバー非表示ボタンを実装
+- 閲覧モード時はサムネイルバー・ページラベル・ページ選択を非表示
+
+#### EPUB表示のページジャンプ（EpubSpreadPreview.tsx）
+- Ctrl+Jでページジャンプダイアログを表示（SpreadViewerと同一UI）
+- キーイベントを`document`レベルで処理（ダイアログ表示中もCtrl+Jを確実にpreventDefault）
+
+#### EPUB見開き・サムネイル右綴じ対応（styles.css）
+- `epub-spread-pages`に`flex-direction: row-reverse`を追加
+- `epub-thumbnail-scroll`に`flex-direction: row-reverse`を追加
+
+#### ヘッダー・ツールバーレイアウト刷新（App.tsx, styles.css）
+- `preview-mode-toggle`・`zoom-controls`・`thumbnail-size-selector`・`theme-toggle-btn`を`main-header-row`に移動
+- `main-header-row`を`justify-content: space-between`→`gap: 8px`（左揃え）に変更
+- 各グループ間に`header-divider`（縦区切り線）を配置
+- レイアウト順: プロジェクト名 | 表示切替 | サムネイルサイズ | ズーム | テーマ切替
+
+#### toolbar-content共通化（App.tsx）
+- リスト・見開き・EPUB全モードで同一のtoolbar-contentを表示
+- エクスポート・EPUB生成・閲覧モード・ページバーボタンを常時表示（リスト時は閲覧モード等をグレーアウト）
+- `toolbar-right-actions`ラッパーを削除し全ボタンをフラットに配置
+
+#### ボタンスタイル統一（styles.css）
+- エクスポート・EPUB生成ボタンを閲覧モードボタンと同じ枠線アイコンスタイルに統一（32x32px、`border: 1px solid`、`border-radius: 25%`）
+- EPUB生成ボタンからテキスト「EPUB」を削除しアイコンのみに
+- Photoshopボタンのアイコンを画像から太字「Ps」テキストに変更、`Photoshop_icon.png`を削除
+
+#### EPUB選択改善（EpubMakerView.tsx, App.tsx）
+- 選択中のページを再クリックで選択解除
+- PhotoshopボタンがEPUBモードの選択にも対応（`epubSelectedPageId`/`epubPages`を参照）
+
+#### 不要CSS削除（styles.css）
+- `app-mode-toggle`/`app-mode-btn`関連CSS削除
+- `epub-maker-view`/`epub-sidebar`/`epub-metadata-panel`（コンテナ部分）/`epub-metadata-scroll`/`epub-main-area`/`epub-empty-state`/`epub-toolbar`/`epub-zoom-control`/`epub-spread-nav`関連CSS削除
+- 対応するライトモードオーバーライドも削除
+
+#### アイコン変更（icons.tsx）
+- `SinglePageIcon`→`GridViewIcon`（2x2角丸四角）に変更
+- `ZoomInIcon`（虫眼鏡+）・`ZoomOutIcon`（虫眼鏡-）を新規追加

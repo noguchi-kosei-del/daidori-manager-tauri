@@ -7,7 +7,7 @@ import {
   PageType,
   PAGE_TYPE_LABELS,
   SavedUiState,
-  AppMode,
+
   EpubPageInfo,
   EpubMetadata,
   EPUB_FORMAT_VIEWPORTS,
@@ -34,9 +34,6 @@ export const THUMBNAIL_SIZES: Record<ThumbnailSize, { value: number; label: stri
 const MAX_HISTORY_SIZE = 50;
 
 interface AppState {
-  // アプリモード
-  appMode: AppMode;
-
   // プロジェクトデータ
   chapters: Chapter[];
 
@@ -115,9 +112,6 @@ interface AppState {
   getAllPages: () => { page: Page; chapter: Chapter; globalIndex: number }[];
   getTotalPageCount: () => number;
 
-  // アクション: アプリモード
-  setAppMode: (mode: AppMode) => void;
-
   // アクション: EPUB_maker
   setEpubPages: (pages: EpubPageInfo[]) => void;
   setEpubMetadata: (metadata: EpubMetadata | null) => void;
@@ -170,7 +164,6 @@ export const useStore = create<AppState>((set, get) => {
 
   return {
   // 初期状態
-  appMode: 'daidori' as AppMode,
   chapters: [],
   currentProjectPath: null,
   projectName: '新規プロジェクト',
@@ -724,11 +717,6 @@ export const useStore = create<AppState>((set, get) => {
       viewMode: uiState?.viewMode ?? 'all',
       thumbnailSize: uiState?.thumbnailSize ?? 'medium',
     });
-  },
-
-  // アプリモード切り替え
-  setAppMode: (mode) => {
-    set({ appMode: mode });
   },
 
   // EPUB_makerアクション

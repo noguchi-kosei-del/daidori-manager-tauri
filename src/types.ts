@@ -287,15 +287,6 @@ export interface EpubGenerateResponse {
 
 // ========== EPUB_makerモード関連 ==========
 
-// アプリモード
-export type AppMode = 'daidori' | 'epub';
-
-// アプリモードラベル
-export const APP_MODE_LABELS: Record<AppMode, string> = {
-  daidori: '台割作成',
-  epub: 'EPUB作成',
-};
-
 // EPUB_maker用ページ情報（EpubPageを拡張）
 export interface EpubPageInfo {
   id: string;

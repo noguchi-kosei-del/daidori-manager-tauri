@@ -9,7 +9,6 @@ const CLOSE_BUTTON_HIDE_DELAY = 3000;
 // ナビゲーションヒント表示時間（ミリ秒）
 const NAV_HINT_SHOW_DURATION = 3000;
 
-// 見開きプレビューコンポーネント（縦スクロール式）
 export function SpreadViewer({
   pages,
   selectedPageId,
@@ -17,6 +16,8 @@ export function SpreadViewer({
   isViewerMode = false,
   onExitViewerMode,
   isPageBarVisible = true,
+  zoom = 100,
+  onZoomChange,
 }: {
   pages: { page: Page; chapter: Chapter; globalIndex: number }[];
   selectedPageId?: string | null;
@@ -24,17 +25,15 @@ export function SpreadViewer({
   isViewerMode?: boolean;
   onExitViewerMode?: () => void;
   isPageBarVisible?: boolean;
+  zoom?: number;
+  onZoomChange?: (zoom: number) => void;
 }) {
-  const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
-  const [visibleSpreads, setVisibleSpreads] = useState<Set<number>>(new Set());
+  const spreadPairRef = useRef<HTMLDivElement>(null);
   const [currentSpreadIndex, setCurrentSpreadIndex] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
-  // ドラッグ中のハンドル位置（0〜1の範囲）
   const [dragHandlePosition, setDragHandlePosition] = useState(0);
-  // プログラムによるスクロール中のイベント抑制用
-  const isProgrammaticScroll = useRef(false);
-  const targetSpreadIndex = useRef<number | null>(null);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
 
   // ページジャンプダイアログ
   const [showJumpDialog, setShowJumpDialog] = useState(false);
@@ -53,8 +52,8 @@ export function SpreadViewer({
     const result: { left?: typeof pages[0]; right?: typeof pages[0]; spreadIndex: number }[] = [];
     for (let i = 0; i < pages.length; i += 2) {
       result.push({
-        right: pages[i],      // 右ページ（1, 3, 5...）
-        left: pages[i + 1],   // 左ページ（2, 4, 6...）
+        right: pages[i],
+        left: pages[i + 1],
         spreadIndex: Math.floor(i / 2),
       });
     }
@@ -63,36 +62,63 @@ export function SpreadViewer({
 
   const totalSpreads = spreads.length;
 
-  // Intersection Observer で遅延読み込み
+  // currentSpreadIndexが範囲外にならないように補正
   useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          const spreadIndex = Number(entry.target.getAttribute('data-spread-index'));
-          if (entry.isIntersecting) {
-            setVisibleSpreads(prev => new Set([...prev, spreadIndex]));
-          }
-        });
-      },
-      {
-        root: containerRef.current,
-        rootMargin: '200px 0px',
-        threshold: 0.1,
-      }
-    );
+    if (currentSpreadIndex >= totalSpreads && totalSpreads > 0) {
+      setCurrentSpreadIndex(totalSpreads - 1);
+    }
+  }, [totalSpreads, currentSpreadIndex]);
 
-    const spreadElements = containerRef.current?.querySelectorAll('.spread-item');
-    spreadElements?.forEach(el => observer.observe(el));
+  const currentSpread = spreads[currentSpreadIndex];
 
-    return () => observer.disconnect();
-  }, [spreads.length]);
-
-  // 可視状態になった見開きのサムネイルをキュー
+  // スプレッド変更時にパンオフセットをリセット
   useEffect(() => {
-    visibleSpreads.forEach(spreadIndex => {
-      const spread = spreads[spreadIndex];
+    setPanOffset({ x: 0, y: 0 });
+  }, [currentSpreadIndex]);
+
+  // Alt+ホイールでポインター位置に向かってズーム
+  useEffect(() => {
+    const container = spreadPairRef.current?.parentElement;
+    if (!container) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      if (!e.altKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const direction = e.deltaY < 0 ? 1 : -1;
+      const step = 5;
+      const oldZoom = zoom;
+      const newZoom = Math.min(200, Math.max(50, oldZoom + direction * step));
+      if (oldZoom === newZoom) return;
+
+      // ポインター位置をコンテナ中心からの相対座標に変換
+      const rect = container.getBoundingClientRect();
+      const pointerX = e.clientX - rect.left - rect.width / 2;
+      const pointerY = e.clientY - rect.top - rect.height / 2;
+
+      // ズーム比率
+      const ratio = newZoom / oldZoom;
+
+      // パンオフセットを調整してポインター位置を固定
+      setPanOffset(prev => ({
+        x: pointerX - ratio * (pointerX - prev.x),
+        y: pointerY - ratio * (pointerY - prev.y),
+      }));
+
+      onZoomChange?.(newZoom);
+    };
+
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => container.removeEventListener('wheel', handleWheel);
+  }, [zoom, onZoomChange]);
+
+  // 現在のスプレッド周辺のサムネイルをキュー
+  useEffect(() => {
+    const indices = [currentSpreadIndex - 1, currentSpreadIndex, currentSpreadIndex + 1];
+    indices.forEach(idx => {
+      const spread = spreads[idx];
       if (!spread) return;
-
       [spread.right, spread.left].forEach(item => {
         if (item) {
           const { page } = item;
@@ -103,100 +129,35 @@ export function SpreadViewer({
         }
       });
     });
-  }, [visibleSpreads, spreads]);
+  }, [currentSpreadIndex, spreads]);
 
-  // スクロール位置から現在の見開きインデックスを計算
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+  // ナビゲーション
+  const navigateToSpread = useCallback((targetIndex: number) => {
+    const clamped = Math.max(0, Math.min(targetIndex, totalSpreads - 1));
+    setCurrentSpreadIndex(clamped);
+  }, [totalSpreads]);
 
-    const handleScroll = () => {
-      // ドラッグ中は無視
-      if (isDragging) return;
-
-      const spreadElements = container.querySelectorAll('.spread-item');
-      const containerRect = container.getBoundingClientRect();
-      const containerCenter = containerRect.top + containerRect.height / 2;
-
-      let closestIndex = 0;
-      let closestDistance = Infinity;
-
-      spreadElements.forEach((el, index) => {
-        const rect = el.getBoundingClientRect();
-        const elementCenter = rect.top + rect.height / 2;
-        const distance = Math.abs(elementCenter - containerCenter);
-
-        if (distance < closestDistance) {
-          closestDistance = distance;
-          closestIndex = index;
-        }
-      });
-
-      // プログラムスクロール中は、目標位置に到達したらフラグを解除
-      if (isProgrammaticScroll.current) {
-        if (targetSpreadIndex.current !== null && closestIndex === targetSpreadIndex.current) {
-          isProgrammaticScroll.current = false;
-          targetSpreadIndex.current = null;
-        }
-        // 目標位置に到達するまでインデックスは更新しない
-        return;
-      }
-
-      setCurrentSpreadIndex(closestIndex);
-    };
-
-    container.addEventListener('scroll', handleScroll);
-    handleScroll();
-
-    return () => container.removeEventListener('scroll', handleScroll);
-  }, [spreads.length, isDragging]);
-
-  // スクロール位置に基づくハンドル位置（0〜1の範囲）
+  // ハンドル位置（右始まり: index 0 → 右端）
   const scrollHandlePosition = useMemo(() => {
     if (totalSpreads <= 1) return 0;
-    return currentSpreadIndex / (totalSpreads - 1);
+    return 1 - currentSpreadIndex / (totalSpreads - 1);
   }, [currentSpreadIndex, totalSpreads]);
 
-  // 実際に表示するハンドル位置（ドラッグ中はドラッグ位置、それ以外はスクロール位置）
   const displayHandlePosition = isDragging ? dragHandlePosition : scrollHandlePosition;
 
-  // 表示するインデックス（ラベル用）
   const displaySpreadIndex = isDragging
-    ? Math.round(dragHandlePosition * (totalSpreads - 1))
+    ? Math.round((1 - dragHandlePosition) * (totalSpreads - 1))
     : currentSpreadIndex;
 
-  // ナビゲーション関数
-  const scrollToSpread = useCallback((index: number) => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const spreadElements = container.querySelectorAll('.spread-item');
-    const targetElement = spreadElements[index] as HTMLElement;
-    if (targetElement) {
-      targetElement.scrollIntoView({ behavior: 'auto', block: 'center' });
-    }
-  }, []);
-
-  // プログラムによるスクロールを実行（スクロールイベント抑制付き）
-  const navigateToSpread = useCallback((targetIndex: number) => {
-    // スクロールイベントを抑制し、目標位置を記録
-    isProgrammaticScroll.current = true;
-    targetSpreadIndex.current = targetIndex;
-    setCurrentSpreadIndex(targetIndex);
-    scrollToSpread(targetIndex);
-  }, [scrollToSpread]);
-
-  // キーボードナビゲーション（上下キーでページ移動、Ctrl+上下で先頭/末尾へ、ESCで閲覧モード終了）
+  // キーボードナビゲーション（左で進む、右で戻る）
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // ESCキーで閲覧モード終了
       if (e.key === 'Escape' && isViewerMode) {
         e.preventDefault();
         onExitViewerMode?.();
         return;
       }
 
-      // Ctrl+J でページジャンプダイアログを開く
       if (e.key === 'j' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         setJumpPageInput('');
@@ -204,34 +165,33 @@ export function SpreadViewer({
         return;
       }
 
-      if (e.key === 'ArrowDown') {
+      if (e.key === '0' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setPanOffset({ x: 0, y: 0 });
+        onZoomChange?.(100);
+        return;
+      }
+
+      if (e.key === 'ArrowLeft') {
         e.preventDefault();
         if (e.ctrlKey || e.metaKey) {
-          // Ctrl+下：最後のページへ
-          if (currentSpreadIndex !== totalSpreads - 1) {
-            navigateToSpread(totalSpreads - 1);
-          }
+          navigateToSpread(totalSpreads - 1);
         } else {
-          // 下：次のページへ
-          const nextIndex = Math.min(currentSpreadIndex + 1, totalSpreads - 1);
-          if (nextIndex !== currentSpreadIndex) {
-            navigateToSpread(nextIndex);
-          }
+          navigateToSpread(currentSpreadIndex + 1);
         }
-      } else if (e.key === 'ArrowUp') {
+      } else if (e.key === 'ArrowRight') {
         e.preventDefault();
         if (e.ctrlKey || e.metaKey) {
-          // Ctrl+上：最初のページへ
-          if (currentSpreadIndex !== 0) {
-            navigateToSpread(0);
-          }
+          navigateToSpread(0);
         } else {
-          // 上：前のページへ
-          const prevIndex = Math.max(currentSpreadIndex - 1, 0);
-          if (prevIndex !== currentSpreadIndex) {
-            navigateToSpread(prevIndex);
-          }
+          navigateToSpread(currentSpreadIndex - 1);
         }
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        navigateToSpread(0);
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        navigateToSpread(totalSpreads - 1);
       }
     };
 
@@ -239,28 +199,25 @@ export function SpreadViewer({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [currentSpreadIndex, totalSpreads, navigateToSpread, isViewerMode, onExitViewerMode]);
 
-  // ジャンプダイアログが開いたら入力欄にフォーカス
+  // ジャンプダイアログ
   useEffect(() => {
     if (showJumpDialog) {
       setTimeout(() => jumpInputRef.current?.focus(), 0);
     }
   }, [showJumpDialog]);
 
-  // ページジャンプ実行
   const handleJumpToPage = useCallback(() => {
     const pageNum = parseInt(jumpPageInput, 10);
     if (isNaN(pageNum) || pageNum < 1 || pageNum > pages.length) {
       setShowJumpDialog(false);
       return;
     }
-    // ページ番号からスプレッドインデックスを計算（0始まり）
     const spreadIndex = Math.floor((pageNum - 1) / 2);
-    const clampedIndex = Math.min(spreadIndex, totalSpreads - 1);
-    navigateToSpread(clampedIndex);
+    navigateToSpread(spreadIndex);
     setShowJumpDialog(false);
-  }, [jumpPageInput, pages.length, totalSpreads, navigateToSpread]);
+  }, [jumpPageInput, pages.length, navigateToSpread]);
 
-  // 閲覧モード時の閉じるボタン自動非表示（3秒後に非表示、マウス移動で再表示）
+  // 閲覧モード時の閉じるボタン自動非表示
   useEffect(() => {
     if (!isViewerMode) {
       setCloseButtonVisible(true);
@@ -281,10 +238,7 @@ export function SpreadViewer({
       hideCloseButton();
     };
 
-    // 初期表示後3秒で非表示
     hideCloseButton();
-
-    // マウス移動で再表示
     document.addEventListener('mousemove', showCloseButton);
 
     return () => {
@@ -295,62 +249,49 @@ export function SpreadViewer({
     };
   }, [isViewerMode]);
 
-  // 閲覧モード開始時にナビゲーションヒントを表示（3秒後にフェードアウト）
+  // 閲覧モード開始時にナビゲーションヒントを表示
   useEffect(() => {
     if (!isViewerMode) {
       setNavHintVisible(false);
       return;
     }
-
-    // 閲覧モード開始時にヒントを表示
     setNavHintVisible(true);
-
-    // 3秒後に非表示
     const timer = setTimeout(() => {
       setNavHintVisible(false);
     }, NAV_HINT_SHOW_DURATION);
-
     return () => clearTimeout(timer);
   }, [isViewerMode]);
 
-  // トラッククリック/ドラッグでスクロール
-  const handleTrackInteraction = useCallback((clientY: number) => {
+  // トラッククリック/ドラッグ（右始まり）
+  const handleTrackInteraction = useCallback((clientX: number) => {
     const track = trackRef.current;
     if (!track || totalSpreads <= 1) return;
 
     const rect = track.getBoundingClientRect();
-    const handleHeight = 30;
-    const trackHeight = rect.height - handleHeight;
-    const relativeY = Math.max(0, Math.min(clientY - rect.top - handleHeight / 2, trackHeight));
-    const ratio = relativeY / trackHeight;
+    const handleWidth = 30;
+    const trackWidth = rect.width - handleWidth;
+    const relativeX = Math.max(0, Math.min(clientX - rect.left - handleWidth / 2, trackWidth));
+    const ratio = relativeX / trackWidth;
 
-    // ハンドル位置を直接更新
     setDragHandlePosition(ratio);
+    const targetIndex = Math.round((1 - ratio) * (totalSpreads - 1));
+    navigateToSpread(targetIndex);
+  }, [totalSpreads, navigateToSpread]);
 
-    // スクロール
-    const targetIndex = Math.round(ratio * (totalSpreads - 1));
-    scrollToSpread(targetIndex);
-  }, [totalSpreads, scrollToSpread]);
-
-  // マウスダウン開始
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setIsDragging(true);
-    handleTrackInteraction(e.clientY);
+    handleTrackInteraction(e.clientX);
   }, [handleTrackInteraction]);
 
-  // マウス移動とマウスアップのグローバルイベント
   useEffect(() => {
     if (!isDragging) return;
 
     const handleMouseMove = (e: MouseEvent) => {
-      handleTrackInteraction(e.clientY);
+      handleTrackInteraction(e.clientX);
     };
 
     const handleMouseUp = () => {
-      // ドラッグ終了時に、ドラッグ位置から計算したインデックスを設定
-      const targetIndex = Math.round(dragHandlePosition * (totalSpreads - 1));
-      setCurrentSpreadIndex(targetIndex);
       setIsDragging(false);
     };
 
@@ -361,7 +302,7 @@ export function SpreadViewer({
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDragging, handleTrackInteraction, dragHandlePosition, totalSpreads]);
+  }, [isDragging, handleTrackInteraction]);
 
   const renderPage = (item: typeof pages[0] | undefined, side: 'left' | 'right') => {
     if (!item) {
@@ -426,53 +367,43 @@ export function SpreadViewer({
 
   return (
     <div className="spread-viewer-container">
-      <div className="spread-viewer-scroll" ref={containerRef}>
-        <div className="spread-list">
-          {spreads.map((spread, index) => (
-            <div
-              key={index}
-              className="spread-item"
-              data-spread-index={index}
-            >
-              {/* 見開き番号ラベル */}
+      {/* 現在のスプレッドのみ表示 */}
+      <div className="spread-viewer-current">
+        {currentSpread && (
+          <div className="spread-item">
+            {/* ページ情報バー */}
+            <div className="spread-info-bar">
+              {currentSpread.right && (
+                <span className="spread-page-label right">
+                  P.{currentSpread.right.globalIndex + 1}
+                  {currentSpread.right.page.fileName && ` - ${currentSpread.right.page.fileName}`}
+                </span>
+              )}
               <div className="spread-number-label">
-                {spread.right && spread.left
-                  ? `見開き ${spread.right.globalIndex + 1}～${spread.left.globalIndex + 1}P`
-                  : spread.right
-                    ? `見開き ${spread.right.globalIndex + 1}P`
-                    : spread.left
-                      ? `見開き ${spread.left.globalIndex + 1}P`
-                      : `見開き ${index + 1} / ${totalSpreads}`}
+                {currentSpread.right && currentSpread.left
+                  ? `見開き ${currentSpread.right.globalIndex + 1}～${currentSpread.left.globalIndex + 1}P`
+                  : currentSpread.right
+                    ? `見開き ${currentSpread.right.globalIndex + 1}P`
+                    : currentSpread.left
+                      ? `見開き ${currentSpread.left.globalIndex + 1}P`
+                      : `見開き ${currentSpreadIndex + 1} / ${totalSpreads}`}
               </div>
-
-              {/* 見開きコンテナ */}
-              <div className="spread-pair">
-                {/* 右ページ（画面右側）- 日本式で右から読む */}
-                {renderPage(spread.right, 'right')}
-                {/* 中央の綴じ目（ノド） */}
-                <div className="spread-gutter" />
-                {/* 左ページ（画面左側） */}
-                {renderPage(spread.left, 'left')}
-              </div>
-
-              {/* ページ情報バー（右綴じ：右側が若いページ） */}
-              <div className="spread-info-bar">
-                {spread.left && (
-                  <span className="spread-page-label left">
-                    P.{spread.left.globalIndex + 1}
-                    {spread.left.page.fileName && ` - ${spread.left.page.fileName}`}
-                  </span>
-                )}
-                {spread.right && (
-                  <span className="spread-page-label right">
-                    P.{spread.right.globalIndex + 1}
-                    {spread.right.page.fileName && ` - ${spread.right.page.fileName}`}
-                  </span>
-                )}
-              </div>
+              {currentSpread.left && (
+                <span className="spread-page-label left">
+                  P.{currentSpread.left.globalIndex + 1}
+                  {currentSpread.left.page.fileName && ` - ${currentSpread.left.page.fileName}`}
+                </span>
+              )}
             </div>
-          ))}
-        </div>
+
+            {/* 見開きコンテナ */}
+            <div className="spread-pair" ref={spreadPairRef} style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom / 100})`, transformOrigin: 'center center' }}>
+              {renderPage(currentSpread.right, 'right')}
+              <div className="spread-gutter" />
+              {renderPage(currentSpread.left, 'left')}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* フローティングスクロールバー */}
@@ -485,7 +416,7 @@ export function SpreadViewer({
           >
             <div
               className={`spread-nav-handle ${isDragging ? 'dragging' : ''}`}
-              style={{ top: `calc(${displayHandlePosition * 100}% - ${displayHandlePosition * 30}px)` }}
+              style={{ left: `calc(${displayHandlePosition * 100}% - ${displayHandlePosition * 30}px)` }}
             >
               <div className="spread-nav-handle-grip" />
               <span className="spread-nav-handle-label">

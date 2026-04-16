@@ -85,7 +85,6 @@ export function EpubMetadataPanel() {
 
   return (
     <div className="epub-metadata-panel">
-      <div className="epub-metadata-scroll">
         {/* 出力設定 */}
         <div className="form-section">
           <h3>出力設定</h3>
@@ -308,7 +307,6 @@ export function EpubMetadataPanel() {
             </div>
           </div>
         </div>
-      </div>
     </div>
   );
 }
