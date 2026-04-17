@@ -110,7 +110,7 @@ pub async fn run_photoshop_jpeg_convert(
         } else if all_done {
             (final_timeout_secs * 1000) / poll_interval_ms
         } else {
-            u64::MAX  // 処理中はタイムアウトなし
+            (1800 * 1000) / poll_interval_ms  // 処理中は最大30分
         };
 
         if polls_since_progress >= timeout_polls {
@@ -122,9 +122,9 @@ pub async fn run_photoshop_jpeg_convert(
             break;
         }
 
-        std::thread::sleep(std::time::Duration::from_millis(poll_interval_ms));
+        tokio::time::sleep(std::time::Duration::from_millis(poll_interval_ms)).await;
 
-        if polls_since_progress > 0 && polls_since_progress % 60 == 0 {
+        if polls_since_progress > 0 && polls_since_progress.is_multiple_of(60) {
             eprintln!("Still waiting for Photoshop JPEG convert... ({}s since last progress, {})",
                 polls_since_progress * poll_interval_ms / 1000,
                 if last_progress.is_empty() { "waiting for start" } else { &last_progress });

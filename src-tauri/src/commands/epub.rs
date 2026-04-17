@@ -130,20 +130,27 @@ pub fn get_default_viewport(format: EpubFormat) -> (u32, u32) {
     format.default_viewport()
 }
 
-/// 画像サイズを取得（PSD対応）
+/// 画像サイズを取得（PSD対応、ヘッダのみ読み取り）
 #[tauri::command]
 pub async fn get_image_dimensions(path: String) -> Result<(u32, u32), String> {
     tokio::task::spawn_blocking(move || {
         let lower = path.to_lowercase();
         if lower.ends_with(".psd") {
-            let data = std::fs::read(&path)
-                .map_err(|e| format!("Failed to read PSD file: {}", e))?;
-            let psd = psd::Psd::from_bytes(&data)
-                .map_err(|e| format!("Failed to parse PSD: {:?}", e))?;
-            Ok((psd.width(), psd.height()))
+            // PSDヘッダ（26バイト）のみ読み取り
+            let mut file = std::fs::File::open(&path)
+                .map_err(|e| format!("Failed to open PSD file: {}", e))?;
+            let mut header = [0u8; 26];
+            std::io::Read::read_exact(&mut file, &mut header)
+                .map_err(|e| format!("Failed to read PSD header: {}", e))?;
+            if &header[0..4] != b"8BPS" {
+                return Err("Invalid PSD file".to_string());
+            }
+            let height = u32::from_be_bytes([header[14], header[15], header[16], header[17]]);
+            let width = u32::from_be_bytes([header[18], header[19], header[20], header[21]]);
+            Ok((width, height))
         } else {
-            let img = image::open(&path).map_err(|e| format!("Failed to open image: {}", e))?;
-            Ok((img.width(), img.height()))
+            // ヘッダのみ読み取り（画像全体をデコードしない）
+            image::image_dimensions(&path).map_err(|e| format!("Failed to read image dimensions: {}", e))
         }
     })
     .await

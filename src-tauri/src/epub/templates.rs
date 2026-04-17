@@ -177,11 +177,7 @@ fn generate_opf_manifest(
     // Pages (XHTML + Images)
     for page in pages {
         // XHTML
-        let xhtml_props = if page.is_cover {
-            " properties=\"svg\""
-        } else {
-            " properties=\"svg\""
-        };
+        let xhtml_props = " properties=\"svg\"";
         manifest.push_str(&format!(
             "    <item id=\"{}\" href=\"xhtml/{}.xhtml\" media-type=\"application/xhtml+xml\"{}/>\n",
             page.id, page.id, xhtml_props

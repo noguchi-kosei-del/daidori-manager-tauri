@@ -1,21 +1,16 @@
 use serde::{Deserialize, Serialize};
 
 /// EPUB出力形式
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum EpubFormat {
     /// KADOKAWA電書協規格準拠（CSS 8ファイル、フル機能）
+    #[default]
     Kadokawa,
     /// EPUB2/3両対応ハイブリッド形式（NCX + Navigation）
     Hybrid,
     /// 基本OEBPS構成（シンプル・軽量）
     Oebps,
-}
-
-impl Default for EpubFormat {
-    fn default() -> Self {
-        EpubFormat::Kadokawa
-    }
 }
 
 impl EpubFormat {
@@ -70,19 +65,14 @@ impl EpubFormat {
 }
 
 /// ページ綴じ方向
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum PageDirection {
     /// 右綴じ（日本の漫画、右から左へ読む）
+    #[default]
     Rtl,
     /// 左綴じ（西洋式、左から右へ読む）
     Ltr,
-}
-
-impl Default for PageDirection {
-    fn default() -> Self {
-        PageDirection::Rtl
-    }
 }
 
 impl PageDirection {
@@ -95,21 +85,16 @@ impl PageDirection {
 }
 
 /// 見開きモード
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SpreadMode {
     /// 見開き表示
+    #[default]
     Landscape,
     /// 単ページ表示
     Portrait,
     /// 自動
     Auto,
-}
-
-impl Default for SpreadMode {
-    fn default() -> Self {
-        SpreadMode::Landscape
-    }
 }
 
 impl SpreadMode {
@@ -123,18 +108,13 @@ impl SpreadMode {
 }
 
 /// 画面向き
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Orientation {
+    #[default]
     Auto,
     Portrait,
     Landscape,
-}
-
-impl Default for Orientation {
-    fn default() -> Self {
-        Orientation::Auto
-    }
 }
 
 impl Orientation {
@@ -148,10 +128,11 @@ impl Orientation {
 }
 
 /// 著者の役割
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthorRole {
     /// 著者
+    #[default]
     #[serde(rename = "aut")]
     Author,
     /// イラストレーター
@@ -163,12 +144,6 @@ pub enum AuthorRole {
     /// 翻訳者
     #[serde(rename = "trl")]
     Translator,
-}
-
-impl Default for AuthorRole {
-    fn default() -> Self {
-        AuthorRole::Author
-    }
 }
 
 impl AuthorRole {

@@ -612,6 +612,9 @@ export const useStore = create<AppState>((set, get) => {
       chapters: previousState,
       history: newHistory,
       future: [JSON.parse(JSON.stringify(chapters)), ...state.future],
+      selectedChapterId: null,
+      selectedPageId: null,
+      selectedPageIds: [],
     }));
   },
 
@@ -627,6 +630,9 @@ export const useStore = create<AppState>((set, get) => {
       chapters: nextState,
       history: [...state.history, JSON.parse(JSON.stringify(chapters))],
       future: newFuture,
+      selectedChapterId: null,
+      selectedPageId: null,
+      selectedPageIds: [],
     }));
   },
 

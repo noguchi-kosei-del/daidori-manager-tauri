@@ -30,6 +30,8 @@ interface UseKeyboardShortcutsOptions {
   setIsViewerMode: (value: boolean | ((prev: boolean) => boolean)) => void;
   setPendingAction: (action: 'new' | 'open' | 'close' | null) => void;
   setShowUnsavedDialog: (show: boolean) => void;
+  onSave?: () => void;
+  onSaveAs?: () => void;
 }
 
 /**
@@ -73,6 +75,17 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
         e.preventDefault();
         if (previewMode === 'spread') {
           setIsViewerMode(prev => !prev);
+        }
+        return;
+      }
+
+      // Ctrl+S: 保存 / Ctrl+Shift+S: 名前を付けて保存
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          options.onSaveAs?.();
+        } else {
+          options.onSave?.();
         }
         return;
       }

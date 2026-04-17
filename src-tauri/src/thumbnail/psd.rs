@@ -2,6 +2,7 @@ use std::fs;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 use image::DynamicImage;
+use memmap2::Mmap;
 use crate::image_utils::{create_thumbnail, validate_dimensions};
 use crate::constants::THUMBNAIL_SIZE;
 
@@ -105,31 +106,31 @@ fn extract_psd_embedded_thumbnail(data: &[u8]) -> Option<Vec<u8>> {
 }
 
 // PSDファイルからサムネイルを生成
-// 埋め込みサムネイルがTHUMBNAIL_SIZE以上の場合のみ使用、それ以外はフルコンポジット
+// mmap使用: 埋め込みサムネイルの場合はファイル先頭の数KBのみアクセス（数百MBのPSDでもメモリ効率的）
+// フルコンポジットが必要な場合のみ全データを読み込み
 pub fn generate_psd_thumbnail(path: &Path) -> Result<Vec<u8>, String> {
-    let data = fs::read(path).map_err(|e| e.to_string())?;
+    let file = fs::File::open(path).map_err(|e| e.to_string())?;
 
-    // 1. 埋め込みサムネイル（JPEG）を試行
-    if let Some(jpeg_data) = extract_psd_embedded_thumbnail(&data) {
+    // メモリマップ: OSがアクセスされた部分だけページインする（全ファイル読み込みを回避）
+    let mmap = unsafe { Mmap::map(&file) }.map_err(|e| format!("mmap失敗: {}", e))?;
+
+    // 1. 埋め込みサムネイル（JPEG）を試行（ファイル先頭の数KBのみアクセス）
+    if let Some(jpeg_data) = extract_psd_embedded_thumbnail(&mmap) {
         if let Ok(img) = image::load_from_memory_with_format(&jpeg_data, image::ImageFormat::Jpeg) {
-            // 埋め込みサムネイルのサイズをチェック
-            // THUMBNAIL_SIZE以上の場合のみ使用（低解像度だと画質が劣化するため）
             let (width, height) = (img.width(), img.height());
             if width >= THUMBNAIL_SIZE || height >= THUMBNAIL_SIZE {
                 return create_thumbnail(img);
             }
-            // サイズが小さい場合はフルコンポジットにフォールバック
         }
     }
 
-    // 2. フルコンポジットで高品質なサムネイルを生成
-    let psd_file = psd::Psd::from_bytes(&data)
+    // 2. フルコンポジットで高品質なサムネイルを生成（全データアクセスが必要）
+    let psd_file = psd::Psd::from_bytes(&mmap)
         .map_err(|e| format!("PSD読み込みエラー: {:?}", e))?;
 
     let width = psd_file.width();
     let height = psd_file.height();
 
-    // 画像サイズ検証（DoS防止）
     validate_dimensions(width, height)?;
 
     let rgba = psd_file.rgba();

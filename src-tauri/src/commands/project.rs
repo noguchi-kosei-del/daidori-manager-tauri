@@ -1,8 +1,9 @@
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use crate::types::{ProjectFile, SavedFileReference, FileValidationResult};
 
-// プロジェクトを保存
+// プロジェクトを保存（アトミック書き込み: 一時ファイル→リネーム）
 #[tauri::command]
 pub async fn save_project(file_path: String, project: ProjectFile) -> Result<(), String> {
     let path = Path::new(&file_path);
@@ -12,11 +13,27 @@ pub async fn save_project(file_path: String, project: ProjectFile) -> Result<(),
         fs::create_dir_all(parent).map_err(|e| format!("ディレクトリ作成エラー: {}", e))?;
     }
 
-    // JSONとしてシリアライズして書き込み
+    // JSONとしてシリアライズ
     let json = serde_json::to_string_pretty(&project)
         .map_err(|e| format!("JSONシリアライズエラー: {}", e))?;
 
-    fs::write(path, json).map_err(|e| format!("ファイル書き込みエラー: {}", e))?;
+    // 一時ファイルに書き込み→sync→リネーム（クラッシュ時のデータ破損を防止）
+    let temp_path = format!("{}.tmp", file_path);
+    let mut file = fs::File::create(&temp_path)
+        .map_err(|e| format!("一時ファイル作成エラー: {}", e))?;
+    file.write_all(json.as_bytes()).map_err(|e| {
+        let _ = fs::remove_file(&temp_path);
+        format!("書き込みエラー: {}", e)
+    })?;
+    file.sync_all().map_err(|e| {
+        let _ = fs::remove_file(&temp_path);
+        format!("同期エラー: {}", e)
+    })?;
+    drop(file);
+    fs::rename(&temp_path, path).map_err(|e| {
+        let _ = fs::remove_file(&temp_path);
+        format!("リネームエラー: {}", e)
+    })?;
 
     Ok(())
 }

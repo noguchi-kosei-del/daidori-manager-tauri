@@ -882,3 +882,70 @@ files: [{
 #### コンポーネント構造変更（ChapterItem.tsx）
 - チャプターページリストの条件レンダリングを常時レンダリング + CSSクラスに変更
 - `.chapter-pages-outer`（gridコンテナ）→`.chapter-pages`（overflow制御）→`.chapter-pages-inner`（padding）の3層構造
+
+### 2026-04-17: デッドコード削除・リファクタリング
+
+#### 未使用アイコン削除（icons.tsx: 777行→596行）
+- 9個の未使用アイコンを削除: `SaveIcon`(後で復元), `BooksIcon`, `CheckIcon`, `HomeIcon`, `ChevronUpIcon`, `ChevronDownIcon`, `ChevronsUpIcon`, `ChevronsDownIcon`, `ExternalAppIcon`
+
+#### 未使用CSS削除（styles.css: -約100行）
+- 未使用クラス削除: `.app-layout`, `.app-title`, `.home-btn`系, `.btn-export`系, `.btn-export-floating`系, `.add-special-btn`系, `.chapter-pages-footer`, `.thumbnail-grid`
+- 未使用CSS変数削除: `--color-text-accent`, `--color-chapter`, `--color-blank`, `--color-intermission`, `--header-height`, `--thumbnail-size`
+
+#### 未使用インポート削除（main.tsx）
+- `import _React from "react"` を削除
+
+#### Rust clippy警告修正（9件→0件）
+- `types/epub.rs`: 5つの手動Default impl → `#[derive(Default)]` + `#[default]`
+- `commands/export.rs`: range loop → イテレータ
+- `commands/tiff.rs`, `commands/jpeg.rs`: `% 60 == 0` → `.is_multiple_of(60)`
+- `epub/templates.rs`: 同一分岐のif-else削除
+
+#### App.tsx大関数リファクタリング（2776行→1871行）
+- `hooks/useDragHandlers.ts`(361行): DnDハンドラ4関数 + DnD状態を抽出
+- `hooks/useExport.ts`(553行): エクスポート処理全体 + 断ち切りエディタ状態を抽出
+- `hooks/useTauriFileDrop.ts`(123行): Tauriファイルドロップリスナーを抽出
+
+#### 新規フック
+| フック | 説明 |
+|-------|------|
+| `hooks/useDragHandlers.ts` | DnD: sensors, customCollisionDetection, handleDragStart/Over/End, DropTarget型 |
+| `hooks/useExport.ts` | エクスポート: handleExport, handlePreExport, bleedEditor状態管理 |
+| `hooks/useTauriFileDrop.ts` | Tauriファイルドロップイベントリスナーのグローバル設定 |
+
+### 2026-04-17: 致命的バグ修正
+
+#### Critical修正
+- **保存機能の実装**: `handleSaveProject`/`handleSaveProjectAs`関数追加、Ctrl+S/Ctrl+Shift+Sショートカット、ツールバー保存ボタン、未保存ダイアログに「保存」ボタン追加
+- **コマンドインジェクション修正**: `open_file.rs`の`cmd /C start`を`tauri_plugin_opener`に置換
+- **アトミック保存**: `project.rs`のfs::writeを一時ファイル→sync→リネームに変更
+- **moveモードエクスポート安全化**: `export.rs`でエクスポート完了後にまとめて元ファイル削除
+
+#### High修正
+- **Undo/Redo後の選択状態クリア**: `store.ts`のundo/redoでselectedPageId等をnullに
+- **複数フォルダからのファイルドロップ対応**: フォルダごとにget_folder_contentsを呼び出し
+- **Photoshop変換のasync修正**: `std::thread::sleep`→`tokio::time::sleep().await`
+- **Photoshop変換のタイムアウト追加**: `u64::MAX`→30分上限
+- **Ctrl+O未保存時の動作修正**: pendingOpenPath必須条件を除去
+
+#### CSS修正
+- `.chapter-item`に`flex-shrink: 0`追加（フレックスレイアウトによるページ追加エリア圧縮を防止）
+
+### 2026-04-17: バックエンド最適化
+
+#### 画像サイズ取得の最適化（export.rs, epub.rs）
+- PSD: `fs::read`+`Psd::from_bytes`（全ファイル読み込み）→ PSDヘッダ26バイトのみ読み取り
+- 非PSD: `image::open`（全画像デコード）→ `image::image_dimensions`（ヘッダのみ）
+- 白紙ページのサイズ取得: `HashMap`にサイズキャッシュを事前構築（重複デコード排除）
+
+#### エクスポートのrayon並列化（export.rs）
+- 逐次ループ → 3フェーズ構造: サイズキャッシュ構築→タスク収集→rayon並列実行
+- `ExportTask` enum: CopyFile, ConvertToJpg, GenerateBlank, GenerateBlankJpg
+- `tokio::task::spawn_blocking`でUIスレッドをブロックしない
+
+#### PSDサムネイル生成のmmap化（psd.rs）
+- `fs::read`（Vec<u8>に全コピー）→ `memmap2::Mmap`（OSがアクセス部分のみページイン）
+- 埋め込みサムネイルがあればファイル先頭の数KBのみアクセス
+
+#### 依存関係追加
+- `memmap2 = "0.9"` (Cargo.toml)

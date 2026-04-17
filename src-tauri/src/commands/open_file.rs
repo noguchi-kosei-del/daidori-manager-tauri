@@ -1,31 +1,8 @@
-use std::process::Command;
+use tauri_plugin_opener::OpenerExt;
 
-/// 外部アプリケーションでファイルを開く
+/// 外部アプリケーションでファイルを開く（シェルインジェクション対策済み）
 #[tauri::command]
-pub fn open_file_with_default_app(file_path: String) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        Command::new("cmd")
-            .args(["/C", "start", "", &file_path])
-            .spawn()
-            .map_err(|e| format!("ファイルを開けませんでした: {}", e))?;
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        Command::new("open")
-            .arg(&file_path)
-            .spawn()
-            .map_err(|e| format!("ファイルを開けませんでした: {}", e))?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        Command::new("xdg-open")
-            .arg(&file_path)
-            .spawn()
-            .map_err(|e| format!("ファイルを開けませんでした: {}", e))?;
-    }
-
-    Ok(())
+pub fn open_file_with_default_app(app_handle: tauri::AppHandle, file_path: String) -> Result<(), String> {
+    app_handle.opener().open_path(&file_path, None::<&str>)
+        .map_err(|e| format!("ファイルを開けませんでした: {}", e))
 }

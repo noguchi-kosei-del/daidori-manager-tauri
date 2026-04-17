@@ -47,17 +47,7 @@ export function FolderIcon({ size = 16, className }: IconProps) {
 // 💾 保存アイコン
 export function SaveIcon({ size = 16, className }: IconProps) {
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
       <polyline points="17 21 17 13 7 13 7 21"/>
       <polyline points="7 3 7 8 15 8"/>
@@ -130,47 +120,6 @@ export function AlertTriangleIcon({ size = 16, className }: IconProps) {
   );
 }
 
-// 📚 本の束/チャプターアイコン
-export function BooksIcon({ size = 16, className }: IconProps) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-      <line x1="8" y1="6" x2="16" y2="6" />
-      <line x1="8" y1="10" x2="14" y2="10" />
-    </svg>
-  );
-}
-
-// ✓ チェックマークアイコン
-export function CheckIcon({ size = 16, className }: IconProps) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <polyline points="20 6 9 17 4 12" />
-    </svg>
-  );
-}
-
 // ☀️ 太陽アイコン（ライトモード）
 export function SunIcon({ size = 16, className }: IconProps) {
   return (
@@ -213,26 +162,6 @@ export function MoonIcon({ size = 16, className }: IconProps) {
       className={className}
     >
       <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-    </svg>
-  );
-}
-
-// 🏠 ホームアイコン
-export function HomeIcon({ size = 16, className }: IconProps) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-      <polyline points="9 22 9 12 15 12 15 22" />
     </svg>
   );
 }
@@ -321,84 +250,6 @@ export function TrashIcon({ size = 16, className }: IconProps) {
   );
 }
 
-// ▲ 上矢印アイコン（前へ）
-export function ChevronUpIcon({ size = 16, className }: IconProps) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <polyline points="18 15 12 9 6 15" />
-    </svg>
-  );
-}
-
-// ▼ 下矢印アイコン（次へ）
-export function ChevronDownIcon({ size = 16, className }: IconProps) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <polyline points="6 9 12 15 18 9" />
-    </svg>
-  );
-}
-
-// ⏫ 先頭へジャンプアイコン
-export function ChevronsUpIcon({ size = 16, className }: IconProps) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <polyline points="17 11 12 6 7 11" />
-      <polyline points="17 18 12 13 7 18" />
-    </svg>
-  );
-}
-
-// ⏬ 末尾へジャンプアイコン
-export function ChevronsDownIcon({ size = 16, className }: IconProps) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <polyline points="7 13 12 18 17 13" />
-      <polyline points="7 6 12 11 17 6" />
-    </svg>
-  );
-}
-
 // 🖥️ モニターアイコン（閲覧モード用）
 export function MonitorIcon({ size = 16, className }: IconProps) {
   return (
@@ -436,27 +287,6 @@ export function CloseIcon({ size = 16, className }: IconProps) {
     >
       <line x1="18" y1="6" x2="6" y2="18" />
       <line x1="6" y1="6" x2="18" y2="18" />
-    </svg>
-  );
-}
-
-// 🔗 外部アプリで開くアイコン
-export function ExternalAppIcon({ size = 16, className }: IconProps) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={className}
-    >
-      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-      <polyline points="15 3 21 3 21 9" />
-      <line x1="10" y1="14" x2="21" y2="3" />
     </svg>
   );
 }

@@ -1,5 +1,3 @@
-// React はStrictMode用に保持（現在無効化中）
-import _React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./styles.css";

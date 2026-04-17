@@ -1,18 +1,10 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
-import { listen } from '@tauri-apps/api/event';
+import { open, save } from '@tauri-apps/plugin-dialog';
+import { useTauriFileDrop } from './hooks/useTauriFileDrop';
 import {
   DndContext,
-  DragEndEvent,
-  DragOverEvent,
   DragOverlay,
-  DragStartEvent,
-  PointerSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-  CollisionDetection,
 } from '@dnd-kit/core';
 import {
   SortableContext,
@@ -21,7 +13,7 @@ import {
 } from '@dnd-kit/sortable';
 import { useStore, FileInfo, THUMBNAIL_SIZES, ThumbnailSize } from './store';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useWindowCloseHandler, useKeyboardShortcuts } from './hooks';
+import { useWindowCloseHandler, useKeyboardShortcuts, useDragHandlers, useExport } from './hooks';
 import {
   Chapter,
   ChapterType,
@@ -30,6 +22,9 @@ import {
   Page,
   PageType,
   DaidoriProjectFile,
+  SavedChapter,
+  SavedPage,
+  SavedFileReference,
   FileValidationResult,
 } from './types';
 import {
@@ -57,6 +52,7 @@ import {
   BindingLeftIcon,
   CheckIcon2,
   NoPageIcon,
+  SaveIcon,
 } from './icons';
 
 // 抽出したコンポーネント
@@ -72,49 +68,11 @@ import {
 } from './components/dnd';
 import { ExportModal, EpubMetadataModal, BleedEditorModal } from './components/modals';
 import { EpubMakerView } from './components/epub';
-import type { ExportOptions, BleedMargins } from './components/modals/ExportModal';
 import { EpubMetadata, EpubPage, EpubGenerateResponse } from './types';
 import {
   SIDEBAR_PREFIX,
-  NEW_CHAPTER_DROP_ZONE_ID,
-  NEW_CHAPTER_DROP_ZONE_START_ID,
-  SIDEBAR_NEW_CHAPTER_DROP_ZONE_ID,
-  SIDEBAR_NEW_CHAPTER_DROP_ZONE_START_ID,
-  CHAPTER_REORDER_DROP_ZONE_START_ID,
-  CHAPTER_REORDER_DROP_ZONE_END_ID,
 } from './constants/dnd';
 
-
-// ファイルドロップ関連のグローバル状態（windowオブジェクトで管理してHMR対策）
-declare global {
-  interface Window {
-    __dropListenersSetup?: boolean;
-    __lastDropTime?: number;
-    __isProcessingDrop?: boolean;
-    __dropHandler?: ((paths: string[], targetPageId: string | null, mode: string | null, targetChapterId: string | null, insertPosition: 'before' | 'after' | null) => Promise<void>) | null;
-    __setIsDraggingFiles?: ((value: boolean) => void) | null;
-    __setFileDropTargetPageId?: ((value: string | null) => void) | null;
-    __setFileDropMode?: ((value: 'insert' | 'append-chapter' | 'new-chapter' | 'new-chapter-start' | null) => void) | null;
-    __setFileDropTargetChapterId?: ((value: string | null) => void) | null;
-    __setInsertPosition?: ((value: 'before' | 'after' | null) => void) | null;
-    __getDropInfoFromPosition?: ((x: number, y: number) => { pageId: string | null; chapterId: string | null; mode: 'insert' | 'append-chapter' | 'new-chapter' | 'new-chapter-start' | null; insertPosition: 'before' | 'after' | null }) | null;
-    __autoScrollPreview?: ((x: number, y: number) => void) | null;
-    __fileDropTargetPageId?: string | null;
-    __fileDropMode?: 'insert' | 'append-chapter' | 'new-chapter' | 'new-chapter-start' | null;
-    __fileDropTargetChapterId?: string | null;
-    __insertPosition?: 'before' | 'after' | null;
-  }
-}
-
-// 初期化
-if (typeof window !== 'undefined') {
-  window.__lastDropTime = window.__lastDropTime || 0;
-  window.__isProcessingDrop = window.__isProcessingDrop || false;
-  window.__fileDropTargetPageId = window.__fileDropTargetPageId || null;
-  window.__fileDropMode = window.__fileDropMode || null;
-  window.__fileDropTargetChapterId = window.__fileDropTargetChapterId || null;
-  window.__insertPosition = window.__insertPosition || null;
-}
 
 
 // メインApp
@@ -126,6 +84,7 @@ function App() {
     selectedPageIds,
     thumbnailSize,
     // プロジェクト状態
+    currentProjectPath,
     projectName,
     isModified,
     // チャプター管理
@@ -162,31 +121,7 @@ function App() {
     epubSelectedPageId,
   } = useStore();
 
-  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isEpubModalOpen, setIsEpubModalOpen] = useState(false);
-
-  // 断ち切りエディタの状態
-  const [bleedEditorState, setBleedEditorState] = useState<{
-    pendingExportOptions: ExportOptions | null;
-    // 表紙と本文のPSD情報
-    coverPsd: { thumbnailPath: string; filePath: string } | null;
-    bodyPsd: { thumbnailPath: string; filePath: string } | null;
-    // 現在表示中のエディタ
-    currentStep: 'cover' | 'body' | null;
-    // 確定済みのマージン
-    coverMargins: BleedMargins | null;
-    bodyMargins: BleedMargins | null;
-  }>({
-    pendingExportOptions: null,
-    coverPsd: null,
-    bodyPsd: null,
-    currentStep: null,
-    coverMargins: null,
-    bodyMargins: null,
-  });
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [activeDragType, setActiveDragType] = useState<'chapter' | 'page' | null>(null);
-  const [draggedPageIds, setDraggedPageIds] = useState<string[]>([]);  // 複数ページドラッグ用
   const [previewMode, setPreviewMode] = useState<'grid' | 'spread' | 'epub'>('grid');
   const [isViewerMode, setIsViewerMode] = useState(false);
   const [spreadZoom, setSpreadZoom] = useState(100);
@@ -216,12 +151,6 @@ function App() {
     return saved !== 'false'; // 明示的にfalseでない限りダークモード
   });
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
-  // サイドバーD&D用のドロップターゲット
-  const [dropTarget, setDropTarget] = useState<{
-    type: 'page-before' | 'page-after' | 'chapter-before' | 'chapter-after' | 'chapter-end' | 'new-chapter-start' | 'new-chapter-end';
-    chapterId: string;
-    pageId?: string;
-  } | null>(null);
   const [fileDropTargetPageId, setFileDropTargetPageId] = useState<string | null>(null);
   const [fileDropMode, setFileDropMode] = useState<'insert' | 'append-chapter' | 'new-chapter' | 'new-chapter-start' | null>(null);
   const [fileDropTargetChapterId, setFileDropTargetChapterId] = useState<string | null>(null);
@@ -251,16 +180,6 @@ function App() {
   const [pendingOpenPath, setPendingOpenPath] = useState<string | null>(null);
   const [missingFiles, setMissingFiles] = useState<FileValidationResult[]>([]);
   const [showMissingFilesDialog, setShowMissingFilesDialog] = useState(false);
-  const [exportResultDialog, setExportResultDialog] = useState<{
-    show: boolean;
-    title: string;
-    message: string;
-    details?: string;
-    outputDir?: string;
-    isError?: boolean;
-    // EPUB_maker連携用のページ情報
-    exportedPages?: { filename: string; pageType: string; chapterName?: string; label?: string }[];
-  }>({ show: false, title: '', message: '' });
   const [deleteConfirmDialog, setDeleteConfirmDialog] = useState<{
     show: boolean;
     type: 'chapter' | 'all';
@@ -287,6 +206,20 @@ function App() {
     return result;
   }, [chapters]);
 
+  const {
+    isExportModalOpen,
+    bleedEditorState,
+    exportResultDialog,
+    openExportModal,
+    closeExportModal,
+    handlePreExport,
+    handleBleedApply,
+    handleBleedSkip,
+    handleBleedCancel,
+    setExportResultDialog,
+    closeExportResultDialog,
+  } = useExport(chapters, allPages);
+
   // プロジェクトファイルから状態への変換
   const loadFromProjectFile = (project: DaidoriProjectFile, _basePath: string): Chapter[] => {
     return project.chapters.map(ch => ({
@@ -312,6 +245,93 @@ function App() {
         return p;
       }),
     }));
+  };
+
+  // 現在の状態をプロジェクトファイル形式に変換（loadFromProjectFileの逆）
+  const buildProjectFile = (savePath: string): DaidoriProjectFile => {
+    const basePath = savePath.replace(/[\\\/][^\\\/]+$/, '');
+    const savedChapters: SavedChapter[] = chapters.map(ch => ({
+      id: ch.id,
+      name: ch.name,
+      type: ch.type,
+      folderPath: ch.folderPath,
+      pages: ch.pages.map(page => {
+        const savedPage: SavedPage = {
+          id: page.id,
+          pageType: page.pageType,
+          label: page.label,
+        };
+        if (page.filePath && page.fileName) {
+          // 相対パスを計算
+          let relativePath = page.filePath;
+          if (page.filePath.startsWith(basePath)) {
+            relativePath = page.filePath.slice(basePath.length).replace(/^[\\\/]/, '');
+          }
+          const fileRef: SavedFileReference = {
+            absolutePath: page.filePath,
+            relativePath,
+            fileName: page.fileName,
+            fileType: page.fileType || 'png',
+            fileSize: page.fileSize || 0,
+            modifiedTime: page.modifiedTime || 0,
+          };
+          savedPage.file = fileRef;
+        }
+        return savedPage;
+      }),
+    }));
+
+    return {
+      version: '1.0',
+      name: projectName,
+      createdAt: new Date().toISOString(),
+      modifiedAt: new Date().toISOString(),
+      basePath,
+      chapters: savedChapters,
+      uiState: {
+        selectedChapterId,
+        selectedPageId,
+        viewMode: 'all',
+        thumbnailSize,
+        collapsedChapterIds: chapters.filter(c => c.collapsed).map(c => c.id),
+      },
+    };
+  };
+
+  // プロジェクト保存
+  const handleSaveProject = async () => {
+    if (currentProjectPath) {
+      try {
+        const project = buildProjectFile(currentProjectPath);
+        await invoke('save_project', { filePath: currentProjectPath, project });
+        markAsSaved(currentProjectPath);
+      } catch (error) {
+        console.error('保存エラー:', error);
+        alert(`保存に失敗しました: ${error}`);
+      }
+    } else {
+      await handleSaveProjectAs();
+    }
+  };
+
+  // 名前を付けて保存
+  const handleSaveProjectAs = async () => {
+    try {
+      const filePath = await save({
+        filters: [{ name: '台割プロジェクト', extensions: ['daidori'] }],
+        defaultPath: currentProjectPath || `${projectName}.daidori`,
+      });
+      if (!filePath) return;
+
+      const project = buildProjectFile(filePath);
+      await invoke('save_project', { filePath, project });
+      markAsSaved(filePath);
+      const name = filePath.split(/[\\\/]/).pop()?.replace(/\.daidori$/, '') || projectName;
+      await invoke('add_recent_file', { path: filePath, name });
+    } catch (error) {
+      console.error('保存エラー:', error);
+      alert(`保存に失敗しました: ${error}`);
+    }
   };
 
   // プロジェクト読み込み
@@ -374,7 +394,7 @@ function App() {
 
 
   // 未保存確認後のアクション実行
-  const handleUnsavedDialogAction = async (action: 'discard' | 'cancel') => {
+  const handleUnsavedDialogAction = async (action: 'save' | 'discard' | 'cancel') => {
     setShowUnsavedDialog(false);
     if (action === 'cancel') {
       setPendingAction(null);
@@ -382,10 +402,15 @@ function App() {
       return;
     }
 
+    // 保存してから続行
+    if (action === 'save') {
+      await handleSaveProject();
+    }
+
     if (pendingAction === 'new') {
       resetProject();
-    } else if (pendingAction === 'open' && pendingOpenPath) {
-      await handleOpenProject(pendingOpenPath);
+    } else if (pendingAction === 'open') {
+      await handleOpenProject(pendingOpenPath || undefined);
     } else if (pendingAction === 'close') {
       await getCurrentWindow().destroy();
     }
@@ -517,41 +542,31 @@ function App() {
     setIsViewerMode,
     setPendingAction,
     setShowUnsavedDialog,
+    onSave: handleSaveProject,
+    onSaveAs: handleSaveProjectAs,
   });
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 5,
-      },
-    })
-  );
-
-  // カスタムcollision detection: チャプタードラッグ時はチャプターIDのみを対象にする
-  const customCollisionDetection: CollisionDetection = (args) => {
-    const { droppableContainers } = args;
-
-    // チャプタードラッグ時
-    if (activeDragType === 'chapter') {
-      // チャプターIDのみをフィルタリング（ページIDを除外）
-      const chapterIds = new Set(chapters.map(c => c.id));
-      const chapterContainers = droppableContainers.filter(container => {
-        const id = String(container.id);
-        return chapterIds.has(id) ||
-               id === CHAPTER_REORDER_DROP_ZONE_START_ID ||
-               id === CHAPTER_REORDER_DROP_ZONE_END_ID;
-      });
-
-      // フィルタリングされたコンテナでclosestCenterを使用
-      return closestCenter({
-        ...args,
-        droppableContainers: chapterContainers,
-      });
-    }
-
-    // ページドラッグ時は通常のclosestCenter
-    return closestCenter(args);
-  };
+  const {
+    sensors,
+    activeId,
+    activeDragType,
+    dropTarget,
+    draggedPageIds,
+    customCollisionDetection,
+    handleDragStart,
+    handleDragOver,
+    handleDragEnd,
+  } = useDragHandlers({
+    chapters,
+    allPages,
+    selectedPageIds,
+    reorderChapters,
+    reorderPages,
+    movePage,
+    movePages,
+    addChapter,
+    selectChapter,
+  });
 
   const handleAddChapter = (type: ChapterType) => {
     addChapter(type);
@@ -572,17 +587,24 @@ function App() {
       });
 
       if (selected && Array.isArray(selected) && selected.length > 0) {
-        const folderPath = selected[0].replace(/[^\\/]+$/, '');
-        if (!folderPath) {
+        // 複数フォルダ対応: フォルダごとにファイル情報を取得
+        const folderSet = new Set<string>();
+        for (const s of selected) {
+          const folder = s.replace(/[^\\/]+$/, '');
+          if (folder) folderSet.add(folder);
+        }
+        if (folderSet.size === 0) {
           console.error('Invalid folder path');
           return;
         }
 
-        const files: FileInfo[] = await invoke('get_folder_contents', {
-          folderPath,
-        });
+        let allFiles: FileInfo[] = [];
+        for (const folder of folderSet) {
+          const files: FileInfo[] = await invoke('get_folder_contents', { folderPath: folder });
+          allFiles.push(...files);
+        }
 
-        const selectedFiles = files.filter((f) =>
+        const selectedFiles = allFiles.filter((f) =>
           selected.some((s) => s === f.path)
         );
 
@@ -747,745 +769,6 @@ function App() {
     }
   };
 
-  // エクスポート前に断ち切り確認が必要か判定し、必要ならエディタを表示
-  const handlePreExport = (options: ExportOptions) => {
-    const { convertToTiff, convertToJpgPhotoshop } = options;
-
-    // Photoshop変換モードでPSDファイルがある場合、断ち切りエディタを表示
-    if (convertToTiff || convertToJpgPhotoshop) {
-      // 表紙チャプターのPSD
-      let coverPsd: { thumbnailPath: string; filePath: string } | null = null;
-      // 本文チャプターのPSD
-      let bodyPsd: { thumbnailPath: string; filePath: string } | null = null;
-
-      for (const chapter of chapters) {
-        for (const page of chapter.pages) {
-          if (page.fileType === 'psd' && page.filePath && page.thumbnailCachePath) {
-            if (chapter.type === 'cover' && !coverPsd) {
-              coverPsd = { thumbnailPath: page.thumbnailCachePath, filePath: page.filePath };
-            } else if (chapter.type !== 'cover' && !bodyPsd) {
-              bodyPsd = { thumbnailPath: page.thumbnailCachePath, filePath: page.filePath };
-            }
-          }
-          if (coverPsd && bodyPsd) break;
-        }
-        if (coverPsd && bodyPsd) break;
-      }
-
-      if (coverPsd || bodyPsd) {
-        // 断ち切りエディタを表示
-        setBleedEditorState({
-          pendingExportOptions: options,
-          coverPsd,
-          bodyPsd,
-          currentStep: coverPsd ? 'cover' : 'body',
-          coverMargins: null,
-          bodyMargins: null,
-        });
-        return;
-      }
-    }
-
-    // PSDなし or 通常エクスポート → そのまま実行
-    handleExport(options);
-  };
-
-  // 断ち切りエディタ: 適用コールバック
-  const handleBleedApply = (margins: BleedMargins) => {
-    const state = bleedEditorState;
-    if (state.currentStep === 'cover') {
-      if (state.bodyPsd) {
-        // 表紙完了 → 本文PSDがあれば次へ
-        setBleedEditorState({ ...state, coverMargins: margins, currentStep: 'body' });
-        return;
-      }
-      // 本文なし → エクスポート実行
-      const opts = state.pendingExportOptions!;
-      const bleedSettings = { enabled: true, cover: margins, body: { top: 0, bottom: 0, left: 0, right: 0 } };
-      setBleedEditorState({ ...state, coverMargins: margins, currentStep: null, pendingExportOptions: null });
-      handleExport({ ...opts, bleedSettings });
-    } else {
-      // 本文完了 → エクスポート実行
-      const opts = state.pendingExportOptions!;
-      const coverMargins = state.coverMargins || { top: 0, bottom: 0, left: 0, right: 0 };
-      const bleedSettings = { enabled: true, cover: coverMargins, body: margins };
-      setBleedEditorState({ ...state, bodyMargins: margins, currentStep: null, pendingExportOptions: null });
-      handleExport({ ...opts, bleedSettings });
-    }
-  };
-
-  // 断ち切りエディタ: スキップコールバック
-  const handleBleedSkip = () => {
-    const state = bleedEditorState;
-    if (state.currentStep === 'cover') {
-      if (state.bodyPsd) {
-        // 表紙スキップ → 本文PSDがあれば次へ
-        setBleedEditorState({ ...state, coverMargins: null, currentStep: 'body' });
-        return;
-      }
-      // 本文なし → 断ち切りなしでエクスポート
-      const opts = state.pendingExportOptions!;
-      setBleedEditorState({ ...state, currentStep: null, pendingExportOptions: null });
-      handleExport(opts);
-    } else {
-      // 本文スキップ → エクスポート実行
-      const opts = state.pendingExportOptions!;
-      if (state.coverMargins) {
-        const bleedSettings = { enabled: true, cover: state.coverMargins, body: { top: 0, bottom: 0, left: 0, right: 0 } };
-        setBleedEditorState({ ...state, bodyMargins: null, currentStep: null, pendingExportOptions: null });
-        handleExport({ ...opts, bleedSettings });
-      } else {
-        setBleedEditorState({ ...state, bodyMargins: null, currentStep: null, pendingExportOptions: null });
-        handleExport(opts);
-      }
-    }
-  };
-
-  // 断ち切りエディタ: キャンセル（エクスポート中止）
-  const handleBleedCancel = () => {
-    setBleedEditorState({
-      pendingExportOptions: null,
-      coverPsd: null,
-      bodyPsd: null,
-      currentStep: null,
-      coverMargins: null,
-      bodyMargins: null,
-    });
-  };
-
-  const handleExport = async (options: ExportOptions) => {
-    const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, convertToJpgPhotoshop, renameMode, startNumber, digits, prefix, perChapterSettings, bleedSettings } = options;
-
-    // TIFF変換モードの場合
-    if (convertToTiff) {
-      // PSD・JPEGファイルを抽出（Photoshopで開いてTIFFに変換）
-      // EPUB_maker連携用にページ情報も保持
-      const convertibleTypes = ['psd', 'jpg'];
-      const convertiblePages: { path: string; outputName: string; pageType: string; chapterType: string; chapterName?: string; label?: string }[] = [];
-
-      if (renameMode === 'unified') {
-        allPages.forEach((item, index) => {
-          if (item.page.fileType && convertibleTypes.includes(item.page.fileType) && item.page.filePath) {
-            convertiblePages.push({
-              path: item.page.filePath,
-              outputName: `${prefix}${String(startNumber + index).padStart(digits, '0')}.tif`,
-              pageType: item.page.pageType,
-              chapterType: item.chapter.type,
-              chapterName: item.chapter.name,
-              label: item.page.label,
-            });
-          }
-        });
-      } else {
-        for (const chapter of chapters) {
-          const settings = perChapterSettings[chapter.id] || { enabled: true, startNumber: 1, digits: 4, prefix: '' };
-          if (settings.enabled === false) continue;
-          chapter.pages.forEach((page, pageIndex) => {
-            if (page.fileType && convertibleTypes.includes(page.fileType) && page.filePath) {
-              convertiblePages.push({
-                path: page.filePath,
-                outputName: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}.tif`,
-                pageType: page.pageType,
-                chapterType: chapter.type,
-                chapterName: chapter.name,
-                label: page.label,
-              });
-            }
-          });
-        }
-      }
-
-      if (convertiblePages.length === 0) {
-        alert('変換可能なファイル（PSD・JPEG）がありません');
-        return;
-      }
-
-      try {
-        const config = {
-          globalSettings: {
-            flattenImage: true,
-          },
-          files: convertiblePages.map(p => ({
-            path: p.path,
-            outputPath: outputPath,
-            outputName: p.outputName,
-            ...(bleedSettings?.enabled && {
-              cropBounds: {
-                ...(p.chapterType === 'cover' ? bleedSettings.cover : bleedSettings.body),
-                isMargin: true,
-              },
-            }),
-          })),
-        };
-
-        console.log('TIFF変換開始:', { config, outputDir: outputPath });
-        const response = await invoke<{ results: { fileName: string; success: boolean; colorMode?: string; error?: string }[]; outputDir: string; jpgOutputDir?: string }>('run_photoshop_tiff_convert', {
-          config,
-          outputDir: outputPath,
-          jpgOutputDir: null,
-        });
-        console.log('TIFF変換完了:', response);
-
-        const successResults = response.results.filter(r => r.success);
-        const errorResults = response.results.filter(r => !r.success);
-
-        let details = '';
-        if (errorResults.length > 0) {
-          details = errorResults.map(r => `${r.fileName}: ${r.error}`).join('\n');
-          console.error('TIFF変換エラー:', details);
-        }
-
-        // EPUB_maker連携用のページ情報を生成
-        const exportedPages = convertiblePages.map(p => ({
-          filename: p.outputName,
-          pageType: p.pageType,
-          chapterName: p.chapterName,
-          label: p.label,
-        }));
-
-        // TIFF変換対象外のファイル（白紙、PNGなど）も同じ出力先にエクスポート
-        const nonConvertiblePages: { source_path: string | null; output_name: string; page_type: string }[] = [];
-
-        if (renameMode === 'unified') {
-          allPages.forEach((item, index) => {
-            if (!item.page.fileType || !convertibleTypes.includes(item.page.fileType)) {
-              nonConvertiblePages.push({
-                source_path: item.page.filePath || null,
-                output_name: `${prefix}${String(startNumber + index).padStart(digits, '0')}`,
-                page_type: item.page.pageType,
-              });
-            }
-          });
-        } else {
-          for (const chapter of chapters) {
-            const settings = perChapterSettings[chapter.id] || { enabled: true, startNumber: 1, digits: 4, prefix: '' };
-            if (settings.enabled === false) continue;
-            chapter.pages.forEach((page, pageIndex) => {
-              if (!page.fileType || !convertibleTypes.includes(page.fileType)) {
-                nonConvertiblePages.push({
-                  source_path: page.filePath || null,
-                  output_name: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}`,
-                  page_type: page.pageType,
-                });
-              }
-            });
-          }
-        }
-
-        if (nonConvertiblePages.length > 0) {
-          try {
-            await invoke<number>('export_pages', {
-              outputPath: response.outputDir,
-              pages: nonConvertiblePages,
-              moveFiles: exportMode === 'move',
-              convertToJpg: false,
-              jpgQuality: 100,
-            });
-          } catch (e) {
-            console.error('非変換対象ページのエクスポートエラー:', e);
-          }
-        }
-
-        const totalPages = successResults.length + nonConvertiblePages.length;
-        const message = `${totalPages}ページのエクスポートが完了しました`;
-
-        setExportResultDialog({
-          show: true,
-          title: errorResults.length > 0 ? 'エクスポート完了（一部エラー）' : 'エクスポート完了',
-          message,
-          details: errorResults.length > 0 ? `エラー: ${errorResults.length}件\n${details}` : undefined,
-          outputDir: response.outputDir,
-          isError: errorResults.length > 0,
-          exportedPages,
-        });
-      } catch (error) {
-        setExportResultDialog({
-          show: true,
-          title: 'TIFF変換エラー',
-          message: String(error),
-          isError: true,
-        });
-      }
-      return;
-    }
-
-    // PhotoshopでJPEG変換モードの場合
-    if (convertToJpgPhotoshop) {
-      // PSDファイルを抽出（Photoshopで開いてJPEGに変換）
-      // EPUB_maker連携用にページ情報も保持
-      const convertiblePages: { path: string; outputName: string; pageType: string; chapterType: string; chapterName?: string; label?: string }[] = [];
-
-      if (renameMode === 'unified') {
-        allPages.forEach((item, index) => {
-          if (item.page.fileType === 'psd' && item.page.filePath) {
-            convertiblePages.push({
-              path: item.page.filePath,
-              outputName: `${prefix}${String(startNumber + index).padStart(digits, '0')}.jpg`,
-              pageType: item.page.pageType,
-              chapterType: item.chapter.type,
-              chapterName: item.chapter.name,
-              label: item.page.label,
-            });
-          }
-        });
-      } else {
-        for (const chapter of chapters) {
-          const settings = perChapterSettings[chapter.id] || { enabled: true, startNumber: 1, digits: 4, prefix: '' };
-          if (settings.enabled === false) continue;
-          chapter.pages.forEach((page, pageIndex) => {
-            if (page.fileType === 'psd' && page.filePath) {
-              convertiblePages.push({
-                path: page.filePath,
-                outputName: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}.jpg`,
-                pageType: page.pageType,
-                chapterType: chapter.type,
-                chapterName: chapter.name,
-                label: page.label,
-              });
-            }
-          });
-        }
-      }
-
-      if (convertiblePages.length === 0) {
-        alert('変換可能なファイル（PSD）がありません');
-        return;
-      }
-
-      try {
-        const config = {
-          globalSettings: {
-            jpgQuality: 12,  // 最高品質
-          },
-          files: convertiblePages.map(p => ({
-            path: p.path,
-            outputPath: outputPath,
-            outputName: p.outputName,
-            ...(bleedSettings?.enabled && {
-              cropBounds: {
-                ...(p.chapterType === 'cover' ? bleedSettings.cover : bleedSettings.body),
-                isMargin: true,
-              },
-            }),
-          })),
-        };
-
-        console.log('JPEG変換開始:', { config, outputDir: outputPath });
-        const response = await invoke<{ results: { fileName: string; success: boolean; error?: string }[]; outputDir: string }>('run_photoshop_jpeg_convert', {
-          config,
-          outputDir: outputPath,
-        });
-        console.log('JPEG変換完了:', response);
-
-        const successResults = response.results.filter(r => r.success);
-        const errorResults = response.results.filter(r => !r.success);
-
-        let details = '';
-        if (errorResults.length > 0) {
-          details = errorResults.map(r => `${r.fileName}: ${r.error}`).join('\n');
-          console.error('JPEG変換エラー:', details);
-        }
-
-        // EPUB_maker連携用のページ情報を生成
-        const exportedPages = convertiblePages.map(p => ({
-          filename: p.outputName,
-          pageType: p.pageType,
-          chapterName: p.chapterName,
-          label: p.label,
-        }));
-
-        // PSD以外のファイル（白紙、その他画像）も同じ出力先にエクスポート
-        const nonPsdPages: { source_path: string | null; output_name: string; page_type: string }[] = [];
-
-        if (renameMode === 'unified') {
-          allPages.forEach((item, index) => {
-            if (item.page.fileType !== 'psd') {
-              nonPsdPages.push({
-                source_path: item.page.filePath || null,
-                output_name: `${prefix}${String(startNumber + index).padStart(digits, '0')}`,
-                page_type: item.page.pageType,
-              });
-            }
-          });
-        } else {
-          for (const chapter of chapters) {
-            const settings = perChapterSettings[chapter.id] || { enabled: true, startNumber: 1, digits: 4, prefix: '' };
-            if (settings.enabled === false) continue;
-            chapter.pages.forEach((page, pageIndex) => {
-              if (page.fileType !== 'psd') {
-                nonPsdPages.push({
-                  source_path: page.filePath || null,
-                  output_name: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}`,
-                  page_type: page.pageType,
-                });
-              }
-            });
-          }
-        }
-
-        if (nonPsdPages.length > 0) {
-          try {
-            await invoke<number>('export_pages', {
-              outputPath: response.outputDir,
-              pages: nonPsdPages,
-              moveFiles: exportMode === 'move',
-              convertToJpg: false,
-              jpgQuality: 100,
-            });
-          } catch (e) {
-            console.error('非PSDページのエクスポートエラー:', e);
-          }
-        }
-
-        const totalPages = successResults.length + nonPsdPages.length;
-        const message = `${totalPages}ページのエクスポートが完了しました`;
-
-        setExportResultDialog({
-          show: true,
-          title: errorResults.length > 0 ? 'エクスポート完了（一部エラー）' : 'エクスポート完了',
-          message,
-          details: errorResults.length > 0 ? `エラー: ${errorResults.length}件\n${details}` : undefined,
-          outputDir: response.outputDir,
-          isError: errorResults.length > 0,
-          exportedPages,
-        });
-      } catch (error) {
-        setExportResultDialog({
-          show: true,
-          title: 'JPEG変換エラー',
-          message: String(error),
-          isError: true,
-        });
-      }
-      return;
-    }
-
-    // 通常のエクスポート処理
-    // エクスポートページを生成（EPUB_maker連携用にchapterName, labelも保持）
-    let exportPages: { source_path: string | null; output_name: string; page_type: string; subfolder?: string; chapter_name?: string; label?: string; file_type?: string }[] = [];
-
-    if (renameMode === 'unified') {
-      // 一括設定: 全ページを通し番号でリネーム
-      exportPages = allPages.map((item, index) => ({
-        source_path: item.page.filePath || null,
-        output_name: `${prefix}${String(startNumber + index).padStart(digits, '0')}`,
-        page_type: item.page.pageType,
-        chapter_name: item.chapter.name,
-        label: item.page.label,
-        file_type: item.page.fileType,
-      }));
-    } else {
-      // チャプターごとの設定: 各チャプター内で個別にリネーム、サブフォルダに出力
-      for (const chapter of chapters) {
-        const settings = perChapterSettings[chapter.id] || { enabled: true, startNumber: 1, digits: 4, prefix: '' };
-        // 無効なチャプターはスキップ
-        if (settings.enabled === false) continue;
-        chapter.pages.forEach((page, pageIndex) => {
-          exportPages.push({
-            source_path: page.filePath || null,
-            output_name: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}`,
-            page_type: page.pageType,
-            subfolder: chapter.name, // チャプター名をサブフォルダとして使用
-            chapter_name: chapter.name,
-            label: page.label,
-            file_type: page.fileType,
-          });
-        });
-      }
-    }
-
-    try {
-      const count = await invoke<number>('export_pages', {
-        outputPath,
-        pages: exportPages,
-        moveFiles: exportMode === 'move',
-        convertToJpg,
-        jpgQuality,
-      });
-
-      const message = `${count}ページのエクスポートが完了しました`;
-
-      // EPUB_maker連携用のページ情報を生成
-      const exportedPages = exportPages.map((p) => {
-        // 拡張子を決定: JPG変換時は.jpg、それ以外は元のファイルタイプ
-        const ext = convertToJpg ? 'jpg' : (p.file_type || 'jpg');
-        return {
-          filename: `${p.output_name}.${ext}`,
-          pageType: p.page_type,
-          chapterName: p.chapter_name,
-          label: p.label,
-        };
-      });
-
-      setExportResultDialog({
-        show: true,
-        title: 'エクスポート完了',
-        message,
-        outputDir: outputPath,
-        isError: false,
-        exportedPages,
-      });
-    } catch (error) {
-      setExportResultDialog({
-        show: true,
-        title: 'エクスポートエラー',
-        message: String(error),
-        isError: true,
-      });
-    }
-  };
-
-  const handleDragStart = (event: DragStartEvent) => {
-    const { active } = event;
-    const activeIdStr = active.id as string;
-    setActiveId(activeIdStr);
-
-    const isChapter = chapters.some((c) => c.id === activeIdStr);
-    setActiveDragType(isChapter ? 'chapter' : 'page');
-
-    // ページドラッグの場合、複数選択をチェック
-    if (!isChapter) {
-      const isSidebarDrag = activeIdStr.startsWith(SIDEBAR_PREFIX);
-      const actualPageId = isSidebarDrag ? activeIdStr.replace(SIDEBAR_PREFIX, '') : activeIdStr;
-
-      // ドラッグしたページが選択中のページに含まれている場合、選択中のページすべてをドラッグ
-      if (selectedPageIds.length > 1 && selectedPageIds.includes(actualPageId)) {
-        setDraggedPageIds(selectedPageIds);
-      } else {
-        setDraggedPageIds([actualPageId]);
-      }
-    } else {
-      setDraggedPageIds([]);
-    }
-  };
-
-  const handleDragOver = (event: DragOverEvent) => {
-    const { active, over } = event;
-    if (!over || active.id === over.id) {
-      setDropTarget(null);
-      return;
-    }
-
-    const overIdStr = String(over.id);
-
-    // ドラッグ中のアイテムの現在位置（中央）を計算
-    const activeRect = active.rect.current.translated;
-    const activeCenterY = activeRect ? activeRect.top + activeRect.height / 2 : 0;
-
-    // チャプタードラッグの場合
-    if (activeDragType === 'chapter') {
-      // 特殊ドロップゾーンのチェック
-      if (overIdStr === CHAPTER_REORDER_DROP_ZONE_START_ID) {
-        setDropTarget({ type: 'chapter-before', chapterId: chapters[0]?.id || '' });
-        return;
-      }
-      if (overIdStr === CHAPTER_REORDER_DROP_ZONE_END_ID) {
-        setDropTarget({ type: 'chapter-after', chapterId: chapters[chapters.length - 1]?.id || '' });
-        return;
-      }
-
-      // チャプター上にホバー（サイドバー）
-      const isChapterId = chapters.some(c => c.id === overIdStr);
-      if (isChapterId) {
-        // ドラッグ中のアイテムの中央位置とover要素の中央を比較
-        const overRect = over.rect;
-        const overCenterY = overRect.top + overRect.height / 2;
-        // ドラッグアイテムの中央がover要素の中央より上なら「前」、下なら「後」
-        const insertType = activeCenterY < overCenterY ? 'chapter-before' : 'chapter-after';
-        setDropTarget({ type: insertType, chapterId: overIdStr });
-      } else {
-        setDropTarget(null);
-      }
-      return;
-    }
-
-    // ページドラッグの場合
-    const activeIdStr = String(active.id);
-    const isSidebarDrag = activeIdStr.startsWith(SIDEBAR_PREFIX);
-    const isOverSidebar = overIdStr.startsWith(SIDEBAR_PREFIX);
-
-    // 新規チャプターゾーンへのドロップ
-    if (overIdStr === SIDEBAR_NEW_CHAPTER_DROP_ZONE_START_ID || overIdStr === NEW_CHAPTER_DROP_ZONE_START_ID) {
-      setDropTarget({ type: 'new-chapter-start', chapterId: '' });
-      return;
-    }
-    if (overIdStr === SIDEBAR_NEW_CHAPTER_DROP_ZONE_ID || overIdStr === NEW_CHAPTER_DROP_ZONE_ID) {
-      setDropTarget({ type: 'new-chapter-end', chapterId: '' });
-      return;
-    }
-
-    // サイドバーとプレビュー間のドラッグは無視
-    if (isSidebarDrag !== isOverSidebar) {
-      setDropTarget(null);
-      return;
-    }
-
-    const actualActiveId = isSidebarDrag ? activeIdStr.replace(SIDEBAR_PREFIX, '') : activeIdStr;
-    const actualOverId = isOverSidebar ? overIdStr.replace(SIDEBAR_PREFIX, '') : overIdStr;
-
-    const activePage = allPages.find((p) => p.page.id === actualActiveId);
-    const overPage = allPages.find((p) => p.page.id === actualOverId);
-
-    if (activePage && overPage) {
-      // ドラッグ中のアイテムの中央位置とover要素の中央を比較
-      const overRect = over.rect;
-      const overCenterY = overRect.top + overRect.height / 2;
-
-      // ドラッグアイテムの中央がover要素の中央より上なら「前」、下なら「後」
-      const insertType = activeCenterY < overCenterY ? 'page-before' : 'page-after';
-      setDropTarget({ type: insertType, chapterId: overPage.chapter.id, pageId: actualOverId });
-    } else {
-      setDropTarget(null);
-    }
-  };
-
-  const handleDragEnd = (event: DragEndEvent) => {
-    const { active } = event;
-
-    // dropTargetがない場合は何もしない
-    if (!dropTarget) {
-      setActiveId(null);
-      setActiveDragType(null);
-      setDropTarget(null);
-      return;
-    }
-
-    // チャプターの並べ替え
-    if (activeDragType === 'chapter') {
-      const activeIdStr = String(active.id);
-
-      const oldIndex = chapters.findIndex((c) => c.id === activeIdStr);
-      if (oldIndex === -1) {
-        setActiveId(null);
-        setActiveDragType(null);
-        setDropTarget(null);
-        return;
-      }
-
-      if (dropTarget.type === 'chapter-before' || dropTarget.type === 'chapter-after') {
-        const targetIndex = chapters.findIndex((c) => c.id === dropTarget.chapterId);
-        if (targetIndex !== -1) {
-          const newIndex = dropTarget.type === 'chapter-after' ? targetIndex + 1 : targetIndex;
-          // 自分より後ろに移動する場合は、自分が抜けた分を考慮
-          const adjustedIndex = newIndex > oldIndex ? newIndex - 1 : newIndex;
-          // 実際に位置が変わる場合のみ移動
-          if (adjustedIndex !== oldIndex) {
-            reorderChapters(oldIndex, adjustedIndex);
-          }
-        }
-      }
-
-      setActiveId(null);
-      setActiveDragType(null);
-      setDropTarget(null);
-      return;
-    }
-
-    // ページのドラッグ処理
-    if (activeDragType === 'page') {
-      const activeIdStr = String(active.id);
-      const isSidebarDrag = activeIdStr.startsWith(SIDEBAR_PREFIX);
-      const actualActiveId = isSidebarDrag ? activeIdStr.replace(SIDEBAR_PREFIX, '') : activeIdStr;
-      const activePage = allPages.find((p) => p.page.id === actualActiveId);
-
-      if (!activePage) {
-        setActiveId(null);
-        setActiveDragType(null);
-        setDropTarget(null);
-        return;
-      }
-
-      // 複数ページドラッグの場合
-      const isMultiDrag = draggedPageIds.length > 1;
-
-      // 新規チャプターへのドロップ
-      if (dropTarget.type === 'new-chapter-start' || dropTarget.type === 'new-chapter-end') {
-        const page = activePage.page;
-
-        const chapterType: ChapterType = page.pageType !== 'file'
-          ? (page.pageType as ChapterType)
-          : 'chapter';
-
-        const insertAt = dropTarget.type === 'new-chapter-start' ? 0 : undefined;
-        const newChapterId = addChapter(chapterType, undefined, true, insertAt);
-
-        if (isMultiDrag) {
-          movePages(draggedPageIds, newChapterId, 0);
-        } else {
-          movePage(activePage.chapter.id, newChapterId, actualActiveId, 0);
-        }
-        selectChapter(newChapterId);
-
-        setActiveId(null);
-        setActiveDragType(null);
-        setDropTarget(null);
-        setDraggedPageIds([]);
-        return;
-      }
-
-      // 通常のページ移動（page-before / page-after）
-      if ((dropTarget.type === 'page-before' || dropTarget.type === 'page-after') && dropTarget.pageId) {
-        const toChapterId = dropTarget.chapterId;
-        const targetChapter = chapters.find(c => c.id === toChapterId);
-
-        if (targetChapter) {
-          const targetPageIndex = targetChapter.pages.findIndex(p => p.id === dropTarget.pageId);
-          let newIndex = dropTarget.type === 'page-after' ? targetPageIndex + 1 : targetPageIndex;
-
-          if (isMultiDrag) {
-            // 複数ページ移動
-            // ドロップ先にドラッグ中のページが含まれている場合、調整が必要
-            const draggedPagesBeforeTarget = draggedPageIds.filter(id => {
-              const page = targetChapter.pages.find(p => p.id === id);
-              if (!page) return false;
-              const pageIndex = targetChapter.pages.indexOf(page);
-              return pageIndex < targetPageIndex;
-            }).length;
-            newIndex = Math.max(0, newIndex - draggedPagesBeforeTarget);
-            movePages(draggedPageIds, toChapterId, newIndex);
-          } else {
-            // 単一ページ移動
-            const fromChapterId = activePage.chapter.id;
-            if (fromChapterId === toChapterId) {
-              // 同じチャプター内での並べ替え
-              const sourceIndex = targetChapter.pages.findIndex(p => p.id === actualActiveId);
-              if (sourceIndex !== -1 && targetPageIndex !== -1 && sourceIndex !== targetPageIndex) {
-                // 自分より後ろに移動する場合は、自分が抜けた分を考慮
-                if (newIndex > sourceIndex) newIndex -= 1;
-                reorderPages(toChapterId, sourceIndex, newIndex);
-              }
-            } else {
-              // 異なるチャプター間の移動
-              movePage(fromChapterId, toChapterId, actualActiveId, newIndex);
-            }
-          }
-        }
-      }
-
-      // チャプター末尾へのドロップ
-      if (dropTarget.type === 'chapter-end') {
-        const toChapterId = dropTarget.chapterId;
-        const targetChapter = chapters.find(c => c.id === toChapterId);
-        if (targetChapter) {
-          if (isMultiDrag) {
-            // 複数ページ移動
-            movePages(draggedPageIds, toChapterId, targetChapter.pages.length);
-          } else {
-            // 単一ページ移動
-            const fromChapterId = activePage.chapter.id;
-            if (fromChapterId !== toChapterId) {
-              movePage(fromChapterId, toChapterId, actualActiveId, targetChapter.pages.length);
-            }
-          }
-        }
-      }
-    }
-
-    setActiveId(null);
-    setActiveDragType(null);
-    setDropTarget(null);
-    setDraggedPageIds([]);
-  };
 
   const displayPages = allPages;
 
@@ -1745,13 +1028,19 @@ function App() {
         return;
       }
 
-      // ファイル情報を取得
-      const folderPath = imagePaths[0].replace(/[^\\/]+$/, '');
-      const files: FileInfo[] = await invoke('get_folder_contents', {
-        folderPath,
-      });
+      // ファイル情報を取得（複数フォルダ対応）
+      const folderSet = new Set<string>();
+      for (const p of imagePaths) {
+        const folder = p.replace(/[^\\/]+$/, '');
+        if (folder) folderSet.add(folder);
+      }
+      let allDropFiles: FileInfo[] = [];
+      for (const folder of folderSet) {
+        const files: FileInfo[] = await invoke('get_folder_contents', { folderPath: folder });
+        allDropFiles.push(...files);
+      }
 
-      const droppedFiles = files.filter((f) =>
+      const droppedFiles = allDropFiles.filter((f) =>
         imagePaths.some((p) => p === f.path)
       );
 
@@ -1813,89 +1102,7 @@ function App() {
   };
 
   // Tauri ファイルドロップイベントリスナー（windowオブジェクトで一度だけ登録）
-  useEffect(() => {
-    // windowオブジェクトでチェック（HMRでも永続化される）
-    if (window.__dropListenersSetup) {
-      console.log('Window listeners already setup, skipping...');
-      return;
-    }
-    window.__dropListenersSetup = true;
-
-    const setupListeners = async () => {
-      // ドロップイベント (Tauri v2)
-      await listen<{ paths: string[]; position: { x: number; y: number } }>('tauri://drag-drop', (event) => {
-        console.log('Drop event received:', event.payload);
-
-        // ドロップ時の位置から直接ドロップ情報を取得（より正確）
-        const { x, y } = event.payload.position;
-        const dropInfo = window.__getDropInfoFromPosition?.(x, y) || { pageId: null, chapterId: null, mode: null, insertPosition: null };
-
-        console.log('Drop info at position:', x, y, dropInfo);
-
-        const targetPageId = dropInfo.pageId;
-        const mode = dropInfo.mode;
-        const targetChapterId = dropInfo.chapterId;
-        const insertPos = dropInfo.insertPosition;
-
-        // UIをリセット
-        window.__setIsDraggingFiles?.(false);
-        window.__setFileDropTargetPageId?.(null);
-        window.__setFileDropMode?.(null);
-        window.__setFileDropTargetChapterId?.(null);
-        window.__setInsertPosition?.(null);
-        window.__fileDropTargetPageId = null;
-        window.__fileDropMode = null;
-        window.__fileDropTargetChapterId = null;
-        window.__insertPosition = null;
-
-        window.__dropHandler?.(event.payload.paths, targetPageId, mode, targetChapterId, insertPos);
-      });
-
-      // ドラッグ開始イベント
-      await listen('tauri://drag-enter', () => {
-        window.__setIsDraggingFiles?.(true);
-      });
-
-      // ドラッグ終了イベント
-      await listen('tauri://drag-leave', () => {
-        window.__setIsDraggingFiles?.(false);
-        window.__setFileDropTargetPageId?.(null);
-        window.__setFileDropMode?.(null);
-        window.__setFileDropTargetChapterId?.(null);
-        window.__setInsertPosition?.(null);
-        window.__fileDropTargetPageId = null;
-        window.__fileDropMode = null;
-        window.__fileDropTargetChapterId = null;
-        window.__insertPosition = null;
-      });
-
-      // ドラッグオーバーイベント（位置追跡用 + 自動スクロール）
-      await listen<{ paths: string[]; position: { x: number; y: number } }>('tauri://drag-over', (event) => {
-        const { x, y } = event.payload.position;
-
-        // 自動スクロール（エッジ付近でスクロール）
-        window.__autoScrollPreview?.(x, y);
-
-        const dropInfo = window.__getDropInfoFromPosition?.(x, y) || { pageId: null, chapterId: null, mode: null, insertPosition: null };
-
-        window.__fileDropTargetPageId = dropInfo.pageId;
-        window.__fileDropMode = dropInfo.mode;
-        window.__fileDropTargetChapterId = dropInfo.chapterId;
-        window.__insertPosition = dropInfo.insertPosition;
-
-        window.__setFileDropTargetPageId?.(dropInfo.pageId);
-        window.__setFileDropMode?.(dropInfo.mode);
-        window.__setFileDropTargetChapterId?.(dropInfo.chapterId);
-        window.__setInsertPosition?.(dropInfo.insertPosition);
-      });
-
-      console.log('Window drop listeners setup complete');
-    };
-
-    setupListeners();
-
-    // クリーンアップは不要（アプリ全体で一度だけ登録）
-  }, []);
+  useTauriFileDrop();
 
   return (
     <>
@@ -2088,7 +1295,17 @@ function App() {
 
               <button
                 className="export-btn"
-                onClick={() => setIsExportModalOpen(true)}
+                onClick={handleSaveProject}
+                title="保存 (Ctrl+S)"
+                disabled={!isModified}
+                style={{ width: 32, height: 32, border: '1px solid var(--color-border)', borderRadius: '25%' }}
+              >
+                <SaveIcon size={16} />
+              </button>
+
+              <button
+                className="export-btn"
+                onClick={() => openExportModal()}
                 title="エクスポート"
                 disabled={allPages.length === 0}
               >
@@ -2526,7 +1743,7 @@ function App() {
 
       <ExportModal
         isOpen={isExportModalOpen}
-        onClose={() => setIsExportModalOpen(false)}
+        onClose={closeExportModal}
         onExport={handlePreExport}
         chapters={chapters}
       />
@@ -2565,14 +1782,17 @@ function App() {
       {showUnsavedDialog && (
         <div className="modal-overlay">
           <div className="modal-content unsaved-dialog">
-            <h2>変更を破棄しますか？</h2>
-            <p>「{projectName}」への変更は失われます。</p>
+            <h2>未保存の変更があります</h2>
+            <p>「{projectName}」への変更を保存しますか？</p>
             <div className="modal-footer">
               <button className="btn-secondary btn-small" onClick={() => handleUnsavedDialogAction('cancel')}>
                 キャンセル
               </button>
               <button className="btn-danger btn-small" onClick={() => handleUnsavedDialogAction('discard')}>
                 破棄する
+              </button>
+              <button className="btn-primary btn-small" onClick={() => handleUnsavedDialogAction('save')}>
+                保存
               </button>
             </div>
           </div>
@@ -2637,7 +1857,7 @@ function App() {
                 <button
                   className="btn-epub btn-small"
                   onClick={() => {
-                    setExportResultDialog({ show: false, title: '', message: '' });
+                    closeExportResultDialog();
                     setIsEpubModalOpen(true);
                   }}
                 >
@@ -2647,7 +1867,7 @@ function App() {
               )}
               <button
                 className="btn-primary btn-small"
-                onClick={() => setExportResultDialog({ show: false, title: '', message: '' })}
+                onClick={closeExportResultDialog}
               >
                 閉じる
               </button>
