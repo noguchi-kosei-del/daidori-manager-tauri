@@ -1,6 +1,6 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { open } from '@tauri-apps/plugin-dialog';
 import { useTauriFileDrop } from './hooks/useTauriFileDrop';
 import {
   DndContext,
@@ -13,7 +13,7 @@ import {
 } from '@dnd-kit/sortable';
 import { useStore, FileInfo, THUMBNAIL_SIZES, ThumbnailSize } from './store';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useWindowCloseHandler, useKeyboardShortcuts, useDragHandlers, useExport } from './hooks';
+import { useKeyboardShortcuts, useDragHandlers, useExport } from './hooks';
 import {
   Chapter,
   ChapterType,
@@ -22,9 +22,6 @@ import {
   Page,
   PageType,
   DaidoriProjectFile,
-  SavedChapter,
-  SavedPage,
-  SavedFileReference,
   FileValidationResult,
 } from './types';
 import {
@@ -52,7 +49,6 @@ import {
   BindingLeftIcon,
   CheckIcon2,
   NoPageIcon,
-  SaveIcon,
 } from './icons';
 
 // 抽出したコンポーネント
@@ -84,9 +80,7 @@ function App() {
     selectedPageIds,
     thumbnailSize,
     // プロジェクト状態
-    currentProjectPath,
     projectName,
-    isModified,
     // チャプター管理
     addChapter,
     removeChapter,
@@ -175,9 +169,6 @@ function App() {
 
 
   // プロジェクト関連のstate
-  const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
-  const [pendingAction, setPendingAction] = useState<'new' | 'open' | 'close' | null>(null);
-  const [pendingOpenPath, setPendingOpenPath] = useState<string | null>(null);
   const [missingFiles, setMissingFiles] = useState<FileValidationResult[]>([]);
   const [showMissingFilesDialog, setShowMissingFilesDialog] = useState(false);
   const [deleteConfirmDialog, setDeleteConfirmDialog] = useState<{
@@ -247,93 +238,6 @@ function App() {
     }));
   };
 
-  // 現在の状態をプロジェクトファイル形式に変換（loadFromProjectFileの逆）
-  const buildProjectFile = (savePath: string): DaidoriProjectFile => {
-    const basePath = savePath.replace(/[\\\/][^\\\/]+$/, '');
-    const savedChapters: SavedChapter[] = chapters.map(ch => ({
-      id: ch.id,
-      name: ch.name,
-      type: ch.type,
-      folderPath: ch.folderPath,
-      pages: ch.pages.map(page => {
-        const savedPage: SavedPage = {
-          id: page.id,
-          pageType: page.pageType,
-          label: page.label,
-        };
-        if (page.filePath && page.fileName) {
-          // 相対パスを計算
-          let relativePath = page.filePath;
-          if (page.filePath.startsWith(basePath)) {
-            relativePath = page.filePath.slice(basePath.length).replace(/^[\\\/]/, '');
-          }
-          const fileRef: SavedFileReference = {
-            absolutePath: page.filePath,
-            relativePath,
-            fileName: page.fileName,
-            fileType: page.fileType || 'png',
-            fileSize: page.fileSize || 0,
-            modifiedTime: page.modifiedTime || 0,
-          };
-          savedPage.file = fileRef;
-        }
-        return savedPage;
-      }),
-    }));
-
-    return {
-      version: '1.0',
-      name: projectName,
-      createdAt: new Date().toISOString(),
-      modifiedAt: new Date().toISOString(),
-      basePath,
-      chapters: savedChapters,
-      uiState: {
-        selectedChapterId,
-        selectedPageId,
-        viewMode: 'all',
-        thumbnailSize,
-        collapsedChapterIds: chapters.filter(c => c.collapsed).map(c => c.id),
-      },
-    };
-  };
-
-  // プロジェクト保存
-  const handleSaveProject = async () => {
-    if (currentProjectPath) {
-      try {
-        const project = buildProjectFile(currentProjectPath);
-        await invoke('save_project', { filePath: currentProjectPath, project });
-        markAsSaved(currentProjectPath);
-      } catch (error) {
-        console.error('保存エラー:', error);
-        alert(`保存に失敗しました: ${error}`);
-      }
-    } else {
-      await handleSaveProjectAs();
-    }
-  };
-
-  // 名前を付けて保存
-  const handleSaveProjectAs = async () => {
-    try {
-      const filePath = await save({
-        filters: [{ name: '台割プロジェクト', extensions: ['daidori'] }],
-        defaultPath: currentProjectPath || `${projectName}.daidori`,
-      });
-      if (!filePath) return;
-
-      const project = buildProjectFile(filePath);
-      await invoke('save_project', { filePath, project });
-      markAsSaved(filePath);
-      const name = filePath.split(/[\\\/]/).pop()?.replace(/\.daidori$/, '') || projectName;
-      await invoke('add_recent_file', { path: filePath, name });
-    } catch (error) {
-      console.error('保存エラー:', error);
-      alert(`保存に失敗しました: ${error}`);
-    }
-  };
-
   // プロジェクト読み込み
   const handleOpenProject = async (filePath?: string) => {
     try {
@@ -384,39 +288,7 @@ function App() {
 
   // 新規プロジェクト
   const handleNewProject = () => {
-    if (isModified) {
-      setPendingAction('new');
-      setShowUnsavedDialog(true);
-    } else {
-      resetProject();
-    }
-  };
-
-
-  // 未保存確認後のアクション実行
-  const handleUnsavedDialogAction = async (action: 'save' | 'discard' | 'cancel') => {
-    setShowUnsavedDialog(false);
-    if (action === 'cancel') {
-      setPendingAction(null);
-      setPendingOpenPath(null);
-      return;
-    }
-
-    // 保存してから続行
-    if (action === 'save') {
-      await handleSaveProject();
-    }
-
-    if (pendingAction === 'new') {
-      resetProject();
-    } else if (pendingAction === 'open') {
-      await handleOpenProject(pendingOpenPath || undefined);
-    } else if (pendingAction === 'close') {
-      await getCurrentWindow().destroy();
-    }
-
-    setPendingAction(null);
-    setPendingOpenPath(null);
+    resetProject();
   };
 
 
@@ -488,13 +360,6 @@ function App() {
     setIsDarkMode(!isDarkMode);
   };
 
-  // ウィンドウ終了時の未保存確認
-  const handleWindowClose = useCallback(() => {
-    setPendingAction('close');
-    setShowUnsavedDialog(true);
-  }, []);
-  useWindowCloseHandler(isModified, handleWindowClose);
-
   // チャプター削除（確認ダイアログ付き）
   const handleDeleteChapter = useCallback((chapterId: string) => {
     const chapter = chapters.find(c => c.id === chapterId);
@@ -529,7 +394,6 @@ function App() {
     chapters,
     allPages,
     previewMode,
-    isModified,
     removePage,
     removeSelectedPages,
     selectChapter,
@@ -540,10 +404,6 @@ function App() {
     handleNewProject,
     handleOpenProject,
     setIsViewerMode,
-    setPendingAction,
-    setShowUnsavedDialog,
-    onSave: handleSaveProject,
-    onSaveAs: handleSaveProjectAs,
   });
 
   const {
@@ -1295,16 +1155,6 @@ function App() {
 
               <button
                 className="export-btn"
-                onClick={handleSaveProject}
-                title="保存 (Ctrl+S)"
-                disabled={!isModified}
-                style={{ width: 32, height: 32, border: '1px solid var(--color-border)', borderRadius: '25%' }}
-              >
-                <SaveIcon size={16} />
-              </button>
-
-              <button
-                className="export-btn"
                 onClick={() => openExportModal()}
                 title="エクスポート"
                 disabled={allPages.length === 0}
@@ -1777,27 +1627,6 @@ function App() {
         chapters={chapters}
         projectName={projectName}
       />
-
-      {/* 未保存確認ダイアログ */}
-      {showUnsavedDialog && (
-        <div className="modal-overlay">
-          <div className="modal-content unsaved-dialog">
-            <h2>未保存の変更があります</h2>
-            <p>「{projectName}」への変更を保存しますか？</p>
-            <div className="modal-footer">
-              <button className="btn-secondary btn-small" onClick={() => handleUnsavedDialogAction('cancel')}>
-                キャンセル
-              </button>
-              <button className="btn-danger btn-small" onClick={() => handleUnsavedDialogAction('discard')}>
-                破棄する
-              </button>
-              <button className="btn-primary btn-small" onClick={() => handleUnsavedDialogAction('save')}>
-                保存
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* 欠落ファイルダイアログ */}
       {showMissingFilesDialog && missingFiles.length > 0 && (

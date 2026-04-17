@@ -949,3 +949,27 @@ files: [{
 
 #### 依存関係追加
 - `memmap2 = "0.9"` (Cargo.toml)
+
+### 2026-04-17: 保存機能削除
+
+#### 保存ボタン・保存関連機能の完全削除（App.tsx）
+- ツールバーの保存ボタン（`SaveIcon` + `handleSaveProject`）を削除
+- `handleSaveProject` / `handleSaveProjectAs` / `buildProjectFile` 関数を削除
+- 未保存変更確認ダイアログ（`showUnsavedDialog`）と `handleUnsavedDialogAction` を削除
+- ウィンドウ終了時の未保存確認（`handleWindowClose`）を削除
+- 関連state削除: `showUnsavedDialog`, `pendingAction`, `pendingOpenPath`
+- `handleNewProject` を単純に `resetProject()` を呼ぶだけに簡略化
+- 未使用import削除: `save` (`@tauri-apps/plugin-dialog`), `SaveIcon`, `SavedChapter`, `SavedPage`, `SavedFileReference`, `useWindowCloseHandler`, `isModified`, `currentProjectPath`
+
+#### キーボードショートカット整理（hooks/useKeyboardShortcuts.ts）
+- `Ctrl+S` / `Ctrl+Shift+S`（保存・名前を付けて保存）ショートカットを削除
+- `Ctrl+O` から未保存確認の分岐を除去し、直接 `handleOpenProject()` を呼ぶ形に
+- `UseKeyboardShortcutsOptions` から `isModified`, `setPendingAction`, `setShowUnsavedDialog`, `onSave`, `onSaveAs` を削除
+
+#### useWindowCloseHandler 削除
+- `src/hooks/useWindowCloseHandler.ts` をファイルごと削除
+- `src/hooks/index.ts` からエクスポートを削除
+
+#### 備考
+- store側の `isModified` / `markAsSaved` / `currentProjectPath` / `lastSavedAt` はプロジェクト読み込み時の状態設定に引き続き使用（`handleOpenProject` 内で `markAsSaved(openPath)` を呼ぶ）
+- 保存機能は完全に削除されたため、`save_project` Tauriコマンドは現状呼び出されないがバックエンド側には残存（将来復活時に備えて保持）

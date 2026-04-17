@@ -15,7 +15,6 @@ interface UseKeyboardShortcutsOptions {
   chapters: Chapter[];
   allPages: PageWithContext[];
   previewMode: 'grid' | 'spread' | 'epub';
-  isModified: boolean;
 
   // アクション
   removePage: (chapterId: string, pageId: string) => void;
@@ -28,10 +27,6 @@ interface UseKeyboardShortcutsOptions {
   handleNewProject: () => void;
   handleOpenProject: () => Promise<void>;
   setIsViewerMode: (value: boolean | ((prev: boolean) => boolean)) => void;
-  setPendingAction: (action: 'new' | 'open' | 'close' | null) => void;
-  setShowUnsavedDialog: (show: boolean) => void;
-  onSave?: () => void;
-  onSaveAs?: () => void;
 }
 
 /**
@@ -45,7 +40,6 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
     chapters,
     allPages,
     previewMode,
-    isModified,
     removePage,
     removeSelectedPages,
     selectChapter,
@@ -56,8 +50,6 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
     handleNewProject,
     handleOpenProject,
     setIsViewerMode,
-    setPendingAction,
-    setShowUnsavedDialog,
   } = options;
 
   useEffect(() => {
@@ -79,17 +71,6 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
         return;
       }
 
-      // Ctrl+S: 保存 / Ctrl+Shift+S: 名前を付けて保存
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        e.preventDefault();
-        if (e.shiftKey) {
-          options.onSaveAs?.();
-        } else {
-          options.onSave?.();
-        }
-        return;
-      }
-
       // Ctrl+N: 新規プロジェクト
       if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
         e.preventDefault();
@@ -100,12 +81,7 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
       // Ctrl+O: プロジェクトを開く
       if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
         e.preventDefault();
-        if (isModified) {
-          setPendingAction('open');
-          setShowUnsavedDialog(true);
-        } else {
-          handleOpenProject();
-        }
+        handleOpenProject();
         return;
       }
 
@@ -199,7 +175,6 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
     chapters,
     allPages,
     previewMode,
-    isModified,
     removePage,
     removeSelectedPages,
     selectChapter,
@@ -210,7 +185,5 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
     handleNewProject,
     handleOpenProject,
     setIsViewerMode,
-    setPendingAction,
-    setShowUnsavedDialog,
   ]);
 }
