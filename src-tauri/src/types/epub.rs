@@ -13,6 +13,14 @@ pub enum EpubFormat {
     Oebps,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum HybridCssProfile {
+    #[default]
+    Current,
+    Legacy,
+}
+
 impl EpubFormat {
     /// 形式に応じたデフォルトビューポートサイズを返す
     pub fn default_viewport(&self) -> (u32, u32) {
@@ -20,46 +28,6 @@ impl EpubFormat {
             EpubFormat::Kadokawa => (1442, 2048),
             EpubFormat::Hybrid => (1127, 1600),
             EpubFormat::Oebps => (1352, 1920),
-        }
-    }
-
-    /// OPFファイル名を返す
-    pub fn opf_filename(&self) -> &'static str {
-        match self {
-            EpubFormat::Kadokawa | EpubFormat::Hybrid => "standard.opf",
-            EpubFormat::Oebps => "content.opf",
-        }
-    }
-
-    /// コンテンツルートフォルダを返す
-    pub fn content_folder(&self) -> &'static str {
-        match self {
-            EpubFormat::Kadokawa | EpubFormat::Hybrid => "item",
-            EpubFormat::Oebps => "OEBPS",
-        }
-    }
-
-    /// 画像フォルダのパスを返す
-    pub fn image_folder(&self) -> &'static str {
-        match self {
-            EpubFormat::Kadokawa | EpubFormat::Hybrid => "item/image",
-            EpubFormat::Oebps => "OEBPS/images",
-        }
-    }
-
-    /// XHTMLフォルダのパスを返す
-    pub fn xhtml_folder(&self) -> &'static str {
-        match self {
-            EpubFormat::Kadokawa | EpubFormat::Hybrid => "item/xhtml",
-            EpubFormat::Oebps => "OEBPS/text",
-        }
-    }
-
-    /// CSSフォルダのパスを返す
-    pub fn style_folder(&self) -> &'static str {
-        match self {
-            EpubFormat::Kadokawa | EpubFormat::Hybrid => "item/style",
-            EpubFormat::Oebps => "OEBPS/styles",
         }
     }
 }
@@ -155,16 +123,6 @@ impl AuthorRole {
             AuthorRole::Translator => "trl",
         }
     }
-
-    /// 日本語表示名
-    pub fn display_name_ja(&self) -> &'static str {
-        match self {
-            AuthorRole::Author => "著者",
-            AuthorRole::Illustrator => "イラスト",
-            AuthorRole::Editor => "編集",
-            AuthorRole::Translator => "翻訳",
-        }
-    }
 }
 
 /// 著者情報
@@ -227,6 +185,12 @@ pub struct EpubMetadata {
     /// 説明文（オプション）
     #[serde(default)]
     pub description: Option<String>,
+    /// Hybrid形式で奥付なし構成を許可する
+    #[serde(default)]
+    pub allow_missing_colophon: bool,
+    /// Hybrid形式で使用するCSSセット
+    #[serde(default)]
+    pub hybrid_css_profile: HybridCssProfile,
 }
 
 fn default_language() -> String {
@@ -254,6 +218,8 @@ impl EpubMetadata {
             book_uuid: uuid::Uuid::new_v4().to_string(),
             output_format: format,
             description: None,
+            allow_missing_colophon: false,
+            hybrid_css_profile: HybridCssProfile::Current,
         }
     }
 }

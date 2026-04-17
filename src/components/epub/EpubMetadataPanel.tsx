@@ -3,11 +3,13 @@ import { invoke } from '@tauri-apps/api/core';
 import { useStore } from '../../store';
 import {
   EpubFormat,
+  HybridCssProfile,
   AuthorRole,
   PageDirection,
   SpreadMode,
   EPUB_FORMAT_LABELS,
   EPUB_FORMAT_VIEWPORTS,
+  HYBRID_CSS_PROFILE_LABELS,
   PAGE_DIRECTION_LABELS,
   SPREAD_MODE_LABELS,
   AUTHOR_ROLE_LABELS,
@@ -46,6 +48,15 @@ export function EpubMetadataPanel() {
       outputFormat: format,
       viewportWidth: viewport.width,
       viewportHeight: viewport.height,
+      allowMissingColophon: format === 'hybrid' ? (epubMetadata.allowMissingColophon ?? false) : undefined,
+      hybridCssProfile: format === 'hybrid' ? (epubMetadata.hybridCssProfile ?? 'current') : undefined,
+    });
+  };
+
+  const handleHybridCssProfileChange = (profile: HybridCssProfile) => {
+    updateEpubMetadata({
+      hybridCssProfile: profile,
+      allowMissingColophon: profile === 'legacy' ? true : epubMetadata.allowMissingColophon,
     });
   };
 
@@ -82,6 +93,7 @@ export function EpubMetadataPanel() {
   // ページ数情報
   const coverPage = epubPages.find(p => p.isCover);
   const colophonPages = epubPages.filter(p => p.isColophon);
+  const isLegacyHybrid = epubMetadata.outputFormat === 'hybrid' && epubMetadata.hybridCssProfile === 'legacy';
 
   return (
     <div className="epub-metadata-panel">
@@ -101,6 +113,34 @@ export function EpubMetadataPanel() {
               ))}
             </select>
           </div>
+          {epubMetadata.outputFormat === 'hybrid' && (
+            <>
+              <div className="form-group">
+                <label>Hybrid CSS</label>
+                <select
+                  value={epubMetadata.hybridCssProfile ?? 'current'}
+                  onChange={(e) => handleHybridCssProfileChange(e.target.value as HybridCssProfile)}
+                >
+                  {(Object.keys(HYBRID_CSS_PROFILE_LABELS) as HybridCssProfile[]).map((profile) => (
+                    <option key={profile} value={profile}>
+                      {HYBRID_CSS_PROFILE_LABELS[profile]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group checkbox-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={isLegacyHybrid || (epubMetadata.allowMissingColophon ?? false)}
+                    disabled={isLegacyHybrid}
+                    onChange={(e) => updateEpubMetadata({ allowMissingColophon: e.target.checked })}
+                  />
+                  奥付なしを許可
+                </label>
+              </div>
+            </>
+          )}
         </div>
 
         {/* 書籍情報 */}

@@ -537,9 +537,18 @@ function App() {
   // EPUB生成ハンドラ
   const handleEpubGenerate = async (metadata: EpubMetadata, outputPath: string) => {
     try {
+      const isLegacyHybrid =
+        metadata.outputFormat === 'hybrid' && metadata.hybridCssProfile === 'legacy';
+      const generateMetadata: EpubMetadata = {
+        ...metadata,
+        allowMissingColophon: isLegacyHybrid ? true : metadata.allowMissingColophon,
+      };
+
       // ページ情報を構築
       const epubPages: EpubPage[] = [];
       let pageNumber = 1;
+      let coverAssigned = false;
+      let colophonAssignedFromChapter = false;
 
       for (const chapter of chapters) {
         for (const page of chapter.pages) {
@@ -547,10 +556,26 @@ function App() {
           if (page.pageType === 'blank' || !page.filePath) {
             continue;
           }
+          if (isLegacyHybrid && (chapter.type === 'colophon' || page.pageType === 'colophon')) {
+            continue;
+          }
+
+          const isCover =
+            !coverAssigned && (chapter.type === 'cover' || page.pageType === 'cover');
+          if (isCover) {
+            coverAssigned = true;
+          }
+
+          const isColophon =
+            page.pageType === 'colophon' ||
+            (!colophonAssignedFromChapter && chapter.type === 'colophon');
+          if (chapter.type === 'colophon' && isColophon) {
+            colophonAssignedFromChapter = true;
+          }
 
           // 画像サイズを取得
-          let width = metadata.viewportWidth;
-          let height = metadata.viewportHeight;
+          let width = generateMetadata.viewportWidth;
+          let height = generateMetadata.viewportHeight;
           try {
             const dimensions = await invoke<[number, number]>('get_image_dimensions', {
               path: page.filePath,
@@ -562,17 +587,17 @@ function App() {
           }
 
           // ページIDを生成
-          const pageId = page.pageType === 'cover'
+          const pageId = isCover
             ? 'p-cover'
-            : page.pageType === 'colophon'
+            : isColophon
             ? 'p-colophon'
             : `p-${String(pageNumber).padStart(3, '0')}`;
 
           // ファイル名を生成
           const ext = page.filePath.split('.').pop()?.toLowerCase() || 'jpg';
-          const filename = page.pageType === 'cover'
+          const filename = isCover
             ? `cover.${ext}`
-            : page.pageType === 'colophon'
+            : isColophon
             ? `colophon.${ext}`
             : `${String(pageNumber).padStart(4, '0')}.${ext}`;
 
@@ -582,11 +607,11 @@ function App() {
             sourcePath: page.filePath,
             width,
             height,
-            isCover: page.pageType === 'cover',
-            isColophon: page.pageType === 'colophon',
+            isCover,
+            isColophon,
           });
 
-          if (page.pageType !== 'cover' && page.pageType !== 'colophon') {
+          if (!isCover && !isColophon) {
             pageNumber++;
           }
         }
@@ -594,7 +619,7 @@ function App() {
 
       // EPUB生成
       const response = await invoke<EpubGenerateResponse>('generate_epub', {
-        metadata,
+        metadata: generateMetadata,
         pages: epubPages,
         outputPath,
         customCss: null,

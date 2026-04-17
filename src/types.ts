@@ -205,6 +205,13 @@ export const EPUB_FORMAT_VIEWPORTS: Record<EpubFormat, { width: number; height: 
   oebps: { width: 1352, height: 1920 },
 };
 
+export type HybridCssProfile = 'current' | 'legacy';
+
+export const HYBRID_CSS_PROFILE_LABELS: Record<HybridCssProfile, string> = {
+  current: '現行CSS',
+  legacy: '旧Hybrid CSS',
+};
+
 // ページ綴じ方向
 export type PageDirection = 'rtl' | 'ltr';
 
@@ -263,6 +270,8 @@ export interface EpubMetadata {
   bookUuid: string;
   outputFormat: EpubFormat;
   description?: string;
+  allowMissingColophon?: boolean;
+  hybridCssProfile?: HybridCssProfile;
 }
 
 // EPUBページ情報

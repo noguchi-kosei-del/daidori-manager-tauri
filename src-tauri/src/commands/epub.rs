@@ -1,6 +1,6 @@
+use serde::Serialize;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::PathBuf;
-use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::epub::EpubBuilder;
@@ -24,7 +24,7 @@ pub async fn generate_epub(
 ) -> Result<EpubGenerateResponse, String> {
     // バリデーション
     validate_metadata(&metadata)?;
-    validate_pages(&pages)?;
+    validate_pages(&metadata, &pages)?;
 
     // 設定を構築
     let config = EpubGenerateConfig {
@@ -74,14 +74,17 @@ fn validate_metadata(metadata: &EpubMetadata) -> Result<(), String> {
 }
 
 /// ページのバリデーション
-fn validate_pages(pages: &[EpubPage]) -> Result<(), String> {
+fn validate_pages(metadata: &EpubMetadata, pages: &[EpubPage]) -> Result<(), String> {
     if pages.is_empty() {
         return Err("ページが1つもありません".to_string());
     }
 
     // 奥付ページの確認
     let has_colophon = pages.iter().any(|p| p.is_colophon);
-    if !has_colophon {
+    let allow_missing_colophon = metadata.output_format == EpubFormat::Hybrid
+        && (metadata.allow_missing_colophon
+            || metadata.hybrid_css_profile == crate::types::HybridCssProfile::Legacy);
+    if !has_colophon && !allow_missing_colophon {
         return Err("奥付ページを設定してください".to_string());
     }
 
@@ -89,7 +92,10 @@ fn validate_pages(pages: &[EpubPage]) -> Result<(), String> {
     for page in pages {
         let path = std::path::Path::new(&page.source_path);
         if !path.exists() {
-            return Err(format!("画像ファイルが見つかりません: {}", page.source_path));
+            return Err(format!(
+                "画像ファイルが見つかりません: {}",
+                page.source_path
+            ));
         }
     }
 
@@ -148,8 +154,7 @@ pub async fn read_psd_guides(path: String) -> Result<Vec<PsdGuide>, String> {
             return Ok(Vec::new());
         }
 
-        let data = std::fs::read(&path)
-            .map_err(|e| format!("Failed to open PSD file: {}", e))?;
+        let data = std::fs::read(&path).map_err(|e| format!("Failed to open PSD file: {}", e))?;
 
         Ok(extract_psd_guides(&data).unwrap_or_default())
     })
@@ -200,7 +205,11 @@ fn extract_psd_guides(data: &[u8]) -> Option<Vec<PsdGuide>> {
         // パスカル文字列(名前)をスキップ
         let mut name_len = [0u8; 1];
         cursor.read_exact(&mut name_len).ok()?;
-        let skip_len = if name_len[0] % 2 == 0 { name_len[0] as i64 + 1 } else { name_len[0] as i64 };
+        let skip_len = if name_len[0] % 2 == 0 {
+            name_len[0] as i64 + 1
+        } else {
+            name_len[0] as i64
+        };
         if cursor.seek(SeekFrom::Current(skip_len)).is_err() {
             break;
         }
@@ -242,14 +251,22 @@ fn extract_psd_guides(data: &[u8]) -> Option<Vec<PsdGuide>> {
             }
 
             // リソースブロックの終端にシーク
-            let padded_size = if resource_size % 2 == 0 { resource_size } else { resource_size + 1 };
+            let padded_size = if resource_size % 2 == 0 {
+                resource_size
+            } else {
+                resource_size + 1
+            };
             let _ = cursor.seek(SeekFrom::Start(start + padded_size as u64));
 
             return Some(guides);
         }
 
         // 次のリソースへ(偶数バウンダリにアライン)
-        let padded_size = if resource_size % 2 == 0 { resource_size } else { resource_size + 1 };
+        let padded_size = if resource_size % 2 == 0 {
+            resource_size
+        } else {
+            resource_size + 1
+        };
         if cursor.seek(SeekFrom::Current(padded_size as i64)).is_err() {
             break;
         }
@@ -282,7 +299,8 @@ pub async fn get_image_dimensions(path: String) -> Result<(u32, u32), String> {
             Ok((width, height))
         } else {
             // ヘッダのみ読み取り（画像全体をデコードしない）
-            image::image_dimensions(&path).map_err(|e| format!("Failed to read image dimensions: {}", e))
+            image::image_dimensions(&path)
+                .map_err(|e| format!("Failed to read image dimensions: {}", e))
         }
     })
     .await

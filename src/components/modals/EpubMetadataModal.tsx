@@ -10,8 +10,10 @@ import {
   PageDirection,
   SpreadMode,
   Orientation,
+  HybridCssProfile,
   EPUB_FORMAT_LABELS,
   EPUB_FORMAT_VIEWPORTS,
+  HYBRID_CSS_PROFILE_LABELS,
   PAGE_DIRECTION_LABELS,
   SPREAD_MODE_LABELS,
   AUTHOR_ROLE_LABELS,
@@ -52,6 +54,8 @@ export function EpubMetadataModal({
   const [pageDirection, setPageDirection] = useState<PageDirection>('rtl');
   const [spreadMode, setSpreadMode] = useState<SpreadMode>('landscape');
   const [orientation] = useState<Orientation>('auto');
+  const [allowMissingColophon, setAllowMissingColophon] = useState(false);
+  const [hybridCssProfile, setHybridCssProfile] = useState<HybridCssProfile>('current');
 
   // ビューポート
   const [viewportWidth, setViewportWidth] = useState(1442);
@@ -103,6 +107,17 @@ export function EpubMetadataModal({
     const viewport = EPUB_FORMAT_VIEWPORTS[format];
     setViewportWidth(viewport.width);
     setViewportHeight(viewport.height);
+    if (format !== 'hybrid') {
+      setAllowMissingColophon(false);
+      setHybridCssProfile('current');
+    }
+  };
+
+  const handleHybridCssProfileChange = (profile: HybridCssProfile) => {
+    setHybridCssProfile(profile);
+    if (profile === 'legacy') {
+      setAllowMissingColophon(true);
+    }
   };
 
   // 著者追加
@@ -153,9 +168,13 @@ export function EpubMetadataModal({
 
     // 奥付ページの確認
     const hasColophon = chapters.some((ch) =>
-      ch.pages.some((p) => p.pageType === 'colophon')
+      ch.type === 'colophon' || ch.pages.some((p) => p.pageType === 'colophon')
     );
-    if (!hasColophon) return '奥付ページを設定してください';
+    const allowsMissingColophon =
+      outputFormat === 'hybrid' && (allowMissingColophon || hybridCssProfile === 'legacy');
+    if (!hasColophon && !allowsMissingColophon) {
+      return '奥付ページを設定してください';
+    }
 
     return null;
   };
@@ -193,6 +212,8 @@ export function EpubMetadataModal({
       bookUuid,
       outputFormat,
       description: description.trim() || undefined,
+      allowMissingColophon: outputFormat === 'hybrid' ? (allowMissingColophon || hybridCssProfile === 'legacy') : undefined,
+      hybridCssProfile: outputFormat === 'hybrid' ? hybridCssProfile : undefined,
     };
 
     try {
@@ -237,6 +258,34 @@ export function EpubMetadataModal({
                 ))}
               </select>
             </div>
+            {outputFormat === 'hybrid' && (
+              <>
+                <div className="form-group">
+                  <label>Hybrid CSS</label>
+                  <select
+                    value={hybridCssProfile}
+                    onChange={(e) => handleHybridCssProfileChange(e.target.value as HybridCssProfile)}
+                  >
+                    {(Object.keys(HYBRID_CSS_PROFILE_LABELS) as HybridCssProfile[]).map((profile) => (
+                      <option key={profile} value={profile}>
+                        {HYBRID_CSS_PROFILE_LABELS[profile]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group checkbox-group">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={allowMissingColophon || hybridCssProfile === 'legacy'}
+                      disabled={hybridCssProfile === 'legacy'}
+                      onChange={(e) => setAllowMissingColophon(e.target.checked)}
+                    />
+                    奥付なしを許可
+                  </label>
+                </div>
+              </>
+            )}
             <div className="form-group">
               <label>出力先</label>
               <div className="input-with-button">

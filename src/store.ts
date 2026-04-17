@@ -815,6 +815,8 @@ export const useStore = create<AppState>((set, get) => {
   loadEpubFromDaidori: () => {
     const { chapters, projectName } = get();
     let pageIndex = 1;
+    let coverAssigned = false;
+    let colophonAssignedFromChapter = false;
     const epubPages: EpubPageInfo[] = [];
 
     for (const chapter of chapters) {
@@ -824,14 +826,27 @@ export const useStore = create<AppState>((set, get) => {
         // ファイルがないページもスキップ
         if (!page.filePath) continue;
 
+        const isCover =
+          !coverAssigned && (chapter.type === 'cover' || page.pageType === 'cover');
+        if (isCover) {
+          coverAssigned = true;
+        }
+
+        const isColophon =
+          page.pageType === 'colophon' ||
+          (!colophonAssignedFromChapter && chapter.type === 'colophon');
+        if (chapter.type === 'colophon' && isColophon) {
+          colophonAssignedFromChapter = true;
+        }
+
         const epubPage: EpubPageInfo = {
           id: uuidv4(),
           filename: `p${String(pageIndex).padStart(3, '0')}.jpg`,
           sourcePath: page.filePath,
           width: 0,
           height: 0,
-          isCover: page.pageType === 'cover',
-          isColophon: page.pageType === 'colophon',
+          isCover,
+          isColophon,
           thumbnailPath: page.thumbnailCachePath,
           thumbnailStatus: page.thumbnailStatus,
           originalPageId: page.id,
@@ -858,6 +873,8 @@ export const useStore = create<AppState>((set, get) => {
       orientation: 'auto',
       bookUuid: uuidv4(),
       outputFormat: 'kadokawa',
+      allowMissingColophon: false,
+      hybridCssProfile: 'current',
     };
 
     set({

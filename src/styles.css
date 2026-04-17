@@ -4024,6 +4024,21 @@ body.light-mode .epub-preview-info {
   border-color: var(--color-accent);
 }
 
+.checkbox-group label,
+.epub-metadata-panel .checkbox-group label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 0;
+  cursor: pointer;
+}
+
+.form-group.checkbox-group input[type="checkbox"],
+.epub-metadata-panel .checkbox-group input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
 .epub-metadata-panel .form-row {
   display: flex;
   gap: 12px;
