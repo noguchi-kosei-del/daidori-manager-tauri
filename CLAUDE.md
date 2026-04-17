@@ -973,3 +973,50 @@ files: [{
 #### 備考
 - store側の `isModified` / `markAsSaved` / `currentProjectPath` / `lastSavedAt` はプロジェクト読み込み時の状態設定に引き続き使用（`handleOpenProject` 内で `markAsSaved(openPath)` を呼ぶ）
 - 保存機能は完全に削除されたため、`save_project` Tauriコマンドは現状呼び出されないがバックエンド側には残存（将来復活時に備えて保持）
+
+### 2026-04-17: PSDガイド対応・白紙チャプター・白紙形式連動
+
+#### PSD内蔵ガイド線の読み取り・表示（commands/epub.rs, lib.rs, BleedEditorModal.tsx）
+- 新規Tauriコマンド `read_psd_guides(path)` を追加（`commands/epub.rs`）
+  - PSDイメージリソースセクションを走査し、リソースID 1032（Grid and guides information）をパース
+  - `PsdGuide { type: "h"|"v", position: u32 }` の配列を返す
+  - location は 1/32 px で格納されているため 32 で除算して実ピクセル座標に変換
+  - direction: 0 = vertical line (`"v"`), 1 = horizontal line (`"h"`)
+  - 非PSDファイル・ガイドなしPSD・パース失敗はすべて空Vecを返す（エラー扱いしない）
+- BleedEditorModalが開かれた時、PSDファイルなら `read_psd_guides` を呼び出し、Photoshopで作成されたガイド線を自動表示
+
+#### ロック時の選択範囲自動検出（BleedEditorModal.tsx）
+- `toggleLock` を拡張：ガイドロック時に H方向2本以上 + V方向2本以上あれば、外側のガイドペアで囲まれた矩形を選択範囲として自動確定
+- `autoDetected` state を追加。自動検出時は専用ヒント文「ガイドから自動検出しました — 画像上をドラッグして調整も可能です」を表示
+- 手動ドラッグで選択範囲を上書きするとフラグがクリアされ、通常ヒントに切り替わる
+
+#### 白紙チャプターの自動ページ化（store.ts）
+- `addChapter` で `type === 'blank'` の場合のみ白紙ページ1枚を初期配置
+- エクスポート時に既存の blank ハンドラが隣接ページサイズ（なければ A5 350dpi デフォルト）で白紙画像を生成
+
+#### 白紙出力形式の変換モード連動（commands/export.rs, useExport.ts）
+- `export_pages` コマンドに `blank_format: Option<String>` 引数を追加
+  - 指定があれば白紙ページの出力拡張子として優先使用（JPG変換フラグ・隣接ページext より上位）
+  - `.jpg`/`.jpeg` は既存の `GenerateBlankJpg` タスク（JpegEncoder）で生成
+  - それ以外（`.tif` など）は `GenerateBlank` タスク（`image::save()` で拡張子から自動判別）で生成
+  - `image` クレートの `tiff` feature が有効なので TIFF 白紙も生成可能
+- useExport.ts でモード別に `blankFormat` を指定:
+  - TIFF変換モード: `blankFormat: 'tif'`
+  - PhotoshopでJPEG変換モード: `blankFormat: 'jpg'`
+  - 通常エクスポート（コピー/JPG変換）: 未指定（従来動作を維持）
+
+#### 新しい型定義
+```rust
+#[derive(Serialize)]
+pub struct PsdGuide {
+    #[serde(rename = "type")]
+    pub guide_type: String, // "h" or "v"
+    pub position: u32,       // 元画像ピクセル座標
+}
+```
+
+#### Tauriコマンド追加・変更
+| コマンド | 説明 |
+|---------|------|
+| `read_psd_guides` | PSDファイル内のガイド線情報を読み取る（リソースID 1032） |
+| `export_pages` | `blank_format` 引数を追加（白紙ページの出力形式を明示的に指定可能） |

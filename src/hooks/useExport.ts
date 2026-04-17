@@ -169,6 +169,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
               moveFiles: exportMode === 'move',
               convertToJpg: false,
               jpgQuality: 100,
+              blankFormat: 'tif',
             });
           } catch (e) {
             console.error('非変換対象ページのエクスポートエラー:', e);
@@ -320,6 +321,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
               moveFiles: exportMode === 'move',
               convertToJpg: false,
               jpgQuality: 100,
+              blankFormat: 'jpg',
             });
           } catch (e) {
             console.error('非PSDページのエクスポートエラー:', e);

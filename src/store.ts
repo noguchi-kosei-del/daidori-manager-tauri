@@ -192,8 +192,11 @@ export const useStore = create<AppState>((set, get) => {
     const chapters = get().chapters;
     const chapterName = name || getDefaultChapterName(type, chapters);
 
-    // すべてのチャプターは空の状態で追加（ページは後から追加）
-    const initialPages: Page[] = [];
+    // 白紙チャプターは白紙ページ1枚で初期化（エクスポート時に白紙画像が生成される）
+    // その他のチャプターは空状態で追加（ページは後から追加）
+    const initialPages: Page[] = type === 'blank'
+      ? [{ id: uuidv4(), pageType: 'blank' }]
+      : [];
 
     const newChapter = {
       id,

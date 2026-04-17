@@ -48,6 +48,7 @@ export function BleedEditorModal({
 
   const [hint, setHint] = useState('');
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [autoDetected, setAutoDetected] = useState(false);
 
   // リセット
   useEffect(() => {
@@ -59,6 +60,7 @@ export function BleedEditorModal({
       setSelection(null);
       isDragging.current = false;
       setShowCancelConfirm(false);
+      setAutoDetected(false);
     }
   }, [isOpen, originalFilePath]);
 
@@ -68,6 +70,21 @@ export function BleedEditorModal({
     invoke<[number, number]>('get_image_dimensions', { path: originalFilePath })
       .then(([w, h]) => setOriginalSize({ width: w, height: h }))
       .catch(() => setOriginalSize(null));
+  }, [isOpen, originalFilePath]);
+
+  // PSDファイル内のガイド線を読み込み
+  useEffect(() => {
+    if (!isOpen || !originalFilePath) return;
+    if (!originalFilePath.toLowerCase().endsWith('.psd')) return;
+    invoke<Guide[]>('read_psd_guides', { path: originalFilePath })
+      .then((psdGuides) => {
+        if (psdGuides && psdGuides.length > 0) {
+          setGuides(psdGuides);
+        }
+      })
+      .catch(() => {
+        // ガイドが読めなくても無視（手動で引ける）
+      });
   }, [isOpen, originalFilePath]);
 
   // 画像バウンド計算
@@ -98,7 +115,9 @@ export function BleedEditorModal({
   // ヒント更新
   useEffect(() => {
     if (!isOpen) return;
-    if (selection) {
+    if (selection && autoDetected) {
+      setHint('ガイドから自動検出しました — 画像上をドラッグして調整も可能です');
+    } else if (selection) {
       setHint('範囲OK — エクスポート可能です');
     } else if (guidesLocked) {
       setHint('画像上をドラッグして断ち切り範囲を選択（ガイドにスナップします）');
@@ -107,7 +126,7 @@ export function BleedEditorModal({
     } else {
       setHint('ガイドを配置したら「ロック」ボタンを押してください');
     }
-  }, [isOpen, guides.length, guidesLocked, selection]);
+  }, [isOpen, guides.length, guidesLocked, selection, autoDetected]);
 
   // マウス座標 → 元画像ピクセル座標
   const clientToImageCoord = useCallback((clientX: number, clientY: number): { ix: number; iy: number } | null => {
@@ -254,14 +273,33 @@ export function BleedEditorModal({
     dragStartImg.current = { x: snapped.ix, y: snapped.iy };
     isDragging.current = true;
     setSelection(null);
+    setAutoDetected(false);
   }, [guidesLocked, clientToImageCoord, snapToGuides]);
 
   // ロック切替
   const toggleLock = useCallback(() => {
     setGuidesLocked(prev => !prev);
     setGuideDrag(null);
-    if (!guidesLocked) setSelection(null);
-  }, [guidesLocked]);
+    if (!guidesLocked) {
+      // ロック開始時: ガイドが十分あれば自動で選択範囲を検出
+      const hGuides = guides.filter(g => g.type === 'h').sort((a, b) => a.position - b.position);
+      const vGuides = guides.filter(g => g.type === 'v').sort((a, b) => a.position - b.position);
+      if (hGuides.length >= 2 && vGuides.length >= 2) {
+        setSelection({
+          left: vGuides[0].position,
+          top: hGuides[0].position,
+          right: vGuides[vGuides.length - 1].position,
+          bottom: hGuides[hGuides.length - 1].position,
+        });
+        setAutoDetected(true);
+      } else {
+        setSelection(null);
+        setAutoDetected(false);
+      }
+    } else {
+      setAutoDetected(false);
+    }
+  }, [guidesLocked, guides]);
 
   // マージン計算
   const margins: BleedMargins | null = (() => {

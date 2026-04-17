@@ -79,14 +79,16 @@ pub async fn export_pages(
     move_files: Option<bool>,
     convert_to_jpg: Option<bool>,
     jpg_quality: Option<u8>,
+    blank_format: Option<String>,
 ) -> Result<usize, String> {
     let should_move = move_files.unwrap_or(false);
     let should_convert = convert_to_jpg.unwrap_or(false);
     let quality = jpg_quality.unwrap_or(95);
+    let blank_fmt = blank_format.map(|s| s.to_lowercase());
 
     // spawn_blockingで同期I/Oをオフロード（UIスレッドをブロックしない）
     tokio::task::spawn_blocking(move || {
-        export_pages_sync(&output_path, &pages, should_move, should_convert, quality)
+        export_pages_sync(&output_path, &pages, should_move, should_convert, quality, blank_fmt.as_deref())
     })
     .await
     .map_err(|e| format!("タスクエラー: {}", e))?
@@ -98,6 +100,7 @@ fn export_pages_sync(
     should_move: bool,
     should_convert: bool,
     quality: u8,
+    blank_format: Option<&str>,
 ) -> Result<usize, String> {
     let output_dir = Path::new(output_path);
 
@@ -229,10 +232,17 @@ fn export_pages_sync(
                     }
                 }
 
-                let final_ext = if should_convert { "jpg".to_string() } else { ext };
+                // 白紙の出力形式: blank_format指定 > JPG変換フラグ > 隣接ページのext
+                let final_ext = if let Some(fmt) = blank_format {
+                    fmt.to_string()
+                } else if should_convert {
+                    "jpg".to_string()
+                } else {
+                    ext
+                };
                 let dest = page_output_dir.join(format!("{}.{}", page.output_name, final_ext));
 
-                if should_convert {
+                if final_ext == "jpg" || final_ext == "jpeg" {
                     tasks.push(ExportTask::GenerateBlankJpg { width: size.0, height: size.1, dest, quality });
                 } else {
                     tasks.push(ExportTask::GenerateBlank { width: size.0, height: size.1, dest });

@@ -1,8 +1,17 @@
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::PathBuf;
+use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::epub::EpubBuilder;
 use crate::types::{EpubFormat, EpubGenerateConfig, EpubGenerateResponse, EpubMetadata, EpubPage};
+
+#[derive(Serialize)]
+pub struct PsdGuide {
+    #[serde(rename = "type")]
+    pub guide_type: String,
+    pub position: u32,
+}
 
 /// EPUB生成コマンド
 #[tauri::command]
@@ -128,6 +137,129 @@ pub fn create_epub_metadata(title: String, publisher: String) -> EpubMetadata {
 #[tauri::command]
 pub fn get_default_viewport(format: EpubFormat) -> (u32, u32) {
     format.default_viewport()
+}
+
+/// PSDファイル内のガイド線情報を読み取る（リソースID 1032）
+#[tauri::command]
+pub async fn read_psd_guides(path: String) -> Result<Vec<PsdGuide>, String> {
+    tokio::task::spawn_blocking(move || {
+        let lower = path.to_lowercase();
+        if !lower.ends_with(".psd") {
+            return Ok(Vec::new());
+        }
+
+        let data = std::fs::read(&path)
+            .map_err(|e| format!("Failed to open PSD file: {}", e))?;
+
+        Ok(extract_psd_guides(&data).unwrap_or_default())
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
+}
+
+/// PSDバイナリからガイド線情報(リソースID 1032)を抽出
+fn extract_psd_guides(data: &[u8]) -> Option<Vec<PsdGuide>> {
+    let mut cursor = Cursor::new(data);
+
+    // PSDシグネチャ確認 "8BPS"
+    let mut sig = [0u8; 4];
+    cursor.read_exact(&mut sig).ok()?;
+    if &sig != b"8BPS" {
+        return None;
+    }
+
+    // バージョン(2) + 予約(6) + チャンネル数(2) + 高さ(4) + 幅(4) + 深度(2) + カラーモード(2)
+    cursor.seek(SeekFrom::Current(22)).ok()?;
+
+    // カラーモードデータセクションをスキップ
+    let mut len_buf = [0u8; 4];
+    cursor.read_exact(&mut len_buf).ok()?;
+    let color_mode_len = u32::from_be_bytes(len_buf);
+    cursor.seek(SeekFrom::Current(color_mode_len as i64)).ok()?;
+
+    // イメージリソースセクション
+    cursor.read_exact(&mut len_buf).ok()?;
+    let resources_len = u32::from_be_bytes(len_buf);
+    let resources_end = cursor.position() + resources_len as u64;
+
+    while cursor.position() < resources_end {
+        let loop_start_pos = cursor.position();
+
+        let mut resource_sig = [0u8; 4];
+        if cursor.read_exact(&mut resource_sig).is_err() {
+            break;
+        }
+        if &resource_sig != b"8BIM" {
+            break;
+        }
+
+        let mut id_buf = [0u8; 2];
+        cursor.read_exact(&mut id_buf).ok()?;
+        let resource_id = u16::from_be_bytes(id_buf);
+
+        // パスカル文字列(名前)をスキップ
+        let mut name_len = [0u8; 1];
+        cursor.read_exact(&mut name_len).ok()?;
+        let skip_len = if name_len[0] % 2 == 0 { name_len[0] as i64 + 1 } else { name_len[0] as i64 };
+        if cursor.seek(SeekFrom::Current(skip_len)).is_err() {
+            break;
+        }
+
+        cursor.read_exact(&mut len_buf).ok()?;
+        let resource_size = u32::from_be_bytes(len_buf);
+
+        // リソースID 1032 = Grid and guides information
+        if resource_id == 1032 && resource_size >= 16 {
+            let start = cursor.position();
+
+            // version(4) + gridCycleV(4) + gridCycleH(4)
+            cursor.seek(SeekFrom::Current(12)).ok()?;
+
+            let mut count_buf = [0u8; 4];
+            cursor.read_exact(&mut count_buf).ok()?;
+            let guide_count = u32::from_be_bytes(count_buf) as usize;
+
+            let mut guides = Vec::with_capacity(guide_count);
+            for _ in 0..guide_count {
+                let mut loc_buf = [0u8; 4];
+                if cursor.read_exact(&mut loc_buf).is_err() {
+                    break;
+                }
+                let location = u32::from_be_bytes(loc_buf);
+
+                let mut dir_buf = [0u8; 1];
+                if cursor.read_exact(&mut dir_buf).is_err() {
+                    break;
+                }
+                // direction: 0 = vertical line(x座標), 1 = horizontal line(y座標)
+                // location は 1/32 pxで格納
+                let position = location / 32;
+                let guide_type = if dir_buf[0] == 0 { "v" } else { "h" };
+                guides.push(PsdGuide {
+                    guide_type: guide_type.to_string(),
+                    position,
+                });
+            }
+
+            // リソースブロックの終端にシーク
+            let padded_size = if resource_size % 2 == 0 { resource_size } else { resource_size + 1 };
+            let _ = cursor.seek(SeekFrom::Start(start + padded_size as u64));
+
+            return Some(guides);
+        }
+
+        // 次のリソースへ(偶数バウンダリにアライン)
+        let padded_size = if resource_size % 2 == 0 { resource_size } else { resource_size + 1 };
+        if cursor.seek(SeekFrom::Current(padded_size as i64)).is_err() {
+            break;
+        }
+
+        if cursor.position() <= loop_start_pos {
+            break;
+        }
+    }
+
+    Some(Vec::new())
 }
 
 /// 画像サイズを取得（PSD対応、ヘッダのみ読み取り）
