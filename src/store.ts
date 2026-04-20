@@ -6,6 +6,7 @@ import {
   Page,
   PageType,
   PAGE_TYPE_LABELS,
+  FileValidationStatus,
   SavedUiState,
 
   EpubPageInfo,
@@ -74,6 +75,7 @@ interface AppState {
   // アクション: ページ管理
   addPagesToChapter: (chapterId: string, files: FileInfo[]) => void;
   addPagesToChapterAt: (chapterId: string, files: FileInfo[], atIndex: number) => void;
+  replacePagesInChapter: (chapterId: string, files: FileInfo[]) => void;
   addSpecialPage: (chapterId: string, pageType: PageType, afterPageId?: string) => void;
   setPageFile: (pageId: string, file: FileInfo | null) => void;
   removePage: (chapterId: string, pageId: string) => void;
@@ -93,6 +95,9 @@ interface AppState {
   // アクション: サムネイル
   updatePageThumbnail: (pageId: string, cacheKey: string, cachePath: string) => void;
   setPageThumbnailError: (pageId: string) => void;
+
+  // アクション: ファイル検証
+  updatePagesValidation: (results: { pageId: string; status: FileValidationStatus }[]) => void;
 
   // アクション: 履歴
   undo: () => void;
@@ -302,6 +307,34 @@ export const useStore = create<AppState>((set, get) => {
     }));
   },
 
+  // ページ一括差し替え（チャプター内の既存ページを全置換）
+  replacePagesInChapter: (chapterId, files) => {
+    const chapter = get().chapters.find((c) => c.id === chapterId);
+    if (chapter?.type === 'cover') {
+      files = files.slice(0, 1);
+    }
+    if (files.length === 0) return;
+    const pages: Page[] = files.map((file) => ({
+      id: uuidv4(),
+      pageType: 'file' as PageType,
+      filePath: file.path,
+      fileName: file.name,
+      fileType: file.file_type as Page['fileType'],
+      fileSize: file.size,
+      modifiedTime: file.modified_time,
+      thumbnailStatus: 'pending',
+    }));
+
+    set((state) => ({
+      ...saveHistory(),
+      chapters: state.chapters.map((c) =>
+        c.id === chapterId
+          ? { ...c, pages, folderPath: files[0]?.path.replace(/[^\\\/]+$/, '') }
+          : c
+      ),
+    }));
+  },
+
   // ファイルページ追加（指定位置に挿入）
   addPagesToChapterAt: (chapterId, files, atIndex) => {
     const chapter = get().chapters.find((c) => c.id === chapterId);
@@ -380,6 +413,7 @@ export const useStore = create<AppState>((set, get) => {
               thumbnailStatus: 'pending' as const,
               thumbnailCacheKey: undefined,
               thumbnailCachePath: undefined,
+              fileValidationStatus: 'ok' as const,
             };
           } else {
             // ファイルをクリア
@@ -637,6 +671,22 @@ export const useStore = create<AppState>((set, get) => {
     }));
   },
 
+  // ファイル検証結果を一括反映（履歴には含めない）
+  updatePagesValidation: (results) => {
+    const map = new Map(results.map((r) => [r.pageId, r.status]));
+    set((state) => ({
+      chapters: state.chapters.map((c) => ({
+        ...c,
+        pages: c.pages.map((p) => {
+          const status = map.get(p.id);
+          if (!status) return p;
+          if (p.fileValidationStatus === status) return p;
+          return { ...p, fileValidationStatus: status };
+        }),
+      })),
+    }));
+  },
+
   // 元に戻す
   undo: () => {
     const { history, chapters } = get();
@@ -887,6 +937,7 @@ export const useStore = create<AppState>((set, get) => {
           originalChapterName: chapter.name,
           originalPageType: page.pageType,
           originalChapterType: chapter.type,
+          fileValidationStatus: page.fileValidationStatus,
         };
 
         epubPages.push(epubPage);

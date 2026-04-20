@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { Chapter, Page, PAGE_TYPE_LABELS, PAGE_TYPE_COLORS } from '../../types';
 import { queueThumbnail } from '../../hooks';
-import { CloseIcon, NoPageIcon } from '../../icons';
+import { CloseIcon, NoPageIcon, AlertTriangleIcon, ReplaceIcon } from '../../icons';
 
 // 閉じるボタン自動非表示の遅延時間（ミリ秒）
 const CLOSE_BUTTON_HIDE_DELAY = 3000;
@@ -13,6 +13,7 @@ export function SpreadViewer({
   pages,
   selectedPageId,
   onPageSelect,
+  onReplaceFile,
   isViewerMode = false,
   onExitViewerMode,
   isPageBarVisible = true,
@@ -23,6 +24,7 @@ export function SpreadViewer({
   pages: { page: Page; chapter: Chapter; globalIndex: number }[];
   selectedPageId?: string | null;
   onPageSelect?: (chapterId: string, pageId: string) => void;
+  onReplaceFile?: (pageId: string) => void;
   isViewerMode?: boolean;
   onExitViewerMode?: () => void;
   isPageBarVisible?: boolean;
@@ -404,12 +406,40 @@ export function SpreadViewer({
               </div>
             </div>
           ) : page.thumbnailStatus === 'ready' && page.thumbnailCachePath ? (
-            <img
-              src={convertFileSrc(page.thumbnailCachePath)}
-              alt={page.fileName || ''}
-              className="spread-thumbnail"
-              draggable={false}
-            />
+            <>
+              <img
+                src={convertFileSrc(page.thumbnailCachePath)}
+                alt={page.fileName || ''}
+                className="spread-thumbnail"
+                draggable={false}
+              />
+              {!isViewerMode && page.fileValidationStatus && page.fileValidationStatus !== 'ok' && (
+                <div className="spread-alert-group">
+                  <span
+                    className="spread-file-alert"
+                    title={
+                      page.fileValidationStatus === 'missing'
+                        ? 'ファイルが見つかりません（移動またはリネームされた可能性があります）'
+                        : 'ファイルが変更されています（更新日時が異なります）'
+                    }
+                  >
+                    <AlertTriangleIcon size={18} />
+                  </span>
+                  {onReplaceFile && (
+                    <button
+                      className="spread-file-replace-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onReplaceFile(page.id);
+                      }}
+                      title="ファイルを選択して差し替え"
+                    >
+                      <ReplaceIcon size={16} />
+                    </button>
+                  )}
+                </div>
+              )}
+            </>
           ) : page.thumbnailStatus === 'error' ? (
             <div className="spread-error">
               <span>読込エラー</span>

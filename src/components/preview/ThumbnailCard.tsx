@@ -3,6 +3,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { Page, PAGE_TYPE_LABELS, PAGE_TYPE_COLORS } from '../../types';
+import { AlertTriangleIcon, ReplaceIcon } from '../../icons';
 import { queueThumbnail } from '../../hooks';
 
 // サムネイルカード
@@ -16,6 +17,7 @@ export function ThumbnailCard({
   onSelect,
   onCtrlClick,
   onShiftClick,
+  onReplaceFile,
   pageCount,
   lastGlobalIndex,
 }: {
@@ -28,6 +30,7 @@ export function ThumbnailCard({
   onSelect?: () => void;
   onCtrlClick?: () => void;
   onShiftClick?: () => void;
+  onReplaceFile?: () => void;
   pageCount?: number;
   lastGlobalIndex?: number;
 }) {
@@ -180,6 +183,33 @@ export function ThumbnailCard({
     >
       <div className="thumbnail-wrapper">
         {renderThumbnail()}
+        {page.fileValidationStatus && page.fileValidationStatus !== 'ok' && (
+          <div className="thumbnail-alert-group">
+            <span
+              className="thumbnail-file-alert"
+              title={
+                page.fileValidationStatus === 'missing'
+                  ? 'ファイルが見つかりません（移動またはリネームされた可能性があります）'
+                  : 'ファイルが変更されています（更新日時が異なります）'
+              }
+            >
+              <AlertTriangleIcon size={16} />
+            </span>
+            {onReplaceFile && (
+              <button
+                className="thumbnail-file-replace-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onReplaceFile();
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                title="ファイルを選択して差し替え"
+              >
+                <ReplaceIcon size={14} />
+              </button>
+            )}
+          </div>
+        )}
       </div>
       <div className="thumbnail-info">
         <span className="thumbnail-number" style={{ fontSize: thumbnailSize <= 100 ? 16 : thumbnailSize >= 180 ? 28 : 22 }}>

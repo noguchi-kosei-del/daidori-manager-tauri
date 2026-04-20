@@ -16,7 +16,7 @@ use tauri::Manager;
 // Tauri コマンドを再エクスポート
 use commands::folder::get_folder_contents;
 use commands::export::export_pages;
-use commands::project::{save_project, load_project, validate_project_files};
+use commands::project::{save_project, load_project, validate_project_files, validate_pages};
 use commands::recent::{get_recent_files, add_recent_file};
 use commands::open_file::open_file_with_default_app;
 use commands::tiff::{check_photoshop_installed, run_photoshop_tiff_convert};
@@ -89,6 +89,7 @@ pub fn run() {
             save_project,
             load_project,
             validate_project_files,
+            validate_pages,
             get_recent_files,
             add_recent_file,
             open_file_with_default_app,

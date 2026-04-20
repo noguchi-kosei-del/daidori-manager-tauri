@@ -601,6 +601,28 @@ body.viewer-mode .hamburger-overlay {
 .page-add-menu button { display: block; width: 100%; padding: var(--spacing-xs) var(--spacing-md); text-align: left; background: transparent; border: none; color: var(--color-text-primary); font-size: var(--font-size-sm); cursor: pointer; white-space: nowrap; }
 .page-add-menu button:hover { background: var(--color-bg-hover); }
 
+/* ファイル検証アラート（移動・リネーム・日時変更） */
+.page-file-alert { display: inline-flex; align-items: center; justify-content: center; color: var(--color-error); margin-right: 2px; flex-shrink: 0; }
+.page-file-replace-btn { width: 18px; height: 18px; border-radius: 3px; background: #facc15; color: #1a1a1a; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; border: none; flex-shrink: 0; margin-right: var(--spacing-xs); }
+.page-file-replace-btn:hover { background: #eab308; }
+.thumbnail-alert-group { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; align-items: center; z-index: 2; }
+.thumbnail-file-alert { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; background: var(--color-error); color: white; border-radius: 50%; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); pointer-events: auto; }
+.thumbnail-file-replace-btn { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; background: #facc15; color: #1a1a1a; border: none; border-radius: 50%; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); cursor: pointer; pointer-events: auto; }
+.thumbnail-file-replace-btn:hover { background: #eab308; }
+
+/* 見開き/EPUBビューアのファイル検証アラート */
+.spread-page-content { position: relative; }
+.epub-spread-page { position: relative; }
+.epub-thumbnail-image { position: relative; }
+.spread-alert-group { position: absolute; top: 8px; right: 8px; display: flex; gap: 6px; align-items: center; z-index: 3; pointer-events: auto; }
+.spread-file-alert { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; background: var(--color-error); color: white; border-radius: 50%; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4); }
+.spread-file-replace-btn { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; background: #facc15; color: #1a1a1a; border: none; border-radius: 50%; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4); cursor: pointer; }
+.spread-file-replace-btn:hover { background: #eab308; }
+.epub-thumb-alert-group { position: absolute; top: 2px; right: 2px; display: flex; gap: 2px; align-items: center; z-index: 3; pointer-events: auto; }
+.epub-thumb-file-alert { width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; background: var(--color-error); color: white; border-radius: 50%; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4); }
+.epub-thumb-file-replace-btn { width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; background: #facc15; color: #1a1a1a; border: none; border-radius: 50%; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4); cursor: pointer; padding: 0; }
+.epub-thumb-file-replace-btn:hover { background: #eab308; }
+
 
 .thumbnail-grid-container { display: flex; flex-direction: column; gap: var(--spacing-xl); flex: 1; height: 100%; }
 

@@ -63,6 +63,22 @@ pub struct FileValidationResult {
     pub suggested_path: Option<String>,
 }
 
+// ページ検証入力（作業中プロジェクト用・絶対パスベースの軽量検証）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageCheckInput {
+    pub page_id: String,
+    pub file_path: String,
+    pub modified_time: Option<u64>,
+    pub file_size: Option<u64>,
+}
+
+// ページ検証結果（作業中プロジェクト用）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageCheckResult {
+    pub page_id: String,
+    pub status: String,  // "ok", "missing", "modified"
+}
+
 // 最近使ったファイル
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecentFile {

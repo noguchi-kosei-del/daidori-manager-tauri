@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Page, PageType, PAGE_TYPE_LABELS, PAGE_TYPE_COLORS, FILE_SELECTABLE_PAGE_TYPES } from '../../types';
-import { FolderIcon, TrashIcon } from '../../icons';
+import { FolderIcon, TrashIcon, AlertTriangleIcon, ReplaceIcon } from '../../icons';
 import { SIDEBAR_PREFIX } from '../../constants/dnd';
 import { InsertionLine } from '../dnd';
 
@@ -13,6 +13,7 @@ export function SortablePageItem({
   isSelected,
   onSelect,
   onAddSpecialPage,
+  onInsertFile,
   onSelectFile,
   onDelete,
   showInsertionBefore,
@@ -23,6 +24,7 @@ export function SortablePageItem({
   isSelected: boolean;
   onSelect: () => void;
   onAddSpecialPage: (pageType: PageType, afterPageId: string) => void;
+  onInsertFile: (afterPageId: string) => void;
   onSelectFile: (pageId: string) => void;
   onDelete: () => void;
   showInsertionBefore?: boolean;
@@ -84,6 +86,31 @@ export function SortablePageItem({
             <span className="page-name" title={displayName}>
               {hasFile ? page.fileName : (isSpecialPage ? '' : displayName)}
             </span>
+            {page.fileValidationStatus && page.fileValidationStatus !== 'ok' && (
+              <>
+                <span
+                  className="page-file-alert"
+                  title={
+                    page.fileValidationStatus === 'missing'
+                      ? 'ファイルが見つかりません（移動またはリネームされた可能性があります）'
+                      : 'ファイルが変更されています（更新日時が異なります）'
+                  }
+                >
+                  <AlertTriangleIcon size={12} />
+                </span>
+                <button
+                  className="page-file-replace-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectFile(page.id);
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  title="ファイルを選択して差し替え"
+                >
+                  <ReplaceIcon size={11} />
+                </button>
+              </>
+            )}
             <div className="page-actions">
               {isFileSelectable && (
                 <button
@@ -113,17 +140,11 @@ export function SortablePageItem({
                   </button>
                   {showMenu && (
                     <div className="page-add-menu">
-                      <button onClick={() => { onAddSpecialPage('cover', page.id); setShowMenu(false); }}>
-                        表紙
-                      </button>
                       <button onClick={() => { onAddSpecialPage('blank', page.id); setShowMenu(false); }}>
                         白紙
                       </button>
-                      <button onClick={() => { onAddSpecialPage('intermission', page.id); setShowMenu(false); }}>
-                        幕間
-                      </button>
-                      <button onClick={() => { onAddSpecialPage('colophon', page.id); setShowMenu(false); }}>
-                        奥付
+                      <button onClick={() => { onInsertFile(page.id); setShowMenu(false); }}>
+                        ファイル
                       </button>
                     </div>
                   )}

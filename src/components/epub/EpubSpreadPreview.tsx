@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import type { EpubPageInfo } from '../../types';
 import { CHAPTER_TYPE_LABELS, CHAPTER_TYPE_COLORS } from '../../types';
-import { CloseIcon } from '../../icons';
+import { CloseIcon, AlertTriangleIcon, ReplaceIcon } from '../../icons';
 
 const CLOSE_BUTTON_HIDE_DELAY = 3000;
 const NAV_HINT_SHOW_DURATION = 3000;
@@ -13,6 +13,7 @@ interface EpubSpreadPreviewProps {
   selectedPageId: string | null;
   onSpreadChange: (index: number) => void;
   onSelectPage: (pageId: string) => void;
+  onReplaceFile?: (originalPageId: string) => void;
   zoom?: number;
   onZoomChange?: (zoom: number) => void;
   isViewerMode?: boolean;
@@ -27,6 +28,7 @@ export function EpubSpreadPreview({
   selectedPageId,
   onSpreadChange,
   onSelectPage,
+  onReplaceFile,
   zoom = 100,
   onZoomChange,
   isViewerMode = false,
@@ -375,6 +377,32 @@ export function EpubSpreadPreview({
         onClick={() => !isViewerMode && onSelectPage(page.id)}
       >
         <img src={getImageSrc(page)} alt={`Page ${getPageIndex(page)}`} />
+        {!isViewerMode && page.fileValidationStatus && page.fileValidationStatus !== 'ok' && (
+          <div className="spread-alert-group">
+            <span
+              className="spread-file-alert"
+              title={
+                page.fileValidationStatus === 'missing'
+                  ? 'ファイルが見つかりません（移動またはリネームされた可能性があります）'
+                  : 'ファイルが変更されています（更新日時が異なります）'
+              }
+            >
+              <AlertTriangleIcon size={18} />
+            </span>
+            {onReplaceFile && page.originalPageId && (
+              <button
+                className="spread-file-replace-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onReplaceFile(page.originalPageId!);
+                }}
+                title="ファイルを選択して差し替え"
+              >
+                <ReplaceIcon size={16} />
+              </button>
+            )}
+          </div>
+        )}
         {!isViewerMode && (
           <div className="epub-page-label">
             {page.originalChapterType && (

@@ -1077,4 +1077,73 @@ pub struct PsdGuide {
 - `BleedSettings.mode: 'bulk' | 'per-chapter'`
 - `BleedSettings.perChapter?: Record<string, BleedMargins>`
 - `BleedMode = 'bulk' | 'per-chapter'`
+
+### 2026-04-20: チャプター差し替え・ページ挿入簡素化・ファイル検証アラート
+
+#### チャプターページ差し替えボタン（ChapterItem.tsx, App.tsx, store.ts, icons.tsx）
+- `cover` / `chapter` / `intermission` チャプターのヘッダー削除ボタン左に循環矢印アイコンの差し替えボタンを追加
+- クリック時: 既存ページがあれば `ask()` ダイアログで確認 → フォルダ選択 → `get_folder_contents` で画像ファイル一括取得 → チャプター内ページを全置換
+- 新規store アクション `replacePagesInChapter(chapterId, files)` を追加（`saveHistory()` で Undo 対応、cover は 1 ファイルに制限）
+- `ReplaceIcon`（循環矢印 SVG）を `icons.tsx` に新規追加
+- `@tauri-apps/plugin-dialog` から `ask` を import
+
+#### page-add-btn メニュー簡素化（SortablePageItem.tsx, ChapterItem.tsx, App.tsx）
+- ページ横の「+」ボタンのメニューを「表紙／白紙／幕間／奥付」4項目から「白紙／ファイル」2項目に削減
+- 「ファイル」選択時: ファイル選択ダイアログ（`multiple: false`）で1ファイル選択 → 該当位置の次に挿入
+- 新規ハンドラ `handleInsertFile(chapterId, afterPageId)` を App.tsx に追加（`addPagesToChapterAt` を再利用）
+- `SortablePageItem` / `ChapterItem` に `onInsertFile` prop を追加
+
+#### ファイル検証機能（commands/project.rs, types/project.rs, lib.rs, store.ts, types.ts, App.tsx）
+- 作業中プロジェクトのページ参照ファイルを定期検証し、移動・リネーム・日時変更を検出
+- 新規Rustコマンド `validate_pages(pages)` を追加（`commands/project.rs`）
+  - 入力: `Vec<PageCheckInput { page_id, file_path, modified_time, file_size }>`
+  - 出力: `Vec<PageCheckResult { page_id, status }>`（`ok` / `missing` / `modified`）
+  - ファイル存在確認 + メタデータの modified_time 比較による軽量検証
+- `Page.fileValidationStatus?: FileValidationStatus` (`'ok' | 'missing' | 'modified'`) をフロントエンド型に追加
+- 新規store アクション `updatePagesValidation(results)` で一括反映（履歴には含めない）
+- 検証トリガー: マウント時 + window `focus` イベント（他アプリでファイル編集後に戻ってきたタイミングで自動再検証）
+
+#### 赤アラートバッジ表示（SortablePageItem.tsx, ThumbnailCard.tsx, SpreadViewer.tsx, EpubSpreadPreview.tsx, EpubThumbnailBar.tsx, styles.css）
+- `fileValidationStatus !== 'ok'` のページに赤い `AlertTriangleIcon` を表示
+- サイドバー: ページ名の横にインラインで表示
+- サムネイルグリッド: サムネイル右上に赤丸バッジ
+- 見開きビューア: 画像右上に28pxの赤丸バッジ（閲覧モード中は非表示）
+- EPUB見開き: 同上
+- EPUBサムネイルバー: 小型（16px）の赤丸バッジ
+- tooltip で理由を区別: `missing`=「ファイルが見つかりません」 / `modified`=「ファイルが変更されています」
+
+#### 黄色差し替えボタン（各コンポーネント + styles.css）
+- 赤アラートの横に黄色（`#facc15`）の差し替えボタンを併置
+- アイコンはチャプター差し替えと同じ `ReplaceIcon`（循環矢印）で統一
+- クリックでファイル選択ダイアログ → `setPageFile` を呼び出しページの参照を置換
+- 既存の `handleSelectFile(pageId)` を全箇所で再利用
+- `setPageFile` を更新し、新ファイル設定時に `fileValidationStatus: 'ok'` を即座にセット（アラートが即消え）
+- `ThumbnailCard` / `SpreadViewer` / `EpubSpreadPreview` / `EpubThumbnailBar` / `EpubMakerView` に `onReplaceFile` prop を追加
+
+#### EpubPageInfo への検証状態伝播（types.ts, store.ts）
+- `EpubPageInfo.fileValidationStatus?: FileValidationStatus` を追加
+- `loadEpubFromDaidori` で台割側の `page.fileValidationStatus` を epubPage にコピー
+- chapters 変更時の自動 EPUB 再構築により、検証状態が常に最新
+
+#### Tauriコマンド追加
+| コマンド | 説明 |
+|---------|------|
+| `validate_pages` | ページのファイル参照を軽量検証（移動/リネーム/日時変更を検出） |
+
+#### 新規/変更アイコン
+- `ReplaceIcon`: 循環矢印（チャプター差し替え・ページ差し替え共通）
+- `AlertTriangleIcon`: 既存利用（ファイル検証アラート用）
+
+#### 新規CSSクラス（styles.css）
+- `.page-file-alert` / `.page-file-replace-btn`: サイドバー用
+- `.thumbnail-alert-group` / `.thumbnail-file-alert` / `.thumbnail-file-replace-btn`: サムネイルグリッド用
+- `.spread-alert-group` / `.spread-file-alert` / `.spread-file-replace-btn`: 見開き・EPUB見開き用
+- `.epub-thumb-alert-group` / `.epub-thumb-file-alert` / `.epub-thumb-file-replace-btn`: EPUBサムネイルバー用
+- `.spread-page-content` / `.epub-spread-page` / `.epub-thumbnail-image` に `position: relative` を追加
+
+#### 型定義追加
+- `FileValidationStatus = 'ok' | 'missing' | 'modified'`
+- `Page.fileValidationStatus?: FileValidationStatus`
+- `EpubPageInfo.fileValidationStatus?: FileValidationStatus`
+- Rust: `PageCheckInput`, `PageCheckResult`
 - `ExportOptions.bleedMode: BleedMode`

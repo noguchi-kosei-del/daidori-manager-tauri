@@ -10,6 +10,7 @@ interface EpubMakerViewProps {
   onExitViewerMode?: () => void;
   isPageBarVisible?: boolean;
   bindingDirection?: 'rtl' | 'ltr';
+  onReplaceFile?: (originalPageId: string) => void;
 }
 
 export function EpubMakerView({
@@ -19,6 +20,7 @@ export function EpubMakerView({
   onExitViewerMode,
   isPageBarVisible = true,
   bindingDirection = 'rtl',
+  onReplaceFile,
 }: EpubMakerViewProps) {
   const {
     epubPages,
@@ -72,6 +74,7 @@ export function EpubMakerView({
             selectedPageId={epubSelectedPageId}
             onSpreadChange={handleSpreadChange}
             onSelectPage={handleSelectPage}
+            onReplaceFile={onReplaceFile}
             zoom={zoom}
             onZoomChange={onZoomChange}
             isViewerMode={isViewerMode}
@@ -86,6 +89,7 @@ export function EpubMakerView({
               selectedPageId={epubSelectedPageId}
               onSelectPage={handleSelectPage}
               onSpreadChange={handleSpreadChange}
+              onReplaceFile={onReplaceFile}
               bindingDirection={bindingDirection}
             />
           )}

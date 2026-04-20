@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use crate::types::{ProjectFile, SavedFileReference, FileValidationResult};
+use crate::types::{ProjectFile, SavedFileReference, FileValidationResult, PageCheckInput, PageCheckResult};
 
 // プロジェクトを保存（アトミック書き込み: 一時ファイル→リネーム）
 #[tauri::command]
@@ -111,6 +111,41 @@ fn validate_file_reference(
         resolved_path: None,
         suggested_path: None,
     }
+}
+
+// 作業中ページの軽量検証（絶対パスのみ・移動/リネーム/日時変更を検出）
+#[tauri::command]
+pub async fn validate_pages(pages: Vec<PageCheckInput>) -> Result<Vec<PageCheckResult>, String> {
+    let mut results = Vec::with_capacity(pages.len());
+
+    for page in pages {
+        let path = Path::new(&page.file_path);
+        let status = if !path.exists() {
+            "missing"
+        } else if let Some(expected) = page.modified_time {
+            match fs::metadata(path) {
+                Ok(metadata) => {
+                    let current = metadata
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    if current != expected { "modified" } else { "ok" }
+                }
+                Err(_) => "missing",
+            }
+        } else {
+            "ok"
+        };
+
+        results.push(PageCheckResult {
+            page_id: page.page_id,
+            status: status.to_string(),
+        });
+    }
+
+    Ok(results)
 }
 
 // プロジェクト内のファイル参照を検証

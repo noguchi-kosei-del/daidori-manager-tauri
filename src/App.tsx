@@ -1,6 +1,6 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, ask } from '@tauri-apps/plugin-dialog';
 import { useTauriFileDrop } from './hooks/useTauriFileDrop';
 import {
   DndContext,
@@ -23,6 +23,7 @@ import {
   PageType,
   DaidoriProjectFile,
   FileValidationResult,
+  FileValidationStatus,
 } from './types';
 import {
   FolderIcon,
@@ -89,6 +90,7 @@ function App() {
     toggleChapterCollapsed,
     reorderChapters,
     addPagesToChapter,
+    replacePagesInChapter,
     addPagesToChapterAt,
     addSpecialPage,
     setPageFile,
@@ -105,6 +107,8 @@ function App() {
     setThumbnailSize,
     undo,
     redo,
+    // ファイル検証
+    updatePagesValidation,
     // プロジェクト管理
     markAsSaved,
     resetProject,
@@ -355,6 +359,44 @@ function App() {
     };
   }, [isViewerMode]);
 
+  // ファイル検証（移動・リネーム・日時変更検出）：マウント時とウィンドウフォーカス時に実行
+  useEffect(() => {
+    let cancelled = false;
+    const runValidation = async () => {
+      const targets: { page_id: string; file_path: string; modified_time: number | null; file_size: number | null }[] = [];
+      for (const c of useStore.getState().chapters) {
+        for (const p of c.pages) {
+          if (p.filePath) {
+            targets.push({
+              page_id: p.id,
+              file_path: p.filePath,
+              modified_time: p.modifiedTime ?? null,
+              file_size: p.fileSize ?? null,
+            });
+          }
+        }
+      }
+      if (targets.length === 0) return;
+      try {
+        const results = await invoke<{ page_id: string; status: FileValidationStatus }[]>(
+          'validate_pages',
+          { pages: targets }
+        );
+        if (cancelled) return;
+        updatePagesValidation(results.map((r) => ({ pageId: r.page_id, status: r.status })));
+      } catch (error) {
+        console.error('ファイル検証エラー:', error);
+      }
+    };
+    runValidation();
+    const handleFocus = () => { runValidation(); };
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [updatePagesValidation]);
+
   // ダークモードトグル
   const toggleDarkMode = () => {
     setIsDarkMode(!isDarkMode);
@@ -512,6 +554,62 @@ function App() {
       }
     } catch (error) {
       console.error('フォルダ追加エラー:', error);
+    }
+  };
+
+  const handleInsertFile = async (chapterId: string, afterPageId: string) => {
+    try {
+      const selected = await open({
+        title: 'フォルダから1ファイルを選択',
+        multiple: false,
+        directory: false,
+        filters: [
+          {
+            name: '画像ファイル',
+            extensions: ['jpg', 'jpeg', 'png', 'psd', 'tif', 'tiff'],
+          },
+        ],
+      });
+      if (!selected || typeof selected !== 'string' || selected.trim().length === 0) return;
+      const folder = selected.replace(/[^\\/]+$/, '');
+      if (!folder) return;
+      const files: FileInfo[] = await invoke('get_folder_contents', { folderPath: folder });
+      const target = files.find((f) => f.path === selected);
+      if (!target) return;
+      const chapter = chapters.find((c) => c.id === chapterId);
+      if (!chapter) return;
+      const afterIndex = chapter.pages.findIndex((p) => p.id === afterPageId);
+      const insertIndex = afterIndex >= 0 ? afterIndex + 1 : chapter.pages.length;
+      addPagesToChapterAt(chapterId, [target], insertIndex);
+    } catch (error) {
+      console.error('ファイル挿入エラー:', error);
+    }
+  };
+
+  const handleReplacePages = async (chapterId: string) => {
+    try {
+      const chapter = chapters.find((c) => c.id === chapterId);
+      if (chapter && chapter.pages.length > 0) {
+        const confirmed = await ask(
+          `「${chapter.name}」の既存ページ${chapter.pages.length}枚を、選択するフォルダの内容で差し替えます。よろしいですか？`,
+          { title: 'ページを差し替え', kind: 'warning' }
+        );
+        if (!confirmed) return;
+      }
+      const selected = await open({
+        title: '差し替え元フォルダを選択',
+        directory: true,
+      });
+      if (selected && typeof selected === 'string' && selected.trim().length > 0) {
+        const files: FileInfo[] = await invoke('get_folder_contents', {
+          folderPath: selected,
+        });
+        if (files.length > 0) {
+          replacePagesInChapter(chapterId, files);
+        }
+      }
+    } catch (error) {
+      console.error('差し替えエラー:', error);
     }
   };
 
@@ -1333,7 +1431,9 @@ function App() {
                         onDeletePage={(pageId) => removePage(chapter.id, pageId)}
                         onAddFiles={() => handleAddPages(chapter.id)}
                         onAddFolder={() => handleAddFolder(chapter.id)}
+                        onReplacePages={() => handleReplacePages(chapter.id)}
                         onAddSpecialPage={(pageType, afterPageId) => addSpecialPage(chapter.id, pageType, afterPageId)}
+                        onInsertFile={(afterPageId) => handleInsertFile(chapter.id, afterPageId)}
                         onSelectFile={handleSelectFile}
                         dropTarget={dropTarget}
                       />
@@ -1412,6 +1512,7 @@ function App() {
                 onExitViewerMode={() => setIsViewerMode(false)}
                 isPageBarVisible={isPageBarVisible}
                 bindingDirection={bindingDirection}
+                onReplaceFile={handleSelectFile}
               />
             ) : (
             <div className="preview-area" ref={previewAreaRef}>
@@ -1428,6 +1529,7 @@ function App() {
                     selectPage(pageId);
                   }
                 }}
+                onReplaceFile={handleSelectFile}
                 isViewerMode={isViewerMode}
                 onExitViewerMode={() => setIsViewerMode(false)}
                 isPageBarVisible={isPageBarVisible}
@@ -1573,6 +1675,7 @@ function App() {
                                                     selectPage(item.page.id);
                                                   }
                                                 }}
+                                                onReplaceFile={() => handleSelectFile(item.page.id)}
                                                 pageCount={isCollapsed ? group.pages.length : undefined}
                                                 lastGlobalIndex={isCollapsed && group.pages.length > 1 ? group.pages[group.pages.length - 1].globalIndex : undefined}
                                               />

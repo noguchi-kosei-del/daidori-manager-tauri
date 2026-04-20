@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Chapter, PageType, CHAPTER_TYPE_LABELS, CHAPTER_TYPE_COLORS } from '../../types';
-import { FileIcon, FolderIcon, TrashIcon, PlusCircleIcon } from '../../icons';
+import { FileIcon, FolderIcon, TrashIcon, PlusCircleIcon, ReplaceIcon } from '../../icons';
 import { SIDEBAR_PREFIX } from '../../constants/dnd';
 import { SortablePageItem } from './SortablePageItem';
 
@@ -20,7 +20,9 @@ export function ChapterItem({
   onDeletePage,
   onAddFiles,
   onAddFolder,
+  onReplacePages,
   onAddSpecialPage,
+  onInsertFile,
   onSelectFile,
   dropTarget,
 }: {
@@ -35,7 +37,9 @@ export function ChapterItem({
   onDeletePage: (pageId: string) => void;
   onAddFiles: () => void;
   onAddFolder: () => void;
+  onReplacePages: () => void;
   onAddSpecialPage: (pageType: PageType, afterPageId?: string) => void;
+  onInsertFile: (afterPageId: string) => void;
   onSelectFile: (pageId: string) => void;
   dropTarget: {
     type: 'page-before' | 'page-after' | 'chapter-before' | 'chapter-after' | 'chapter-end' | 'new-chapter-start' | 'new-chapter-end';
@@ -136,6 +140,19 @@ export function ChapterItem({
         )}
         <span className="chapter-page-count">({chapter.pages.length})</span>
         <div className="chapter-actions">
+          {(chapter.type === 'cover' || chapter.type === 'chapter' || chapter.type === 'intermission') && (
+            <button
+              className="btn-icon"
+              onClick={(e) => {
+                e.stopPropagation();
+                onReplacePages();
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              title="フォルダから差し替え"
+            >
+              <ReplaceIcon size={14} />
+            </button>
+          )}
           <button
             className="btn-icon btn-delete"
             onClick={(e) => {
@@ -165,6 +182,7 @@ export function ChapterItem({
                   isSelected={selectedPageId === page.id}
                   onSelect={() => onSelectPage(page.id)}
                   onAddSpecialPage={onAddSpecialPage}
+                  onInsertFile={onInsertFile}
                   onSelectFile={onSelectFile}
                   onDelete={() => onDeletePage(page.id)}
                   showInsertionBefore={dropTarget?.type === 'page-before' && dropTarget.pageId === page.id && dropTarget.chapterId === chapter.id}

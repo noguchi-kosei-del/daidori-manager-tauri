@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { useStore } from '../../store';
 import type { EpubPageInfo } from '../../types';
+import { AlertTriangleIcon, ReplaceIcon } from '../../icons';
 
 interface EpubThumbnailBarProps {
   pages: EpubPageInfo[];
@@ -9,6 +10,7 @@ interface EpubThumbnailBarProps {
   selectedPageId: string | null;
   onSelectPage: (pageId: string) => void;
   onSpreadChange: (index: number) => void;
+  onReplaceFile?: (originalPageId: string) => void;
   bindingDirection?: 'rtl' | 'ltr';
 }
 
@@ -18,6 +20,7 @@ export function EpubThumbnailBar({
   selectedPageId,
   onSelectPage,
   onSpreadChange,
+  onReplaceFile,
   bindingDirection = 'rtl',
 }: EpubThumbnailBarProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -204,6 +207,32 @@ export function EpubThumbnailBar({
                   alt={`Page ${index + 1}`}
                   loading="lazy"
                 />
+              )}
+              {page.fileValidationStatus && page.fileValidationStatus !== 'ok' && (
+                <div className="epub-thumb-alert-group">
+                  <span
+                    className="epub-thumb-file-alert"
+                    title={
+                      page.fileValidationStatus === 'missing'
+                        ? 'ファイルが見つかりません'
+                        : 'ファイルが変更されています'
+                    }
+                  >
+                    <AlertTriangleIcon size={11} />
+                  </span>
+                  {onReplaceFile && page.originalPageId && (
+                    <button
+                      className="epub-thumb-file-replace-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onReplaceFile(page.originalPageId!);
+                      }}
+                      title="ファイルを選択して差し替え"
+                    >
+                      <ReplaceIcon size={10} />
+                    </button>
+                  )}
+                </div>
               )}
             </div>
             <div className="epub-thumbnail-info">

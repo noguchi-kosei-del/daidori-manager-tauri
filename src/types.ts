@@ -3,6 +3,8 @@ export type ChapterType = 'chapter' | 'cover' | 'blank' | 'intermission' | 'colo
 
 export type ThumbnailStatus = 'pending' | 'loading' | 'ready' | 'error';
 
+export type FileValidationStatus = 'ok' | 'missing' | 'modified';
+
 export type FileType = 'jpg' | 'jpeg' | 'png' | 'psd' | 'tif' | 'tiff';
 
 // ページ種別
@@ -45,6 +47,8 @@ export interface Page {
   thumbnailCachePath?: string;
   // 特殊ページの場合のラベル（カスタム名）
   label?: string;
+  // ファイル検証状態（移動・リネーム・日時変更を検出）
+  fileValidationStatus?: FileValidationStatus;
 }
 
 // サムネイル生成結果（Rust側のThumbnailResultに対応）
@@ -314,6 +318,8 @@ export interface EpubPageInfo {
   originalChapterName?: string;
   originalPageType?: PageType;
   originalChapterType?: ChapterType;
+  // ファイル検証状態（台割側から引き継ぐ）
+  fileValidationStatus?: FileValidationStatus;
 }
 
 // EPUBプロジェクトファイル形式
