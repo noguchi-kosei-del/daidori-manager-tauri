@@ -8,6 +8,8 @@ import {
   PAGE_TYPE_LABELS,
   FileValidationStatus,
   SavedUiState,
+  ValidationContext,
+  ValidationGroupContext,
 
   EpubPageInfo,
   EpubMetadata,
@@ -55,6 +57,9 @@ interface AppState {
   viewMode: 'selection' | 'all';
   thumbnailSize: ThumbnailSize;
 
+  // 検証コンテキスト（mismatch tooltip 表示用の最頻値情報）
+  validationContext: ValidationContext;
+
   // EPUB_maker状態
   epubPages: EpubPageInfo[];
   epubMetadata: EpubMetadata | null;
@@ -97,7 +102,16 @@ interface AppState {
   setPageThumbnailError: (pageId: string) => void;
 
   // アクション: ファイル検証
-  updatePagesValidation: (results: { pageId: string; status: FileValidationStatus }[]) => void;
+  updatePagesValidation: (
+    results: {
+      pageId: string;
+      status: FileValidationStatus;
+      width?: number | null;
+      height?: number | null;
+      colorMode?: string | null;
+      dpi?: number | null;
+    }[]
+  ) => void;
 
   // アクション: 履歴
   undo: () => void;
@@ -155,6 +169,163 @@ const getDefaultChapterName = (type: ChapterType, chapters: Chapter[]): string =
   }
 };
 
+// ===== mismatch検知ヘルパー =====
+
+// グループ内で最頻値を求める。値の出現が単一・全件None・全件同一の場合はundefinedを返す
+function computeMajority<T>(values: (T | undefined | null)[]): T | undefined {
+  const counts = new Map<string, { value: T; count: number }>();
+  let total = 0;
+  for (const v of values) {
+    if (v === undefined || v === null) continue;
+    const key = String(v);
+    const entry = counts.get(key);
+    if (entry) {
+      entry.count += 1;
+    } else {
+      counts.set(key, { value: v, count: 1 });
+    }
+    total += 1;
+  }
+  if (total < 2) return undefined; // 比較対象が1件以下なら判定しない
+  if (counts.size < 2) return undefined; // 全件同じ → 外れ値なし
+
+  // 最頻値（同数の場合は任意の1つ）
+  let best: { value: T; count: number } | undefined;
+  for (const e of counts.values()) {
+    if (!best || e.count > best.count) best = e;
+  }
+  return best?.value;
+}
+
+interface MismatchPageRef {
+  pageId: string;
+  width?: number;
+  height?: number;
+  colorMode?: string;
+  dpi?: number;
+  baseStatus: FileValidationStatus;
+}
+
+// chapters から mismatch ステータスを計算し、各ページに反映 + 最頻値コンテキストを返す
+function applyMismatchStatuses(chapters: Chapter[]): {
+  chapters: Chapter[];
+  context: ValidationContext;
+} {
+  // cover チャプター / それ以外で分けてページ参照を集める
+  const coverRefs: MismatchPageRef[] = [];
+  const bodyRefs: MismatchPageRef[] = [];
+
+  for (const c of chapters) {
+    const target = c.type === 'cover' ? coverRefs : bodyRefs;
+    for (const p of c.pages) {
+      if (p.pageType !== 'file') continue; // 白紙等はスキップ
+      target.push({
+        pageId: p.id,
+        width: p.imageWidth,
+        height: p.imageHeight,
+        colorMode: p.imageColorMode,
+        dpi: p.imageDpi,
+        baseStatus: p.fileValidationStatus ?? 'ok',
+      });
+    }
+  }
+
+  const buildGroup = (refs: MismatchPageRef[]): {
+    ctx: ValidationGroupContext;
+    mismatch: Map<string, FileValidationStatus>;
+  } => {
+    const sizeKeys = refs.map((r) =>
+      r.width !== undefined && r.height !== undefined ? `${r.width}x${r.height}` : undefined
+    );
+    const colorKeys = refs.map((r) => r.colorMode);
+    const dpiKeys = refs.map((r) => r.dpi);
+
+    const majoritySize = computeMajority(sizeKeys);
+    const majorityColorMode = computeMajority(colorKeys);
+    const majorityDpi = computeMajority(dpiKeys);
+
+    const mismatch = new Map<string, FileValidationStatus>();
+    for (let i = 0; i < refs.length; i++) {
+      const r = refs[i];
+      // 既に missing/modified/meta_error の場合は mismatch で上書きしない
+      if (r.baseStatus === 'missing' || r.baseStatus === 'modified' || r.baseStatus === 'meta_error') {
+        continue;
+      }
+      // 優先順位: size_mismatch > color_mismatch > dpi_mismatch
+      if (
+        majoritySize !== undefined &&
+        sizeKeys[i] !== undefined &&
+        sizeKeys[i] !== majoritySize
+      ) {
+        mismatch.set(r.pageId, 'size_mismatch');
+        continue;
+      }
+      if (
+        majorityColorMode !== undefined &&
+        colorKeys[i] !== undefined &&
+        colorKeys[i] !== majorityColorMode
+      ) {
+        mismatch.set(r.pageId, 'color_mismatch');
+        continue;
+      }
+      if (
+        majorityDpi !== undefined &&
+        dpiKeys[i] !== undefined &&
+        dpiKeys[i] !== majorityDpi
+      ) {
+        mismatch.set(r.pageId, 'dpi_mismatch');
+        continue;
+      }
+    }
+
+    return {
+      ctx: {
+        majoritySize,
+        majorityColorMode,
+        majorityDpi,
+      },
+      mismatch,
+    };
+  };
+
+  const cover = buildGroup(coverRefs);
+  const body = buildGroup(bodyRefs);
+
+  // 全ページを走査して mismatch ステータスを反映
+  const finalChapters = chapters.map((c) => {
+    const mismatchMap = c.type === 'cover' ? cover.mismatch : body.mismatch;
+    return {
+      ...c,
+      pages: c.pages.map((p) => {
+        if (p.pageType !== 'file') return p;
+        const newStatus = mismatchMap.get(p.id);
+        if (newStatus) {
+          if (p.fileValidationStatus === newStatus) return p;
+          return { ...p, fileValidationStatus: newStatus };
+        }
+        // mismatch解消: ベースが'ok'なら'ok'のまま、missing/modified等は維持
+        const baseStatus = p.fileValidationStatus;
+        if (
+          baseStatus === 'size_mismatch' ||
+          baseStatus === 'color_mismatch' ||
+          baseStatus === 'dpi_mismatch'
+        ) {
+          return { ...p, fileValidationStatus: 'ok' as FileValidationStatus };
+        }
+        return p;
+      }),
+    };
+  });
+
+  return {
+    chapters: finalChapters,
+    context: {
+      cover: cover.ctx,
+      body: body.ctx,
+    },
+  };
+}
+
 export const useStore = create<AppState>((set, get) => {
   // 履歴に現在の状態を保存するヘルパー（変更フラグも設定）
   const saveHistory = () => {
@@ -181,6 +352,8 @@ export const useStore = create<AppState>((set, get) => {
   selectedPageIds: [],
   viewMode: 'all',
   thumbnailSize: 'medium',
+
+  validationContext: { cover: {}, body: {} },
 
   // EPUB_maker初期状態
   epubPages: [],
@@ -672,19 +845,37 @@ export const useStore = create<AppState>((set, get) => {
   },
 
   // ファイル検証結果を一括反映（履歴には含めない）
+  // 1. ベースステータス + 画像メタを各ページにマージ
+  // 2. cover チャプター / その他で別グループに最頻値を計算
+  // 3. mismatch 系ステータスを上書き、validationContext を更新
   updatePagesValidation: (results) => {
-    const map = new Map(results.map((r) => [r.pageId, r.status]));
-    set((state) => ({
-      chapters: state.chapters.map((c) => ({
+    const map = new Map(results.map((r) => [r.pageId, r] as const));
+    set((state) => {
+      // Step 1: ベース反映（ステータス + メタ）
+      const mergedChapters = state.chapters.map((c) => ({
         ...c,
         pages: c.pages.map((p) => {
-          const status = map.get(p.id);
-          if (!status) return p;
-          if (p.fileValidationStatus === status) return p;
-          return { ...p, fileValidationStatus: status };
+          const r = map.get(p.id);
+          if (!r) return p;
+          return {
+            ...p,
+            fileValidationStatus: r.status,
+            imageWidth: r.width ?? undefined,
+            imageHeight: r.height ?? undefined,
+            imageColorMode: r.colorMode ?? undefined,
+            imageDpi: r.dpi ?? undefined,
+          };
         }),
-      })),
-    }));
+      }));
+
+      // Step 2 & 3: mismatch検知と上書き
+      const { chapters: finalChapters, context } = applyMismatchStatuses(mergedChapters);
+
+      return {
+        chapters: finalChapters,
+        validationContext: context,
+      };
+    });
   },
 
   // 元に戻す
@@ -938,6 +1129,10 @@ export const useStore = create<AppState>((set, get) => {
           originalPageType: page.pageType,
           originalChapterType: chapter.type,
           fileValidationStatus: page.fileValidationStatus,
+          imageWidth: page.imageWidth,
+          imageHeight: page.imageHeight,
+          imageColorMode: page.imageColorMode,
+          imageDpi: page.imageDpi,
         };
 
         epubPages.push(epubPage);

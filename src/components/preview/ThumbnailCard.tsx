@@ -2,9 +2,11 @@ import { useEffect, useRef, useState, useMemo } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { convertFileSrc } from '@tauri-apps/api/core';
-import { Page, PAGE_TYPE_LABELS, PAGE_TYPE_COLORS } from '../../types';
+import { Page, PAGE_TYPE_LABELS, PAGE_TYPE_COLORS, ChapterType } from '../../types';
 import { AlertTriangleIcon, ReplaceIcon } from '../../icons';
 import { queueThumbnail } from '../../hooks';
+import { useStore } from '../../store';
+import { getValidationMessage } from '../../utils/validationMessage';
 
 // サムネイルカード
 export function ThumbnailCard({
@@ -14,6 +16,7 @@ export function ThumbnailCard({
   isHighlighted,
   isSelected,
   isMultiSelected,
+  chapterType,
   onSelect,
   onCtrlClick,
   onShiftClick,
@@ -27,6 +30,7 @@ export function ThumbnailCard({
   isHighlighted?: boolean;
   isSelected?: boolean;
   isMultiSelected?: boolean;
+  chapterType?: ChapterType;
   onSelect?: () => void;
   onCtrlClick?: () => void;
   onShiftClick?: () => void;
@@ -34,6 +38,7 @@ export function ThumbnailCard({
   pageCount?: number;
   lastGlobalIndex?: number;
 }) {
+  const validationContext = useStore((s) => s.validationContext);
   const {
     attributes,
     listeners,
@@ -187,11 +192,7 @@ export function ThumbnailCard({
           <div className="thumbnail-alert-group">
             <span
               className="thumbnail-file-alert"
-              title={
-                page.fileValidationStatus === 'missing'
-                  ? 'ファイルが見つかりません（移動またはリネームされた可能性があります）'
-                  : 'ファイルが変更されています（更新日時が異なります）'
-              }
+              title={getValidationMessage(page, validationContext, chapterType)}
             >
               <AlertTriangleIcon size={16} />
             </span>

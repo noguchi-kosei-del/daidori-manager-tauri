@@ -3,7 +3,36 @@ export type ChapterType = 'chapter' | 'cover' | 'blank' | 'intermission' | 'colo
 
 export type ThumbnailStatus = 'pending' | 'loading' | 'ready' | 'error';
 
-export type FileValidationStatus = 'ok' | 'missing' | 'modified';
+export type FileValidationStatus =
+  | 'ok'
+  | 'missing'
+  | 'modified'
+  | 'meta_error'
+  | 'size_mismatch'
+  | 'color_mismatch'
+  | 'dpi_mismatch';
+
+// 画像カラーモード（PSD/通常画像から抽出）
+export type ImageColorMode =
+  | 'RGB'
+  | 'Grayscale'
+  | 'CMYK'
+  | 'Bitmap'
+  | 'Indexed'
+  | 'Multichannel'
+  | 'Duotone'
+  | 'Lab';
+
+// グループ別の最頻値情報（mismatch tooltip 表示用）
+export interface ValidationGroupContext {
+  majoritySize?: string;        // "WxH"
+  majorityColorMode?: string;
+  majorityDpi?: number;
+}
+export interface ValidationContext {
+  cover: ValidationGroupContext;
+  body: ValidationGroupContext;
+}
 
 export type FileType = 'jpg' | 'jpeg' | 'png' | 'psd' | 'tif' | 'tiff';
 
@@ -49,6 +78,11 @@ export interface Page {
   label?: string;
   // ファイル検証状態（移動・リネーム・日時変更を検出）
   fileValidationStatus?: FileValidationStatus;
+  // 画像メタデータ（mismatch検知に使用）
+  imageWidth?: number;
+  imageHeight?: number;
+  imageColorMode?: ImageColorMode | string;
+  imageDpi?: number;
 }
 
 // サムネイル生成結果（Rust側のThumbnailResultに対応）
@@ -320,6 +354,11 @@ export interface EpubPageInfo {
   originalChapterType?: ChapterType;
   // ファイル検証状態（台割側から引き継ぐ）
   fileValidationStatus?: FileValidationStatus;
+  // 画像メタデータ（台割側から引き継ぎ、mismatch tooltip表示に使用）
+  imageWidth?: number;
+  imageHeight?: number;
+  imageColorMode?: ImageColorMode | string;
+  imageDpi?: number;
 }
 
 // EPUBプロジェクトファイル形式

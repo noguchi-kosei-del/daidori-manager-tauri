@@ -3,6 +3,8 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { Chapter, Page, PAGE_TYPE_LABELS, PAGE_TYPE_COLORS } from '../../types';
 import { queueThumbnail } from '../../hooks';
 import { CloseIcon, NoPageIcon, AlertTriangleIcon, ReplaceIcon } from '../../icons';
+import { useStore } from '../../store';
+import { getValidationMessage } from '../../utils/validationMessage';
 
 // 閉じるボタン自動非表示の遅延時間（ミリ秒）
 const CLOSE_BUTTON_HIDE_DELAY = 3000;
@@ -35,6 +37,7 @@ export function SpreadViewer({
   const isRTL = bindingDirection === 'rtl';
   const trackRef = useRef<HTMLDivElement>(null);
   const spreadPairRef = useRef<HTMLDivElement>(null);
+  const validationContext = useStore((s) => s.validationContext);
   const [currentSpreadIndex, setCurrentSpreadIndex] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [dragHandlePosition, setDragHandlePosition] = useState(0);
@@ -417,11 +420,7 @@ export function SpreadViewer({
                 <div className="spread-alert-group">
                   <span
                     className="spread-file-alert"
-                    title={
-                      page.fileValidationStatus === 'missing'
-                        ? 'ファイルが見つかりません（移動またはリネームされた可能性があります）'
-                        : 'ファイルが変更されています（更新日時が異なります）'
-                    }
+                    title={getValidationMessage(page, validationContext, item.chapter.type)}
                   >
                     <AlertTriangleIcon size={18} />
                   </span>

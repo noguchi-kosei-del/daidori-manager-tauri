@@ -3,6 +3,8 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import type { EpubPageInfo } from '../../types';
 import { CHAPTER_TYPE_LABELS, CHAPTER_TYPE_COLORS } from '../../types';
 import { CloseIcon, AlertTriangleIcon, ReplaceIcon } from '../../icons';
+import { useStore } from '../../store';
+import { getValidationMessage } from '../../utils/validationMessage';
 
 const CLOSE_BUTTON_HIDE_DELAY = 3000;
 const NAV_HINT_SHOW_DURATION = 3000;
@@ -39,6 +41,7 @@ export function EpubSpreadPreview({
   const isRTL = bindingDirection === 'rtl';
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
+  const validationContext = useStore((s) => s.validationContext);
   const [isDragging, setIsDragging] = useState(false);
   const [dragHandlePosition, setDragHandlePosition] = useState(0);
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
@@ -381,11 +384,7 @@ export function EpubSpreadPreview({
           <div className="spread-alert-group">
             <span
               className="spread-file-alert"
-              title={
-                page.fileValidationStatus === 'missing'
-                  ? 'ファイルが見つかりません（移動またはリネームされた可能性があります）'
-                  : 'ファイルが変更されています（更新日時が異なります）'
-              }
+              title={getValidationMessage(page, validationContext, page.originalChapterType)}
             >
               <AlertTriangleIcon size={18} />
             </span>

@@ -180,6 +180,7 @@ export function ChapterItem({
                   page={page}
                   index={index}
                   isSelected={selectedPageId === page.id}
+                  chapterType={chapter.type}
                   onSelect={() => onSelectPage(page.id)}
                   onAddSpecialPage={onAddSpecialPage}
                   onInsertFile={onInsertFile}

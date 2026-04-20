@@ -3,6 +3,7 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { useStore } from '../../store';
 import type { EpubPageInfo } from '../../types';
 import { AlertTriangleIcon, ReplaceIcon } from '../../icons';
+import { getValidationMessage } from '../../utils/validationMessage';
 
 interface EpubThumbnailBarProps {
   pages: EpubPageInfo[];
@@ -24,6 +25,7 @@ export function EpubThumbnailBar({
   bindingDirection = 'rtl',
 }: EpubThumbnailBarProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const validationContext = useStore((s) => s.validationContext);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -212,11 +214,7 @@ export function EpubThumbnailBar({
                 <div className="epub-thumb-alert-group">
                   <span
                     className="epub-thumb-file-alert"
-                    title={
-                      page.fileValidationStatus === 'missing'
-                        ? 'ファイルが見つかりません'
-                        : 'ファイルが変更されています'
-                    }
+                    title={getValidationMessage(page, validationContext, page.originalChapterType)}
                   >
                     <AlertTriangleIcon size={11} />
                   </span>

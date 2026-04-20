@@ -1,16 +1,19 @@
 import { useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Page, PageType, PAGE_TYPE_LABELS, PAGE_TYPE_COLORS, FILE_SELECTABLE_PAGE_TYPES } from '../../types';
+import { Page, PageType, PAGE_TYPE_LABELS, PAGE_TYPE_COLORS, FILE_SELECTABLE_PAGE_TYPES, ChapterType } from '../../types';
 import { FolderIcon, TrashIcon, AlertTriangleIcon, ReplaceIcon } from '../../icons';
 import { SIDEBAR_PREFIX } from '../../constants/dnd';
 import { InsertionLine } from '../dnd';
+import { useStore } from '../../store';
+import { getValidationMessage } from '../../utils/validationMessage';
 
 // サイドバーのソート可能なページアイテム
 export function SortablePageItem({
   page,
   index,
   isSelected,
+  chapterType,
   onSelect,
   onAddSpecialPage,
   onInsertFile,
@@ -22,6 +25,7 @@ export function SortablePageItem({
   page: Page;
   index: number;
   isSelected: boolean;
+  chapterType: ChapterType;
   onSelect: () => void;
   onAddSpecialPage: (pageType: PageType, afterPageId: string) => void;
   onInsertFile: (afterPageId: string) => void;
@@ -31,6 +35,7 @@ export function SortablePageItem({
   showInsertionAfter?: boolean;
 }) {
   const [showMenu, setShowMenu] = useState(false);
+  const validationContext = useStore((s) => s.validationContext);
   const sidebarId = `${SIDEBAR_PREFIX}${page.id}`;
   const {
     attributes,
@@ -90,11 +95,7 @@ export function SortablePageItem({
               <>
                 <span
                   className="page-file-alert"
-                  title={
-                    page.fileValidationStatus === 'missing'
-                      ? 'ファイルが見つかりません（移動またはリネームされた可能性があります）'
-                      : 'ファイルが変更されています（更新日時が異なります）'
-                  }
+                  title={getValidationMessage(page, validationContext, chapterType)}
                 >
                   <AlertTriangleIcon size={12} />
                 </span>

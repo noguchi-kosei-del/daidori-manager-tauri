@@ -1,5 +1,5 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { open, ask } from '@tauri-apps/plugin-dialog';
 import { useTauriFileDrop } from './hooks/useTauriFileDrop';
 import {
@@ -14,6 +14,7 @@ import {
 import { useStore, FileInfo, THUMBNAIL_SIZES, ThumbnailSize } from './store';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useKeyboardShortcuts, useDragHandlers, useExport, queueThumbnail } from './hooks';
+import { describePhysicalSize } from './utils/paperSize';
 import {
   Chapter,
   ChapterType,
@@ -104,7 +105,6 @@ function App() {
     selectPageRange,
     clearPageSelection,
     removeSelectedPages,
-    setThumbnailSize,
     undo,
     redo,
     // ファイル検証
@@ -130,10 +130,13 @@ function App() {
   });
   const [isToolbarCollapsed, setIsToolbarCollapsed] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isInfoSidebarCollapsed, setIsInfoSidebarCollapsed] = useState(() => {
+    const saved = localStorage.getItem('daidori_info_sidebar_collapsed');
+    return saved === 'true';
+  });
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [openDropdown, setOpenDropdown] = useState<'view' | 'size' | 'binding' | null>(null);
+  const [openDropdown, setOpenDropdown] = useState<'view' | 'binding' | null>(null);
   const viewDropdownRef = useRef<HTMLDivElement>(null);
-  const sizeDropdownRef = useRef<HTMLDivElement>(null);
   const bindingDropdownRef = useRef<HTMLDivElement>(null);
   const [isSidebarFlipped, setIsSidebarFlipped] = useState(() => {
     const saved = localStorage.getItem('daidori_sidebar_flipped');
@@ -200,6 +203,12 @@ function App() {
     }
     return result;
   }, [chapters]);
+
+  // 情報サイドバー用: 選択中のページ
+  const selectedPageInfo = useMemo(() => {
+    if (!selectedPageId) return null;
+    return allPages.find((p) => p.page.id === selectedPageId) ?? null;
+  }, [allPages, selectedPageId]);
 
   const {
     isExportModalOpen,
@@ -321,6 +330,11 @@ function App() {
     localStorage.setItem('daidori_binding_direction', bindingDirection);
   }, [bindingDirection]);
 
+  // 情報サイドバー折りたたみ状態の永続化
+  useEffect(() => {
+    localStorage.setItem('daidori_info_sidebar_collapsed', isInfoSidebarCollapsed ? 'true' : 'false');
+  }, [isInfoSidebarCollapsed]);
+
   // ハンバーガーメニューのEscキー閉じ
   useEffect(() => {
     if (!isMenuOpen) return;
@@ -337,7 +351,7 @@ function App() {
   useEffect(() => {
     if (!openDropdown) return;
     const handleClick = (e: MouseEvent) => {
-      const refs = { view: viewDropdownRef, size: sizeDropdownRef, binding: bindingDropdownRef };
+      const refs = { view: viewDropdownRef, binding: bindingDropdownRef };
       const ref = refs[openDropdown];
       if (ref.current && !ref.current.contains(e.target as Node)) {
         setOpenDropdown(null);
@@ -359,9 +373,12 @@ function App() {
     };
   }, [isViewerMode]);
 
-  // ファイル検証（移動・リネーム・日時変更検出）：マウント時とウィンドウフォーカス時に実行
+  // ファイル検証（移動・リネーム・日時変更 + カラーモード/サイズ/DPI差異）
+  // マウント時、ウィンドウフォーカス時、chapters内のfilePath変化時(debounce)に実行
   useEffect(() => {
     let cancelled = false;
+    let debounceTimer: number | undefined;
+
     const runValidation = async () => {
       const targets: { page_id: string; file_path: string; modified_time: number | null; file_size: number | null }[] = [];
       for (const c of useStore.getState().chapters) {
@@ -378,22 +395,64 @@ function App() {
       }
       if (targets.length === 0) return;
       try {
-        const results = await invoke<{ page_id: string; status: FileValidationStatus }[]>(
-          'validate_pages',
-          { pages: targets }
-        );
+        type RustResult = {
+          page_id: string;
+          status: FileValidationStatus;
+          width: number | null;
+          height: number | null;
+          color_mode: string | null;
+          dpi: number | null;
+        };
+        const results = await invoke<RustResult[]>('validate_pages', { pages: targets });
         if (cancelled) return;
-        updatePagesValidation(results.map((r) => ({ pageId: r.page_id, status: r.status })));
+        updatePagesValidation(
+          results.map((r) => ({
+            pageId: r.page_id,
+            status: r.status,
+            width: r.width,
+            height: r.height,
+            colorMode: r.color_mode,
+            dpi: r.dpi,
+          }))
+        );
       } catch (error) {
         console.error('ファイル検証エラー:', error);
       }
     };
+
+    const scheduleValidation = () => {
+      if (debounceTimer !== undefined) {
+        window.clearTimeout(debounceTimer);
+      }
+      debounceTimer = window.setTimeout(() => {
+        runValidation();
+      }, 300);
+    };
+
+    // 初回実行
     runValidation();
+
+    // フォーカス時に再検証
     const handleFocus = () => { runValidation(); };
     window.addEventListener('focus', handleFocus);
+
+    // chaptersの変化を監視（ページ追加/差し替え時に自動再検証）
+    let lastFingerprint = '';
+    const unsubscribe = useStore.subscribe((state) => {
+      const fingerprint = state.chapters
+        .flatMap((c) => c.pages.map((p) => `${p.id}:${p.filePath ?? ''}:${p.modifiedTime ?? ''}`))
+        .join('|');
+      if (fingerprint !== lastFingerprint) {
+        lastFingerprint = fingerprint;
+        scheduleValidation();
+      }
+    });
+
     return () => {
       cancelled = true;
+      if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
       window.removeEventListener('focus', handleFocus);
+      unsubscribe();
     };
   }, [updatePagesValidation]);
 
@@ -1172,28 +1231,6 @@ function App() {
               </div>
 
               <div className="header-divider" />
-              {/* サイズドロップダウン */}
-              <div className="header-popup-container" ref={sizeDropdownRef}>
-                <button
-                  className={`header-popup-trigger ${openDropdown === 'size' ? 'open' : ''}`}
-                  onClick={() => setOpenDropdown(openDropdown === 'size' ? null : 'size')}
-                  disabled={previewMode !== 'grid' || chapters.length === 0}
-                >
-                  <span>{THUMBNAIL_SIZES[thumbnailSize].label}</span>
-                  <svg className="header-popup-chevron" width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 4L5 6.5L7.5 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                </button>
-                <div className={`header-popup-menu ${openDropdown === 'size' ? 'open' : ''}`}>
-                  <div className="header-popup-header">サイズ</div>
-                  {(Object.keys(THUMBNAIL_SIZES) as ThumbnailSize[]).map((size) => (
-                    <button key={size} className={`header-popup-item ${thumbnailSize === size ? 'selected' : ''}`} onClick={() => { setThumbnailSize(size); setOpenDropdown(null); }}>
-                      <span>{THUMBNAIL_SIZES[size].label}</span>
-                      {thumbnailSize === size && <span className="header-popup-check"><CheckIcon2 /></span>}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="header-divider" />
               {/* 綴じ方向ドロップダウン */}
               <div className="header-popup-container" ref={bindingDropdownRef}>
                 <button
@@ -1656,6 +1693,7 @@ function App() {
                                                 isHighlighted={item.page.id === highlightedPageId}
                                                 isSelected={item.page.id === selectedPageId}
                                                 isMultiSelected={selectedPageIds.includes(item.page.id)}
+                                                chapterType={item.chapter.type}
                                                 onSelect={() => {
                                                   if (selectedPageId === item.page.id) {
                                                     selectPage(null);
@@ -1711,6 +1749,98 @@ function App() {
             )}
             </div>
             )}
+
+            {/* 右側: 情報サイドバー（選択中ページのプレビュー＋メタデータ） */}
+            <aside className={`sidebar sidebar-right ${isInfoSidebarCollapsed ? 'collapsed' : ''}`}>
+              <div className="sidebar-header">
+                <button
+                  className="sidebar-toggle-btn"
+                  onClick={() => setIsInfoSidebarCollapsed(!isInfoSidebarCollapsed)}
+                  title={isInfoSidebarCollapsed ? '情報パネルを展開' : '情報パネルを折り畳む'}
+                >
+                  {isInfoSidebarCollapsed ? '«' : '»'}
+                </button>
+              </div>
+              <div className="sidebar-content">
+                {selectedPageInfo ? (
+                  <div className="info-panel">
+                    {selectedPageInfo.page.thumbnailStatus === 'ready' && selectedPageInfo.page.thumbnailCachePath ? (
+                      <div className="info-thumbnail">
+                        <img
+                          src={convertFileSrc(selectedPageInfo.page.thumbnailCachePath)}
+                          alt={selectedPageInfo.page.fileName ?? ''}
+                          draggable={false}
+                        />
+                      </div>
+                    ) : (
+                      <div className="info-thumbnail info-thumbnail-empty">
+                        <span>プレビューなし</span>
+                      </div>
+                    )}
+                    {selectedPageInfo.page.fileName && (
+                      <div className="info-filename" title={selectedPageInfo.page.fileName}>
+                        {selectedPageInfo.page.fileName}
+                      </div>
+                    )}
+                    <dl className="info-meta">
+                      <dt>サイズ</dt>
+                      <dd>
+                        {selectedPageInfo.page.imageWidth && selectedPageInfo.page.imageHeight ? (
+                          <>
+                            {selectedPageInfo.page.imageWidth} × {selectedPageInfo.page.imageHeight} px
+                            {(() => {
+                              const desc = describePhysicalSize(
+                                selectedPageInfo.page.imageWidth,
+                                selectedPageInfo.page.imageHeight,
+                                selectedPageInfo.page.imageDpi
+                              );
+                              return desc ? <div className="info-meta-sub">{desc}</div> : null;
+                            })()}
+                          </>
+                        ) : (
+                          '—'
+                        )}
+                      </dd>
+                      <dt>カラーモード</dt>
+                      <dd>
+                        {(() => {
+                          const labels: Record<string, string> = {
+                            RGB: 'RGB',
+                            Grayscale: 'グレースケール',
+                            CMYK: 'CMYK',
+                            Bitmap: 'ビットマップ',
+                            Indexed: 'インデックスカラー',
+                            Multichannel: 'マルチチャンネル',
+                            Duotone: 'ダブルトーン',
+                            Lab: 'Lab',
+                          };
+                          const m = selectedPageInfo.page.imageColorMode;
+                          return m ? labels[m] ?? m : '—';
+                        })()}
+                      </dd>
+                      <dt>解像度</dt>
+                      <dd>{selectedPageInfo.page.imageDpi !== undefined ? `${selectedPageInfo.page.imageDpi} dpi` : '—'}</dd>
+                      <dt>形式</dt>
+                      <dd>{selectedPageInfo.page.fileType ? selectedPageInfo.page.fileType.toUpperCase() : '—'}</dd>
+                      <dt>ファイルサイズ</dt>
+                      <dd>
+                        {selectedPageInfo.page.fileSize !== undefined
+                          ? selectedPageInfo.page.fileSize >= 1024 * 1024
+                            ? `${(selectedPageInfo.page.fileSize / 1024 / 1024).toFixed(2)} MB`
+                            : `${(selectedPageInfo.page.fileSize / 1024).toFixed(1)} KB`
+                          : '—'}
+                      </dd>
+                      <dt>チャプター</dt>
+                      <dd>{selectedPageInfo.chapter.name}</dd>
+                    </dl>
+                  </div>
+                ) : (
+                  <div className="info-panel-empty">
+                    <p>ページを選択すると<br />ここに情報が表示されます</p>
+                  </div>
+                )}
+              </div>
+            </aside>
           </div>
 
         </main>

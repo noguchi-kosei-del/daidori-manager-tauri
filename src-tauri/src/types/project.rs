@@ -76,7 +76,11 @@ pub struct PageCheckInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageCheckResult {
     pub page_id: String,
-    pub status: String,  // "ok", "missing", "modified"
+    pub status: String,  // "ok", "missing", "modified", "meta_error"
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub color_mode: Option<String>, // "RGB" | "Grayscale" | "CMYK" | "Bitmap" | "Indexed" | "Multichannel" | "Duotone" | "Lab"
+    pub dpi: Option<u32>,
 }
 
 // 最近使ったファイル

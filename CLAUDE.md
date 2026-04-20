@@ -1146,4 +1146,93 @@ pub struct PsdGuide {
 - `Page.fileValidationStatus?: FileValidationStatus`
 - `EpubPageInfo.fileValidationStatus?: FileValidationStatus`
 - Rust: `PageCheckInput`, `PageCheckResult`
+
+### 2026-04-20: COMIC-Bridge互換 メタデータ差異検知・情報サイドバー・紙サイズ判定
+
+#### カラーモード/サイズ/DPI差異検知（commands/project.rs, types/project.rs, types.ts, store.ts, App.tsx, utils/validationMessage.ts）
+- `validate_pages` Rustコマンドを大幅拡張: 既存の存在/日時チェックに加えて画像メタを抽出
+  - PSD: ヘッダ24-25バイト目から色モード(0=Bitmap, 1=Grayscale, 2=Indexed, 3=RGB, 4=CMYK, 7=Multichannel, 8=Duotone, 9=Lab)、リソースID 1005から水平DPI(16.16固定小数の上位16ビット)、ヘッダから幅高さ
+  - 非PSD: `image::ImageReader` で `dimensions()` と `color_type()` を取得（フルデコード回避）。ColorType を Grayscale/RGB に正規化
+  - rayon `par_iter()` で並列化（pre-existing rayon依存を活用）
+- `PageCheckResult` に `width: Option<u32>`, `height: Option<u32>`, `color_mode: Option<String>`, `dpi: Option<u32>` を追加
+- `FileValidationStatus` に `'meta_error' | 'size_mismatch' | 'color_mismatch' | 'dpi_mismatch'` を追加
+- `Page` / `EpubPageInfo` に `imageWidth` / `imageHeight` / `imageColorMode` / `imageDpi` を追加
+- `ImageColorMode` 型と `ValidationContext` / `ValidationGroupContext` 型を新設
+- `store.ts` の `updatePagesValidation` を再設計:
+  - シグネチャ拡張: `{ pageId, status, width?, height?, colorMode?, dpi? }[]` を受け取る
+  - 私的ヘルパー `applyMismatchStatuses(chapters)` を追加: cover チャプターと それ以外で別グループに分けて最頻値を計算
+  - 各項目（color/size/dpi）独立に最頻値判定。値が `None` のページは判定対象外（DPIなしの非PSDは無視）
+  - 単一値しかないグループ・全件同一値のグループは検出しない（false positive 回避）
+  - 優先順位: `missing > modified > meta_error > size_mismatch > color_mismatch > dpi_mismatch > ok`
+  - `validationContext` state に最頻値情報を保持（tooltip 表示用）
+- `loadEpubFromDaidori` で台割側の `imageWidth/imageHeight/imageColorMode/imageDpi` を `EpubPageInfo` に引き継ぎ
+- `App.tsx` の検証 useEffect を拡張:
+  - invoke 戻り値型を新仕様に
+  - `useStore.subscribe` で `chapters` の `filePath/modifiedTime` 変化を fingerprint 比較で検出 → debounce 300ms で自動再検証
+
+#### tooltip メッセージ統一ヘルパー（utils/validationMessage.ts 新規）
+- `getValidationMessage(page, context, chapterType)` を新設
+- `Page` と `EpubPageInfo` 両方を受け入れる最小インターフェース `ValidatablePage` で受け取る
+- mismatch 系では「このページ: X / 多数派: Y」を併記。カラーモードは日本語ラベル化
+- 5つのUIコンポーネント（SortablePageItem, ThumbnailCard, SpreadViewer, EpubSpreadPreview, EpubThumbnailBar）の tooltip を本ヘルパー経由に置換
+- `ChapterItem` から `chapterType` を `SortablePageItem` に伝播
+
+#### サイズドロップダウン廃止（App.tsx）
+- ヘッダーのサムネイルサイズドロップダウン（小/中/大切替UI）を完全削除
+- `setThumbnailSize` のimport、`sizeDropdownRef`、`openDropdown` の `'size'` リテラル、`refs` 内の `size` エントリを削除
+- デフォルトは中（`thumbnailSize: 'medium'`）。store 側の初期値・読込時のフォールバックは現状維持
+
+#### 右側 情報サイドバー追加（App.tsx, styles.css）
+- `preview-container` 内 preview-area の右に `<aside className="sidebar sidebar-right">` を追加
+- 左サイドバーと同じ `--sidebar-width` 共有・同じ `sidebar-toggle-btn` で展開/格納
+- `isInfoSidebarCollapsed` state（localStorage `daidori_info_sidebar_collapsed` で永続化、デフォルト展開）
+- 表示内容: サムネイル(aspect-ratio 3/4) + ファイル名 + メタ表（サイズ/カラーモード/解像度/形式/ファイルサイズ/チャプター）
+- 未選択時は「ページを選択するとここに情報が表示されます」プレースホルダ
+- `selectedPageInfo` を `useMemo` で `allPages` から導出
+- サイドバー反転（`body.sidebar-flipped`）にも追従するよう border 左右を切替
+- トグルボタンは右サイドバーでは `flex-start`（左端）に配置 → 左サイドバーと鏡像配置
+- `.sidebar-content` に `transition: opacity` を追加し、左右両方で展開/格納時にコンテンツが滑らかにフェード
+- 矢印は `«`/`»` を反転で表現（折りたたみ時 `«`、展開時 `»`）
+
+#### グリッド右側余白の縮小（styles.css）
+- `.preview-area` padding-right: `var(--spacing-xl)` (24px) → `var(--spacing-sm)` (8px)
+- `.preview-area` margin-right: `var(--spacing-md)` (12px) → `var(--spacing-xs)` (4px)
+- `.thumbnail-grid-continuous` padding-right: `var(--spacing-lg)` (16px) → `var(--spacing-xs)` (4px)
+- 右側合計約32px節約 → 中サイズサムネイル(140px)+gap(8px)が1列追加で収まる
+
+#### 紙サイズ判定とサイズ行併記（utils/paperSize.ts 新規, App.tsx, styles.css）
+- 新規ユーティリティ `src/utils/paperSize.ts`:
+  - `pixelsToMm(pxW, pxH, dpi)`: ピクセル→mm 変換
+  - `findPaperSize(wMm, hMm, tolerance=6)`: 短辺/長辺で正規化して規格と一致判定（±6mm = 塗り足し3mm相当を吸収）
+  - `describePhysicalSize(pxW, pxH, dpi?)`: 「B4（257×364mm）相当 ／ 実寸 W×H mm」形式の文字列を返す。DPIなしなら null
+  - 規格テーブル: A3, A4, A5, A6, B3, B4, B5, B6, 新書判(112×174), 四六判(127×188)
+- 情報サイドバーのサイズ行に `.info-meta-sub` 副表示を追加（`describePhysicalSize` の結果を表示）
+  - PSD（DPI取得可）: 規格名+実寸を併記
+  - 非PSD（DPIなし）: ピクセルのみ表示にフォールバック
+  - 規格外サイズ: 実寸のみ表示
+- `.info-meta-sub` を 11px（`--font-size-xs`）・`--color-text-muted` で控えめに表示
+
+#### Tauriコマンド変更
+| コマンド | 変更内容 |
+|---------|---------|
+| `validate_pages` | 戻り値に `width`/`height`/`color_mode`/`dpi` を追加。rayon並列化 |
+
+#### 新規ファイル
+| ファイル | 説明 |
+|---------|------|
+| `src/utils/validationMessage.ts` | 検証ステータス→tooltip文言生成ヘルパー（PageとEpubPageInfo両対応） |
+| `src/utils/paperSize.ts` | ピクセル+DPI→規格紙サイズ判定（A/B系列+新書判+四六判） |
+
+#### 新規CSSクラス（styles.css）
+- `.sidebar-right` / `.sidebar-right .sidebar-header` / `.sidebar-right.collapsed .sidebar-header`
+- `.info-panel` / `.info-thumbnail` / `.info-thumbnail-empty` / `.info-filename` / `.info-meta` / `.info-meta-sub` / `.info-panel-empty`
+- `.sidebar-content` に `transition: opacity` を追加
+
+#### 型定義追加
+- `FileValidationStatus`: `'meta_error' | 'size_mismatch' | 'color_mismatch' | 'dpi_mismatch'` を追加
+- `ImageColorMode = 'RGB' | 'Grayscale' | 'CMYK' | 'Bitmap' | 'Indexed' | 'Multichannel' | 'Duotone' | 'Lab'`
+- `Page.imageWidth/imageHeight/imageColorMode/imageDpi`
+- `EpubPageInfo.imageWidth/imageHeight/imageColorMode/imageDpi`
+- `ValidationGroupContext` / `ValidationContext`
+- Rust: `PageCheckResult` に `width/height/color_mode/dpi` を追加
 - `ExportOptions.bleedMode: BleedMode`
