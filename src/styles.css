@@ -2470,6 +2470,43 @@ body.viewer-mode .hamburger-overlay {
   cursor: default;
 }
 
+/* 片方ページだけの見開き（終端等）: 空白側は点線枠の空ページとして表示 */
+.spread-pair .spread-page-blank {
+  background: transparent;
+  cursor: default;
+}
+.spread-pair .spread-page-blank .spread-page-content {
+  border: 2px dashed var(--color-text-muted);
+  border-radius: var(--border-radius);
+  box-sizing: border-box;
+  opacity: 0.5;
+}
+
+/* 表紙の対向側はサイズだけ維持して完全に非表示 */
+.spread-pair .spread-page-hidden {
+  background: transparent;
+  border: none;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* 相手ページと同サイズの白紙を作るための不可視サイザー */
+.spread-pair .spread-thumbnail-sizer {
+  visibility: hidden;
+}
+
+/* 白紙特殊ページは兄弟画像を不可視サイザーにして同サイズ表示 */
+.spread-pair .spread-special-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.spread-pair .spread-special-wrapper .spread-special-page {
+  position: absolute;
+  inset: 0;
+}
+
 .spread-pair .spread-page-empty:hover {
   background: repeating-linear-gradient(
     45deg,
@@ -3956,6 +3993,17 @@ body.light-mode .save-menu-dropdown kbd {
   cursor: not-allowed;
 }
 
+/* エクスポート結果ダイアログ内のEPUB生成ボタンはテキスト付きのため幅を自動にする */
+.export-result-dialog .btn-epub {
+  width: auto;
+  height: auto;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: 8px;
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
 /* ライトモード対応 */
 body.light-mode .epub-modal textarea,
 body.light-mode .epub-modal select {
@@ -4122,6 +4170,71 @@ body.light-mode .epub-preview-info {
   box-shadow: var(--shadow-lg);
 }
 
+/* EPUB: 表紙の対向側はサイズだけ維持して非表示 */
+.epub-spread-page.epub-spread-page-hidden {
+  pointer-events: none;
+  cursor: default;
+}
+.epub-spread-page.epub-spread-page-hidden .epub-spread-sizer {
+  visibility: hidden;
+  max-height: 60vh;
+  max-width: 40vw;
+  object-fit: contain;
+  border-radius: 4px;
+  display: block;
+}
+
+/* EPUB: 終端等の空スロットは点線枠の空ページとして表示 */
+.epub-spread-page.epub-spread-page-blank {
+  background: transparent;
+  cursor: default;
+  border: 2px dashed var(--color-text-muted);
+  border-radius: 4px;
+  box-sizing: border-box;
+  opacity: 0.5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.epub-spread-page.epub-spread-page-blank .epub-spread-sizer {
+  visibility: hidden;
+  max-height: 60vh;
+  max-width: 40vw;
+  object-fit: contain;
+  display: block;
+}
+
+/* EPUB: 白紙ページ（実データ）の表示 */
+.epub-spread-page.epub-spread-page-blankcontent {
+  position: relative;
+  background: white;
+  border-radius: 4px;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--color-text-muted);
+}
+.epub-spread-page.epub-spread-page-blankcontent .epub-spread-sizer {
+  visibility: hidden;
+  max-height: 60vh;
+  max-width: 40vw;
+  object-fit: contain;
+  display: block;
+}
+.epub-spread-page.epub-spread-page-blankcontent .epub-spread-blank-inner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.epub-spread-page.epub-spread-page-blankcontent .epub-spread-blank-label {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+}
+
 .epub-spread-gutter {
   width: 8px;
   height: 60vh;
@@ -4240,6 +4353,21 @@ body.light-mode .epub-preview-info {
   max-height: 100%;
   object-fit: contain;
   border-radius: 2px;
+}
+
+/* 白紙サムネイル */
+.epub-thumbnail-blank {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: white;
+  border: 1px dashed var(--color-text-muted);
+  border-radius: 2px;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: var(--font-weight-semibold);
 }
 
 .epub-thumbnail-info {

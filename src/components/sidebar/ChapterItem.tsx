@@ -173,6 +173,22 @@ export function ChapterItem({
               ))}
             </SortableContext>
           )}
+          {chapter.type === 'blank' ? (
+            <div className="chapter-pages-add">
+              <button
+                className="btn-icon chapter-add-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAddSpecialPage('blank');
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                title="白紙ページを追加"
+              >
+                <PlusCircleIcon size={16} />
+                <span className="chapter-add-btn-label">白紙を追加</span>
+              </button>
+            </div>
+          ) : (
           <div className="chapter-pages-add">
               <button
                 ref={addBtnRef}
@@ -238,6 +254,7 @@ export function ChapterItem({
                 document.body
               )}
             </div>
+          )}
           </div>
         </div>
       </div>

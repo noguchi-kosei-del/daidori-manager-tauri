@@ -305,6 +305,7 @@ export interface EpubPageInfo {
   height: number;
   isCover: boolean;
   isColophon: boolean;
+  isBlank?: boolean;
   // サムネイル（base64 or ファイルパス）
   thumbnailPath?: string;
   thumbnailStatus?: ThumbnailStatus;
@@ -312,6 +313,7 @@ export interface EpubPageInfo {
   originalPageId?: string;
   originalChapterName?: string;
   originalPageType?: PageType;
+  originalChapterType?: ChapterType;
 }
 
 // EPUBプロジェクトファイル形式

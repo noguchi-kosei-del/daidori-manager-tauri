@@ -124,7 +124,7 @@ export function BleedEditorModal({
     } else if (guides.length === 0) {
       setHint('上・左のルーラーからドラッグしてガイド線を作成してください（不要な場合はスキップしてエクスポートを選択）');
     } else {
-      setHint('ガイドを配置したら「ロック」ボタンを押してください');
+      setHint('ガイドを配置したら「ガイドを確定」ボタンを押してください');
     }
   }, [isOpen, guides.length, guidesLocked, selection, autoDetected]);
 
@@ -442,10 +442,10 @@ export function BleedEditorModal({
               className={`btn-small bleed-lock-btn ${guidesLocked ? 'active' : ''}`}
               onClick={toggleLock}
               disabled={guides.length === 0}
-              title={guidesLocked ? 'ガイドのロックを解除' : 'ガイドをロック'}
+              title={guidesLocked ? 'ガイドの確定を解除' : 'ガイドを確定'}
             >
               {guidesLocked ? <UnlockIcon size={14} /> : <LockIcon size={14} />}
-              {guidesLocked ? 'ロック解除' : 'ガイドをロック'}
+              {guidesLocked ? '確定解除' : 'ガイドを確定'}
             </button>
             {guides.length > 0 && !guidesLocked && (
               <button className="btn-secondary btn-small bleed-reset-btn" style={{ marginTop: 8 }}

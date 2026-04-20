@@ -274,6 +274,13 @@ export const useStore = create<AppState>((set, get) => {
 
   // ファイルページ追加（末尾に追加）
   addPagesToChapter: (chapterId, files) => {
+    const chapter = get().chapters.find((c) => c.id === chapterId);
+    // 表紙チャプターは1ファイルのみ許可
+    if (chapter?.type === 'cover') {
+      const remaining = Math.max(0, 1 - chapter.pages.length);
+      files = files.slice(0, remaining);
+      if (files.length === 0) return;
+    }
     const pages: Page[] = files.map((file) => ({
       id: uuidv4(),
       pageType: 'file' as PageType,
@@ -297,6 +304,13 @@ export const useStore = create<AppState>((set, get) => {
 
   // ファイルページ追加（指定位置に挿入）
   addPagesToChapterAt: (chapterId, files, atIndex) => {
+    const chapter = get().chapters.find((c) => c.id === chapterId);
+    // 表紙チャプターは1ファイルのみ許可
+    if (chapter?.type === 'cover') {
+      const remaining = Math.max(0, 1 - chapter.pages.length);
+      files = files.slice(0, remaining);
+      if (files.length === 0) return;
+    }
     const pages: Page[] = files.map((file) => ({
       id: uuidv4(),
       pageType: 'file' as PageType,
@@ -421,6 +435,12 @@ export const useStore = create<AppState>((set, get) => {
       const page = fromChapter?.pages.find((p) => p.id === pageId);
       if (!page || !fromChapter) return state;
 
+      // 表紙チャプターには1ページまでしか移動できない
+      const toChapter = state.chapters.find((c) => c.id === toChapterId);
+      if (toChapter?.type === 'cover' && fromChapterId !== toChapterId && toChapter.pages.length >= 1) {
+        return state;
+      }
+
       // 特殊アイテム（file以外）で、チャプター内に1つしかない場合、移動後にチャプターを削除
       const shouldDeleteFromChapter =
         page.pageType !== 'file' &&
@@ -466,6 +486,20 @@ export const useStore = create<AppState>((set, get) => {
       }
 
       if (pagesToMove.length === 0) return state;
+
+      // 表紙チャプターには1ページまでしか移動できない
+      const toChapter = state.chapters.find((c) => c.id === toChapterId);
+      if (toChapter?.type === 'cover') {
+        // 移動対象のうち、既に表紙にいるページを除いた純増分
+        const alreadyInTargetIds = new Set(
+          pagesToMove.filter((p) => p.fromChapterId === toChapterId).map((p) => p.page.id)
+        );
+        const incomingCount = pagesToMove.length - alreadyInTargetIds.size;
+        const existingCount = toChapter.pages.length - alreadyInTargetIds.size;
+        if (existingCount + incomingCount > 1) {
+          return state;
+        }
+      }
 
       // ページIDの順序でソート（選択順序を維持）
       pagesToMove.sort((a, b) => pageIds.indexOf(a.page.id) - pageIds.indexOf(b.page.id));
@@ -821,10 +855,9 @@ export const useStore = create<AppState>((set, get) => {
 
     for (const chapter of chapters) {
       for (const page of chapter.pages) {
-        // 白紙ページはスキップ
-        if (page.pageType === 'blank') continue;
-        // ファイルがないページもスキップ
-        if (!page.filePath) continue;
+        const isBlankPage = page.pageType === 'blank' || (chapter.type === 'blank' && !page.filePath);
+        // 白紙ページはプレビュー用に含める（生成時は別処理でスキップ）
+        if (!isBlankPage && !page.filePath) continue;
 
         const isCover =
           !coverAssigned && (chapter.type === 'cover' || page.pageType === 'cover');
@@ -842,16 +875,18 @@ export const useStore = create<AppState>((set, get) => {
         const epubPage: EpubPageInfo = {
           id: uuidv4(),
           filename: `p${String(pageIndex).padStart(3, '0')}.jpg`,
-          sourcePath: page.filePath,
+          sourcePath: page.filePath || '',
           width: 0,
           height: 0,
           isCover,
           isColophon,
+          isBlank: isBlankPage,
           thumbnailPath: page.thumbnailCachePath,
           thumbnailStatus: page.thumbnailStatus,
           originalPageId: page.id,
           originalChapterName: chapter.name,
           originalPageType: page.pageType,
+          originalChapterType: chapter.type,
         };
 
         epubPages.push(epubPage);

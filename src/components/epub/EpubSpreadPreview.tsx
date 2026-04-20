@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import type { EpubPageInfo } from '../../types';
+import { CHAPTER_TYPE_LABELS, CHAPTER_TYPE_COLORS } from '../../types';
 import { CloseIcon } from '../../icons';
 
 const CLOSE_BUTTON_HIDE_DELAY = 3000;
@@ -52,11 +53,28 @@ export function EpubSpreadPreview({
   // 閲覧モード時のナビゲーションヒント表示制御
   const [navHintVisible, setNavHintVisible] = useState(false);
 
-  // スプレッドを計算（2ページずつ）
-  const spreads: EpubPageInfo[][] = [];
-  for (let i = 0; i < pages.length; i += 2) {
-    spreads.push(pages.slice(i, i + 2));
-  }
+  // スプレッドを計算（表紙ページのみ単独スプレッド）
+  const spreads: EpubPageInfo[][] = useMemo(() => {
+    const result: EpubPageInfo[][] = [];
+    let i = 0;
+    while (i < pages.length) {
+      const current = pages[i];
+      if (current.isCover) {
+        result.push([current]);
+        i += 1;
+      } else {
+        const next = pages[i + 1];
+        if (next) {
+          result.push([current, next]);
+          i += 2;
+        } else {
+          result.push([current]);
+          i += 1;
+        }
+      }
+    }
+    return result;
+  }, [pages]);
 
   const currentPages = spreads[currentSpread] || [];
   const totalSpreads = spreads.length;
@@ -289,6 +307,91 @@ export function EpubSpreadPreview({
     return convertFileSrc(page.sourcePath);
   };
 
+  // 単一ページ（または空スロット）をレンダリング
+  const renderEpubPage = (
+    page: EpubPageInfo | undefined,
+    side: 'left' | 'right',
+    sibling?: EpubPageInfo
+  ) => {
+    // 空スロット：兄弟画像で同サイズを保持
+    if (!page) {
+      if (!sibling || sibling.isBlank) return null;
+      const isCoverSibling = sibling.isCover;
+      const slotClass = isCoverSibling ? 'epub-spread-page-hidden' : 'epub-spread-page-blank';
+      return (
+        <div className={`epub-spread-page ${side}-page ${slotClass}`}>
+          <img
+            src={getImageSrc(sibling)}
+            alt=""
+            className="epub-spread-sizer"
+            draggable={false}
+            aria-hidden="true"
+          />
+        </div>
+      );
+    }
+
+    // 白紙ページ
+    if (page.isBlank) {
+      const sizerSrc = sibling && !sibling.isBlank ? getImageSrc(sibling) : null;
+      return (
+        <div
+          className={`epub-spread-page ${side}-page epub-spread-page-blankcontent ${selectedPageId === page.id ? 'selected' : ''}`}
+          onClick={() => !isViewerMode && onSelectPage(page.id)}
+        >
+          {sizerSrc && (
+            <img
+              src={sizerSrc}
+              alt=""
+              className="epub-spread-sizer"
+              draggable={false}
+              aria-hidden="true"
+            />
+          )}
+          <div className="epub-spread-blank-inner">
+            <span className="epub-spread-blank-label">白紙</span>
+          </div>
+          {!isViewerMode && (
+            <div className="epub-page-label">
+              {page.originalChapterType && (
+                <span
+                  className="page-badge"
+                  style={{ backgroundColor: CHAPTER_TYPE_COLORS[page.originalChapterType], color: 'white' }}
+                >
+                  {CHAPTER_TYPE_LABELS[page.originalChapterType]}
+                </span>
+              )}
+              <span className="page-number">{getPageIndex(page)}p</span>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // 通常の画像ページ
+    return (
+      <div
+        className={`epub-spread-page ${side}-page ${selectedPageId === page.id ? 'selected' : ''}`}
+        onClick={() => !isViewerMode && onSelectPage(page.id)}
+      >
+        <img src={getImageSrc(page)} alt={`Page ${getPageIndex(page)}`} />
+        {!isViewerMode && (
+          <div className="epub-page-label">
+            {page.originalChapterType && (
+              <span
+                className="page-badge"
+                style={{ backgroundColor: CHAPTER_TYPE_COLORS[page.originalChapterType], color: 'white' }}
+              >
+                {CHAPTER_TYPE_LABELS[page.originalChapterType]}
+              </span>
+            )}
+            <span className="page-number">{getPageIndex(page)}p</span>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // ページインデックスを取得
   const getPageIndex = (page: EpubPageInfo): number => {
     return pages.findIndex(p => p.id === page.id) + 1;
@@ -320,81 +423,40 @@ export function EpubSpreadPreview({
           <div className="epub-spread-empty">
             <p>ページがありません。チャプターを追加してください</p>
           </div>
-        ) : (
-          <div className={`epub-spread-pages ${isRTL ? 'rtl' : 'ltr'}`}>
-            {isRTL ? (
-              <>
-                {/* 右綴じ：右ページ（先） → ノド → 左ページ（後）、CSSのrow-reverseで視覚的に反転 */}
-                {currentPages[0] && (
-                  <div
-                    className={`epub-spread-page right-page ${selectedPageId === currentPages[0].id ? 'selected' : ''}`}
-                    onClick={() => !isViewerMode && onSelectPage(currentPages[0].id)}
-                  >
-                    <img src={getImageSrc(currentPages[0])} alt={`Page ${getPageIndex(currentPages[0])}`} />
-                    {!isViewerMode && (
-                      <div className="epub-page-label">
-                        {currentPages[0].isCover && <span className="page-badge cover">表紙</span>}
-                        {currentPages[0].isColophon && <span className="page-badge colophon">奥付</span>}
-                        <span className="page-number">{getPageIndex(currentPages[0])}p</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-                <div className="epub-spread-gutter" />
-                {currentPages[1] && (
-                  <div
-                    className={`epub-spread-page left-page ${selectedPageId === currentPages[1].id ? 'selected' : ''}`}
-                    onClick={() => !isViewerMode && onSelectPage(currentPages[1].id)}
-                  >
-                    <img src={getImageSrc(currentPages[1])} alt={`Page ${getPageIndex(currentPages[1])}`} />
-                    {!isViewerMode && (
-                      <div className="epub-page-label">
-                        {currentPages[1].isCover && <span className="page-badge cover">表紙</span>}
-                        {currentPages[1].isColophon && <span className="page-badge colophon">奥付</span>}
-                        <span className="page-number">{getPageIndex(currentPages[1])}p</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            ) : (
-              <>
-                {/* 左綴じ：左ページ（先） → ノド → 右ページ（後）、CSS通常row */}
-                {currentPages[0] && (
-                  <div
-                    className={`epub-spread-page left-page ${selectedPageId === currentPages[0].id ? 'selected' : ''}`}
-                    onClick={() => !isViewerMode && onSelectPage(currentPages[0].id)}
-                  >
-                    <img src={getImageSrc(currentPages[0])} alt={`Page ${getPageIndex(currentPages[0])}`} />
-                    {!isViewerMode && (
-                      <div className="epub-page-label">
-                        {currentPages[0].isCover && <span className="page-badge cover">表紙</span>}
-                        {currentPages[0].isColophon && <span className="page-badge colophon">奥付</span>}
-                        <span className="page-number">{getPageIndex(currentPages[0])}p</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-                <div className="epub-spread-gutter" />
-                {currentPages[1] && (
-                  <div
-                    className={`epub-spread-page right-page ${selectedPageId === currentPages[1].id ? 'selected' : ''}`}
-                    onClick={() => !isViewerMode && onSelectPage(currentPages[1].id)}
-                  >
-                    <img src={getImageSrc(currentPages[1])} alt={`Page ${getPageIndex(currentPages[1])}`} />
-                    {!isViewerMode && (
-                      <div className="epub-page-label">
-                        {currentPages[1].isCover && <span className="page-badge cover">表紙</span>}
-                        {currentPages[1].isColophon && <span className="page-badge colophon">奥付</span>}
-                        <span className="page-number">{getPageIndex(currentPages[1])}p</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
+        ) : (() => {
+          // 表紙単独スプレッドの場合、スロットを入れ替えて視覚的左側（RTL）に配置
+          const isCoverAlone = currentPages.length === 1 && currentPages[0].isCover;
+          let slot0: EpubPageInfo | undefined = currentPages[0];
+          let slot1: EpubPageInfo | undefined = currentPages[1];
+          if (isCoverAlone) {
+            if (isRTL) {
+              slot0 = undefined;
+              slot1 = currentPages[0];
+            } else {
+              slot1 = undefined;
+            }
+          }
+          const hasBothReal = currentPages.length === 2;
+          return (
+            <div className={`epub-spread-pages ${isRTL ? 'rtl' : 'ltr'}`}>
+              {isRTL ? (
+                <>
+                  {/* 右綴じ：DOM [slot0(視覚右), gutter, slot1(視覚左)] row-reverseで反転 */}
+                  {renderEpubPage(slot0, 'right', slot1)}
+                  {hasBothReal && <div className="epub-spread-gutter" />}
+                  {renderEpubPage(slot1, 'left', slot0)}
+                </>
+              ) : (
+                <>
+                  {/* 左綴じ：DOM [slot0(視覚左), gutter, slot1(視覚右)] */}
+                  {renderEpubPage(slot0, 'left', slot1)}
+                  {hasBothReal && <div className="epub-spread-gutter" />}
+                  {renderEpubPage(slot1, 'right', slot0)}
+                </>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {/* フローティングスクロールバー */}

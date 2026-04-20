@@ -50,24 +50,29 @@ export function SpreadViewer({
   // 閲覧モード時のナビゲーションヒント表示制御
   const [navHintVisible, setNavHintVisible] = useState(false);
 
-  // 見開きのペアを計算
+  // 見開きのペアを計算（表紙チャプターのみ単独ページで表示）
   const spreads = useMemo(() => {
     const result: { left?: typeof pages[0]; right?: typeof pages[0]; spreadIndex: number }[] = [];
-    for (let i = 0; i < pages.length; i += 2) {
-      if (isRTL) {
-        // 右綴じ：先のページが右、次のページが左
-        result.push({
-          right: pages[i],
-          left: pages[i + 1],
-          spreadIndex: Math.floor(i / 2),
-        });
+    let i = 0;
+    while (i < pages.length) {
+      const current = pages[i];
+      if (current.chapter.type === 'cover') {
+        // 表紙は単独スプレッド（右綴じ: 視覚的に左側 / 左綴じ: 視覚的に右側）
+        // spread-pair は RTL で row-reverse なので、視覚的左 = left スロット
+        if (isRTL) {
+          result.push({ left: current, spreadIndex: result.length });
+        } else {
+          result.push({ right: current, spreadIndex: result.length });
+        }
+        i += 1;
       } else {
-        // 左綴じ：先のページが左、次のページが右
-        result.push({
-          left: pages[i],
-          right: pages[i + 1],
-          spreadIndex: Math.floor(i / 2),
-        });
+        const next = pages[i + 1];
+        if (isRTL) {
+          result.push({ right: current, left: next, spreadIndex: result.length });
+        } else {
+          result.push({ left: current, right: next, spreadIndex: result.length });
+        }
+        i += 2;
       }
     }
     return result;
@@ -324,8 +329,35 @@ export function SpreadViewer({
     };
   }, [isDragging, handleTrackInteraction]);
 
-  const renderPage = (item: typeof pages[0] | undefined, side: 'left' | 'right') => {
+  // ページラベル名取得（白紙ページは "白紙" を表示）
+  const getPageLabelName = (item: typeof pages[0]): string | null => {
+    const { page } = item;
+    if (page.fileName) return page.fileName;
+    if (page.pageType === 'blank') return '白紙';
+    return null;
+  };
+
+  const renderPage = (item: typeof pages[0] | undefined, side: 'left' | 'right', sibling?: typeof pages[0]) => {
     if (!item) {
+      // 相手ページが存在する場合は、相手の画像を不可視で埋め込んで同サイズの空枠を表示
+      if (sibling && sibling.page.thumbnailStatus === 'ready' && sibling.page.thumbnailCachePath) {
+        // 相手が表紙の場合は白紙表示せず、完全に透明な空枠（サイズだけ維持）
+        const isCoverSibling = sibling.chapter.type === 'cover';
+        const slotClass = isCoverSibling ? 'spread-page-hidden' : 'spread-page-blank';
+        return (
+          <div className={`spread-page ${slotClass} ${side}`}>
+            <div className="spread-page-content">
+              <img
+                src={convertFileSrc(sibling.page.thumbnailCachePath)}
+                alt=""
+                className="spread-thumbnail spread-thumbnail-sizer"
+                draggable={false}
+                aria-hidden="true"
+              />
+            </div>
+          </div>
+        );
+      }
       return <div className={`spread-page spread-page-empty ${side}`} />;
     }
 
@@ -335,20 +367,41 @@ export function SpreadViewer({
     const typeColor = PAGE_TYPE_COLORS[page.pageType] || '#888';
     const isSelected = !isViewerMode && selectedPageId === page.id;
 
+    // ファイル無しの特殊ページ（白紙等）は兄弟画像でサイズを合わせる
+    const isBlankSpecial = isSpecialPage && !hasFile;
+    const sizerSrc =
+      isBlankSpecial && sibling?.page.thumbnailStatus === 'ready' && sibling?.page.thumbnailCachePath
+        ? convertFileSrc(sibling.page.thumbnailCachePath)
+        : null;
+
     return (
       <div
         className={`spread-page ${side}${isSelected ? ' selected' : ''}`}
         onClick={() => !isViewerMode && onPageSelect?.(item.chapter.id, page.id)}
       >
         <div className="spread-page-content">
-          {isSpecialPage && !hasFile ? (
-            <div
-              className="spread-special-page"
-              style={{ backgroundColor: typeColor + '20', borderColor: typeColor }}
-            >
-              <span className="spread-special-label" style={{ color: typeColor }}>
-                {page.label || PAGE_TYPE_LABELS[page.pageType]}
-              </span>
+          {isBlankSpecial ? (
+            <div className="spread-special-wrapper">
+              {sizerSrc && (
+                <img
+                  src={sizerSrc}
+                  alt=""
+                  className="spread-thumbnail spread-thumbnail-sizer"
+                  draggable={false}
+                  aria-hidden="true"
+                />
+              )}
+              <div
+                className="spread-special-page"
+                style={{
+                  backgroundColor: page.pageType === 'blank' ? 'white' : typeColor + '20',
+                  borderColor: typeColor,
+                }}
+              >
+                <span className="spread-special-label" style={{ color: typeColor }}>
+                  {page.label || PAGE_TYPE_LABELS[page.pageType]}
+                </span>
+              </div>
             </div>
           ) : page.thumbnailStatus === 'ready' && page.thumbnailCachePath ? (
             <img
@@ -396,10 +449,11 @@ export function SpreadViewer({
             <div className={`spread-info-bar ${isRTL ? 'rtl' : 'ltr'}`}>
               {isRTL ? (
                 <>
-                  {currentSpread.right && (
-                    <span className="spread-page-label right">
-                      P.{currentSpread.right.globalIndex + 1}
-                      {currentSpread.right.page.fileName && ` - ${currentSpread.right.page.fileName}`}
+                  {/* 右綴じ: row-reverseにより画像の視覚左=left、視覚右=right なのでラベルもそれに合わせる */}
+                  {currentSpread.left && (
+                    <span className="spread-page-label left">
+                      P.{currentSpread.left.globalIndex + 1}
+                      {getPageLabelName(currentSpread.left) && ` - ${getPageLabelName(currentSpread.left)}`}
                     </span>
                   )}
                   <div className="spread-number-label">
@@ -411,10 +465,10 @@ export function SpreadViewer({
                           ? `見開き ${currentSpread.left.globalIndex + 1}P`
                           : `見開き ${currentSpreadIndex + 1} / ${totalSpreads}`}
                   </div>
-                  {currentSpread.left && (
-                    <span className="spread-page-label left">
-                      P.{currentSpread.left.globalIndex + 1}
-                      {currentSpread.left.page.fileName && ` - ${currentSpread.left.page.fileName}`}
+                  {currentSpread.right && (
+                    <span className="spread-page-label right">
+                      P.{currentSpread.right.globalIndex + 1}
+                      {getPageLabelName(currentSpread.right) && ` - ${getPageLabelName(currentSpread.right)}`}
                     </span>
                   )}
                 </>
@@ -423,7 +477,7 @@ export function SpreadViewer({
                   {currentSpread.left && (
                     <span className="spread-page-label left">
                       P.{currentSpread.left.globalIndex + 1}
-                      {currentSpread.left.page.fileName && ` - ${currentSpread.left.page.fileName}`}
+                      {getPageLabelName(currentSpread.left) && ` - ${getPageLabelName(currentSpread.left)}`}
                     </span>
                   )}
                   <div className="spread-number-label">
@@ -438,7 +492,7 @@ export function SpreadViewer({
                   {currentSpread.right && (
                     <span className="spread-page-label right">
                       P.{currentSpread.right.globalIndex + 1}
-                      {currentSpread.right.page.fileName && ` - ${currentSpread.right.page.fileName}`}
+                      {getPageLabelName(currentSpread.right) && ` - ${getPageLabelName(currentSpread.right)}`}
                     </span>
                   )}
                 </>
@@ -449,15 +503,15 @@ export function SpreadViewer({
             <div className={`spread-pair ${isRTL ? 'rtl' : 'ltr'}`} ref={spreadPairRef} style={{ transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom / 100})`, transformOrigin: 'center center' }}>
               {isRTL ? (
                 <>
-                  {renderPage(currentSpread.right, 'right')}
+                  {renderPage(currentSpread.right, 'right', currentSpread.left)}
                   <div className="spread-gutter" />
-                  {renderPage(currentSpread.left, 'left')}
+                  {renderPage(currentSpread.left, 'left', currentSpread.right)}
                 </>
               ) : (
                 <>
-                  {renderPage(currentSpread.left, 'left')}
+                  {renderPage(currentSpread.left, 'left', currentSpread.right)}
                   <div className="spread-gutter" />
-                  {renderPage(currentSpread.right, 'right')}
+                  {renderPage(currentSpread.right, 'right', currentSpread.left)}
                 </>
               )}
             </div>

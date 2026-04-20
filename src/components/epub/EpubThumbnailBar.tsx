@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useState } from 'react';
+import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { useStore } from '../../store';
 import type { EpubPageInfo } from '../../types';
@@ -35,12 +35,39 @@ export function EpubThumbnailBar({
     reorderEpubPage,
   } = useStore();
 
+  // ページインデックス→スプレッドインデックスのマッピング（表紙単独スプレッド対応）
+  const pageToSpread = useMemo(() => {
+    const map: number[] = [];
+    let spreadIdx = 0;
+    let i = 0;
+    while (i < pages.length) {
+      const current = pages[i];
+      if (current.isCover) {
+        map[i] = spreadIdx;
+        i += 1;
+      } else {
+        const next = pages[i + 1];
+        if (next) {
+          map[i] = spreadIdx;
+          map[i + 1] = spreadIdx;
+          i += 2;
+        } else {
+          map[i] = spreadIdx;
+          i += 1;
+        }
+      }
+      spreadIdx++;
+    }
+    return map;
+  }, [pages]);
+
   // 現在のスプレッドにスクロール
   useEffect(() => {
     const container = scrollRef.current;
     if (!container) return;
 
-    const pageIndex = currentSpread * 2;
+    const pageIndex = pageToSpread.findIndex((s) => s === currentSpread);
+    if (pageIndex < 0) return;
     const thumbnails = container.querySelectorAll('.epub-thumbnail-item');
     const target = thumbnails[pageIndex] as HTMLElement;
 
@@ -50,7 +77,7 @@ export function EpubThumbnailBar({
       const scrollLeft = target.offsetLeft - containerRect.width / 2 + targetRect.width / 2;
       container.scrollTo({ left: scrollLeft, behavior: 'smooth' });
     }
-  }, [currentSpread]);
+  }, [currentSpread, pageToSpread]);
 
   // 画像ソースを取得
   const getImageSrc = (page: EpubPageInfo): string => {
@@ -151,12 +178,12 @@ export function EpubThumbnailBar({
             key={page.id}
             className={`epub-thumbnail-item ${
               selectedPageId === page.id ? 'selected' : ''
-            } ${Math.floor(index / 2) === currentSpread ? 'current-spread' : ''} ${
+            } ${pageToSpread[index] === currentSpread ? 'current-spread' : ''} ${
               dropIndex === index ? 'drop-target' : ''
             }`}
             onClick={() => {
               onSelectPage(page.id);
-              onSpreadChange(Math.floor(index / 2));
+              onSpreadChange(pageToSpread[index]);
             }}
             onContextMenu={(e) => handleContextMenu(e, page.id)}
             draggable
@@ -167,11 +194,17 @@ export function EpubThumbnailBar({
             onDragEnd={handleDragEnd}
           >
             <div className="epub-thumbnail-image">
-              <img
-                src={getImageSrc(page)}
-                alt={`Page ${index + 1}`}
-                loading="lazy"
-              />
+              {page.isBlank ? (
+                <div className="epub-thumbnail-blank">
+                  <span>白紙</span>
+                </div>
+              ) : (
+                <img
+                  src={getImageSrc(page)}
+                  alt={`Page ${index + 1}`}
+                  loading="lazy"
+                />
+              )}
             </div>
             <div className="epub-thumbnail-info">
               {page.isCover && <span className="page-badge cover">表紙</span>}

@@ -13,7 +13,7 @@ import {
 } from '@dnd-kit/sortable';
 import { useStore, FileInfo, THUMBNAIL_SIZES, ThumbnailSize } from './store';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useKeyboardShortcuts, useDragHandlers, useExport } from './hooks';
+import { useKeyboardShortcuts, useDragHandlers, useExport, queueThumbnail } from './hooks';
 import {
   Chapter,
   ChapterType,
@@ -385,6 +385,23 @@ function App() {
       loadEpubFromDaidori();
     }
   }, [previewMode, chapters, loadEpubFromDaidori]);
+
+  // 見開き/EPUBモード時は表示対象の全ページのサムネイルを先行生成
+  // （リスト表示ではIntersectionObserverで遅延生成するが、他モードにはその仕組みが無い）
+  useEffect(() => {
+    if (previewMode !== 'spread' && previewMode !== 'epub') return;
+    for (const chapter of chapters) {
+      for (const page of chapter.pages) {
+        if (
+          page.filePath &&
+          page.modifiedTime &&
+          (page.thumbnailStatus === 'pending' || page.thumbnailStatus === undefined)
+        ) {
+          queueThumbnail(page.id, page.filePath, page.modifiedTime);
+        }
+      }
+    }
+  }, [previewMode, chapters]);
 
   // キーボードショートカット
   useKeyboardShortcuts({
@@ -1623,27 +1640,25 @@ function App() {
         chapters={chapters}
       />
 
-      {/* 断ち切りエディタ（表紙） */}
-      <BleedEditorModal
-        isOpen={bleedEditorState.currentStep === 'cover' && !!bleedEditorState.coverPsd}
-        label="表紙"
-        thumbnailPath={bleedEditorState.coverPsd?.thumbnailPath || ''}
-        originalFilePath={bleedEditorState.coverPsd?.filePath || ''}
-        onApply={handleBleedApply}
-        onSkip={handleBleedSkip}
-        onCancel={handleBleedCancel}
-      />
-
-      {/* 断ち切りエディタ（本文） */}
-      <BleedEditorModal
-        isOpen={bleedEditorState.currentStep === 'body' && !!bleedEditorState.bodyPsd}
-        label="本文"
-        thumbnailPath={bleedEditorState.bodyPsd?.thumbnailPath || ''}
-        originalFilePath={bleedEditorState.bodyPsd?.filePath || ''}
-        onApply={handleBleedApply}
-        onSkip={handleBleedSkip}
-        onCancel={handleBleedCancel}
-      />
+      {/* 断ち切りエディタ（キュー駆動） */}
+      {(() => {
+        const { queue, currentIndex } = bleedEditorState;
+        const item = currentIndex >= 0 && currentIndex < queue.length ? queue[currentIndex] : null;
+        if (!item) return null;
+        const key = item.kind === 'chapter' ? `chapter-${item.chapterId}` : item.kind;
+        return (
+          <BleedEditorModal
+            key={key}
+            isOpen={true}
+            label={item.label}
+            thumbnailPath={item.thumbnailPath}
+            originalFilePath={item.filePath}
+            onApply={handleBleedApply}
+            onSkip={handleBleedSkip}
+            onCancel={handleBleedCancel}
+          />
+        );
+      })()}
 
       <EpubMetadataModal
         isOpen={isEpubModalOpen}

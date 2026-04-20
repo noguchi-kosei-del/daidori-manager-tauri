@@ -25,9 +25,14 @@ export interface BleedMargins {
 // 断ち切り設定
 export interface BleedSettings {
   enabled: boolean;
+  mode: 'bulk' | 'per-chapter';
   cover: BleedMargins;
   body: BleedMargins;
+  perChapter?: Record<string, BleedMargins>;
 }
+
+// 断ち切りモード（UIで選択するモード）
+export type BleedMode = 'bulk' | 'per-chapter';
 
 // エクスポート設定
 export interface ExportOptions {
@@ -46,6 +51,8 @@ export interface ExportOptions {
   perChapterSettings: Record<string, ChapterRenameSettings>;
   // 断ち切り設定
   bleedSettings?: BleedSettings;
+  // 断ち切りモード（Photoshop変換時のみ使用）
+  bleedMode: BleedMode;
 }
 
 // エクスポートモーダル
@@ -74,6 +81,7 @@ export function ExportModal({
   const [digitsText, setDigitsText] = useState('4');
   const [prefix, setPrefix] = useState('');
   const [perChapterSettings, setPerChapterSettings] = useState<Record<string, ChapterRenameSettings>>({});
+  const [bleedMode, setBleedMode] = useState<BleedMode>('bulk');
   const [isExporting, setIsExporting] = useState(false);
 
   // 初期化：デフォルトの出力パスを設定
@@ -151,7 +159,7 @@ export function ExportModal({
   const handleExport = async () => {
     if (!outputPath) return;
     setIsExporting(true);
-    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, convertToJpgPhotoshop, renameMode, startNumber, digits, prefix, perChapterSettings });
+    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, convertToJpgPhotoshop, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode });
     setIsExporting(false);
     onClose();
   };
@@ -315,6 +323,34 @@ export function ExportModal({
               </div>
             )}
           </div>
+
+          {(convertToTiff || convertToJpgPhotoshop) && hasPsdFiles && (
+            <div className="form-group">
+              <label>断ち切り設定</label>
+              <div className="radio-group">
+                <label className="radio-label">
+                  <input
+                    type="radio"
+                    name="bleedMode"
+                    checked={bleedMode === 'bulk'}
+                    onChange={() => setBleedMode('bulk')}
+                  />
+                  一括断ち切り
+                  <span className="radio-description">表紙と本文で1回ずつ設定</span>
+                </label>
+                <label className="radio-label">
+                  <input
+                    type="radio"
+                    name="bleedMode"
+                    checked={bleedMode === 'per-chapter'}
+                    onChange={() => setBleedMode('per-chapter')}
+                  />
+                  話ごと
+                  <span className="radio-description">各話チャプターごとに個別設定</span>
+                </label>
+              </div>
+            </div>
+          )}
 
           <div className="form-section">
             <h3>リネーム設定</h3>

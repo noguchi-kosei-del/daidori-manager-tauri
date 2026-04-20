@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import type { Chapter, Page } from '../types';
-import type { ExportOptions, BleedMargins } from '../components/modals/ExportModal';
+import type { Chapter, Page, ThumbnailResult } from '../types';
+import type { ExportOptions, BleedMargins, BleedSettings } from '../components/modals/ExportModal';
 
 interface AllPageItem {
   page: Page;
@@ -19,23 +19,67 @@ interface ExportResultDialog {
   exportedPages?: { filename: string; pageType: string; chapterName?: string; label?: string }[];
 }
 
+export interface BleedQueueItem {
+  kind: 'cover' | 'body' | 'chapter';
+  chapterId?: string; // kind === 'chapter' のときに必須
+  label: string;
+  thumbnailPath: string;
+  filePath: string;
+}
+
 interface BleedEditorState {
   pendingExportOptions: ExportOptions | null;
-  coverPsd: { thumbnailPath: string; filePath: string } | null;
-  bodyPsd: { thumbnailPath: string; filePath: string } | null;
-  currentStep: 'cover' | 'body' | null;
+  mode: 'bulk' | 'per-chapter';
+  queue: BleedQueueItem[];
+  currentIndex: number; // -1 で未開始／完了
   coverMargins: BleedMargins | null;
   bodyMargins: BleedMargins | null;
+  perChapterMargins: Record<string, BleedMargins>;
 }
 
 const INITIAL_BLEED_STATE: BleedEditorState = {
   pendingExportOptions: null,
-  coverPsd: null,
-  bodyPsd: null,
-  currentStep: null,
+  mode: 'bulk',
+  queue: [],
+  currentIndex: -1,
   coverMargins: null,
   bodyMargins: null,
+  perChapterMargins: {},
 };
+
+const ZERO_MARGINS: BleedMargins = { top: 0, bottom: 0, left: 0, right: 0 };
+
+// 完了時の bleedSettings を構築
+function buildBleedSettings(state: BleedEditorState): BleedSettings | undefined {
+  const { mode, coverMargins, bodyMargins, perChapterMargins } = state;
+  const hasAny = coverMargins || bodyMargins || Object.keys(perChapterMargins).length > 0;
+  if (!hasAny) return undefined;
+  return {
+    enabled: true,
+    mode,
+    cover: coverMargins ?? ZERO_MARGINS,
+    body: bodyMargins ?? ZERO_MARGINS,
+    perChapter: mode === 'per-chapter' ? perChapterMargins : undefined,
+  };
+}
+
+// 断ち切り適用: chapterType/chapterId から該当マージンを取得
+function resolveMargins(
+  bleedSettings: BleedSettings | undefined,
+  chapterType: string,
+  chapterId: string
+): BleedMargins | null {
+  if (!bleedSettings?.enabled) return null;
+  if (chapterType === 'cover') return bleedSettings.cover ?? null;
+  if (bleedSettings.mode === 'per-chapter') {
+    const perCh = bleedSettings.perChapter?.[chapterId];
+    if (perCh) return perCh;
+    // フォールバック: perChapter の先頭エントリ（= 先頭話の値）
+    const values = bleedSettings.perChapter ? Object.values(bleedSettings.perChapter) : [];
+    return values.length > 0 ? values[0] : null;
+  }
+  return bleedSettings.body ?? null;
+}
 
 export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
@@ -50,7 +94,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
       // PSD・JPEGファイルを抽出（Photoshopで開いてTIFFに変換）
       // EPUB_maker連携用にページ情報も保持
       const convertibleTypes = ['psd', 'jpg'];
-      const convertiblePages: { path: string; outputName: string; pageType: string; chapterType: string; chapterName?: string; label?: string }[] = [];
+      const convertiblePages: { path: string; outputName: string; pageType: string; chapterType: string; chapterId: string; chapterName?: string; label?: string }[] = [];
 
       if (renameMode === 'unified') {
         allPages.forEach((item, index) => {
@@ -60,6 +104,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
               outputName: `${prefix}${String(startNumber + index).padStart(digits, '0')}.tif`,
               pageType: item.page.pageType,
               chapterType: item.chapter.type,
+              chapterId: item.chapter.id,
               chapterName: item.chapter.name,
               label: item.page.label,
             });
@@ -76,6 +121,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
                 outputName: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}.tif`,
                 pageType: page.pageType,
                 chapterType: chapter.type,
+                chapterId: chapter.id,
                 chapterName: chapter.name,
                 label: page.label,
               });
@@ -94,17 +140,20 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
           globalSettings: {
             flattenImage: true,
           },
-          files: convertiblePages.map(p => ({
-            path: p.path,
-            outputPath: outputPath,
-            outputName: p.outputName,
-            ...(bleedSettings?.enabled && {
-              cropBounds: {
-                ...(p.chapterType === 'cover' ? bleedSettings.cover : bleedSettings.body),
-                isMargin: true,
-              },
-            }),
-          })),
+          files: convertiblePages.map(p => {
+            const margins = resolveMargins(bleedSettings, p.chapterType, p.chapterId);
+            return {
+              path: p.path,
+              outputPath: outputPath,
+              outputName: p.outputName,
+              ...(margins && {
+                cropBounds: {
+                  ...margins,
+                  isMargin: true,
+                },
+              }),
+            };
+          }),
         };
 
         console.log('TIFF変換開始:', { config, outputDir: outputPath });
@@ -203,7 +252,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
     if (convertToJpgPhotoshop) {
       // PSDファイルを抽出（Photoshopで開いてJPEGに変換）
       // EPUB_maker連携用にページ情報も保持
-      const convertiblePages: { path: string; outputName: string; pageType: string; chapterType: string; chapterName?: string; label?: string }[] = [];
+      const convertiblePages: { path: string; outputName: string; pageType: string; chapterType: string; chapterId: string; chapterName?: string; label?: string }[] = [];
 
       if (renameMode === 'unified') {
         allPages.forEach((item, index) => {
@@ -213,6 +262,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
               outputName: `${prefix}${String(startNumber + index).padStart(digits, '0')}.jpg`,
               pageType: item.page.pageType,
               chapterType: item.chapter.type,
+              chapterId: item.chapter.id,
               chapterName: item.chapter.name,
               label: item.page.label,
             });
@@ -229,6 +279,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
                 outputName: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}.jpg`,
                 pageType: page.pageType,
                 chapterType: chapter.type,
+                chapterId: chapter.id,
                 chapterName: chapter.name,
                 label: page.label,
               });
@@ -247,17 +298,20 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
           globalSettings: {
             jpgQuality: 12,  // 最高品質
           },
-          files: convertiblePages.map(p => ({
-            path: p.path,
-            outputPath: outputPath,
-            outputName: p.outputName,
-            ...(bleedSettings?.enabled && {
-              cropBounds: {
-                ...(p.chapterType === 'cover' ? bleedSettings.cover : bleedSettings.body),
-                isMargin: true,
-              },
-            }),
-          })),
+          files: convertiblePages.map(p => {
+            const margins = resolveMargins(bleedSettings, p.chapterType, p.chapterId);
+            return {
+              path: p.path,
+              outputPath: outputPath,
+              outputName: p.outputName,
+              ...(margins && {
+                cropBounds: {
+                  ...margins,
+                  isMargin: true,
+                },
+              }),
+            };
+          }),
         };
 
         console.log('JPEG変換開始:', { config, outputDir: outputPath });
@@ -426,99 +480,144 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
     }
   }, [chapters, allPages]);
 
+  // 指定PSDのサムネイルパスを確保（キャッシュ済みならそれを返し、なければ生成）
+  const ensureThumbnail = useCallback(async (page: Page): Promise<string | null> => {
+    if (!page.filePath) return null;
+    if (page.thumbnailCachePath) return page.thumbnailCachePath;
+    try {
+      const result = await invoke<ThumbnailResult>('generate_thumbnail', {
+        filePath: page.filePath,
+        modifiedTime: page.modifiedTime ?? 0,
+      });
+      return result.cache_path;
+    } catch (e) {
+      console.error('ensureThumbnail failed:', e);
+      return null;
+    }
+  }, []);
+
   // エクスポート前に断ち切り確認が必要か判定し、必要ならエディタを表示
-  const handlePreExport = useCallback((options: ExportOptions) => {
-    const { convertToTiff, convertToJpgPhotoshop } = options;
+  const handlePreExport = useCallback(async (options: ExportOptions) => {
+    const { convertToTiff, convertToJpgPhotoshop, bleedMode } = options;
 
-    // Photoshop変換モードでPSDファイルがある場合、断ち切りエディタを表示
-    if (convertToTiff || convertToJpgPhotoshop) {
-      // 表紙チャプターのPSD
-      let coverPsd: { thumbnailPath: string; filePath: string } | null = null;
-      // 本文チャプターのPSD
-      let bodyPsd: { thumbnailPath: string; filePath: string } | null = null;
+    // Photoshop変換モード以外はそのままエクスポート
+    if (!convertToTiff && !convertToJpgPhotoshop) {
+      handleExport(options);
+      return;
+    }
 
-      for (const chapter of chapters) {
-        for (const page of chapter.pages) {
-          if (page.fileType === 'psd' && page.filePath && page.thumbnailCachePath) {
-            if (chapter.type === 'cover' && !coverPsd) {
-              coverPsd = { thumbnailPath: page.thumbnailCachePath, filePath: page.filePath };
-            } else if (chapter.type !== 'cover' && !bodyPsd) {
-              bodyPsd = { thumbnailPath: page.thumbnailCachePath, filePath: page.filePath };
-            }
-          }
-          if (coverPsd && bodyPsd) break;
-        }
-        if (coverPsd && bodyPsd) break;
+    // 各チャプターから先頭PSDページ（thumbnail有無問わず）を探す
+    const findFirstPsd = (chapter: Chapter): Page | null => {
+      for (const page of chapter.pages) {
+        if (page.fileType === 'psd' && page.filePath) return page;
       }
+      return null;
+    };
 
-      if (coverPsd || bodyPsd) {
-        // 断ち切りエディタを表示
-        setBleedEditorState({
-          pendingExportOptions: options,
-          coverPsd,
-          bodyPsd,
-          currentStep: coverPsd ? 'cover' : 'body',
-          coverMargins: null,
-          bodyMargins: null,
-        });
-        return;
+    // キュー構築
+    const queue: BleedQueueItem[] = [];
+
+    // 表紙チャプターの先頭PSD
+    for (const chapter of chapters) {
+      if (chapter.type !== 'cover') continue;
+      const psd = findFirstPsd(chapter);
+      if (psd && psd.filePath) {
+        const thumb = await ensureThumbnail(psd);
+        if (thumb) {
+          queue.push({ kind: 'cover', label: '表紙', thumbnailPath: thumb, filePath: psd.filePath });
+          break;
+        }
       }
     }
 
-    // PSDなし or 通常エクスポート → そのまま実行
-    handleExport(options);
-  }, [chapters, handleExport]);
+    if (bleedMode === 'per-chapter') {
+      // 話(chapter)タイプのチャプターごとに先頭PSDを追加
+      for (const chapter of chapters) {
+        if (chapter.type !== 'chapter') continue;
+        const psd = findFirstPsd(chapter);
+        if (psd && psd.filePath) {
+          const thumb = await ensureThumbnail(psd);
+          if (thumb) {
+            queue.push({
+              kind: 'chapter',
+              chapterId: chapter.id,
+              label: chapter.name,
+              thumbnailPath: thumb,
+              filePath: psd.filePath,
+            });
+          }
+        }
+      }
+    } else {
+      // bulk モード: 本文PSD（cover以外の先頭PSD）を1件追加
+      for (const chapter of chapters) {
+        if (chapter.type === 'cover') continue;
+        const psd = findFirstPsd(chapter);
+        if (psd && psd.filePath) {
+          const thumb = await ensureThumbnail(psd);
+          if (thumb) {
+            queue.push({ kind: 'body', label: '本文', thumbnailPath: thumb, filePath: psd.filePath });
+            break;
+          }
+        }
+      }
+    }
+
+    if (queue.length === 0) {
+      // PSDなし → そのままエクスポート
+      handleExport(options);
+      return;
+    }
+
+    setBleedEditorState({
+      pendingExportOptions: options,
+      mode: bleedMode,
+      queue,
+      currentIndex: 0,
+      coverMargins: null,
+      bodyMargins: null,
+      perChapterMargins: {},
+    });
+  }, [chapters, handleExport, ensureThumbnail]);
+
+  // キュー次ステップ進行 or エクスポート実行
+  const advanceOrFinish = useCallback((nextState: BleedEditorState) => {
+    if (nextState.currentIndex >= nextState.queue.length) {
+      // キュー終了 → エクスポート実行
+      const opts = nextState.pendingExportOptions!;
+      const bleedSettings = buildBleedSettings(nextState);
+      setTimeout(() => handleExport({ ...opts, bleedSettings }), 0);
+      return { ...INITIAL_BLEED_STATE };
+    }
+    return nextState;
+  }, [handleExport]);
 
   // 断ち切りエディタ: 適用コールバック
   const handleBleedApply = useCallback((margins: BleedMargins) => {
     setBleedEditorState(state => {
-      if (state.currentStep === 'cover') {
-        if (state.bodyPsd) {
-          // 表紙完了 → 本文PSDがあれば次へ
-          return { ...state, coverMargins: margins, currentStep: 'body' as const };
-        }
-        // 本文なし → エクスポート実行
-        const opts = state.pendingExportOptions!;
-        const bleedSettings = { enabled: true, cover: margins, body: { top: 0, bottom: 0, left: 0, right: 0 } };
-        // Schedule export outside setState
-        setTimeout(() => handleExport({ ...opts, bleedSettings }), 0);
-        return { ...state, coverMargins: margins, currentStep: null, pendingExportOptions: null };
-      } else {
-        // 本文完了 → エクスポート実行
-        const opts = state.pendingExportOptions!;
-        const coverMargins = state.coverMargins || { top: 0, bottom: 0, left: 0, right: 0 };
-        const bleedSettings = { enabled: true, cover: coverMargins, body: margins };
-        setTimeout(() => handleExport({ ...opts, bleedSettings }), 0);
-        return { ...state, bodyMargins: margins, currentStep: null, pendingExportOptions: null };
+      if (state.currentIndex < 0 || state.currentIndex >= state.queue.length) return state;
+      const item = state.queue[state.currentIndex];
+      const next: BleedEditorState = { ...state };
+      if (item.kind === 'cover') {
+        next.coverMargins = margins;
+      } else if (item.kind === 'body') {
+        next.bodyMargins = margins;
+      } else if (item.kind === 'chapter' && item.chapterId) {
+        next.perChapterMargins = { ...state.perChapterMargins, [item.chapterId]: margins };
       }
+      next.currentIndex = state.currentIndex + 1;
+      return advanceOrFinish(next);
     });
-  }, [handleExport]);
+  }, [advanceOrFinish]);
 
   // 断ち切りエディタ: スキップコールバック
   const handleBleedSkip = useCallback(() => {
     setBleedEditorState(state => {
-      if (state.currentStep === 'cover') {
-        if (state.bodyPsd) {
-          // 表紙スキップ → 本文PSDがあれば次へ
-          return { ...state, coverMargins: null, currentStep: 'body' as const };
-        }
-        // 本文なし → 断ち切りなしでエクスポート
-        const opts = state.pendingExportOptions!;
-        setTimeout(() => handleExport(opts), 0);
-        return { ...state, currentStep: null, pendingExportOptions: null };
-      } else {
-        // 本文スキップ → エクスポート実行
-        const opts = state.pendingExportOptions!;
-        if (state.coverMargins) {
-          const bleedSettings = { enabled: true, cover: state.coverMargins, body: { top: 0, bottom: 0, left: 0, right: 0 } };
-          setTimeout(() => handleExport({ ...opts, bleedSettings }), 0);
-        } else {
-          setTimeout(() => handleExport(opts), 0);
-        }
-        return { ...state, bodyMargins: null, currentStep: null, pendingExportOptions: null };
-      }
+      if (state.currentIndex < 0 || state.currentIndex >= state.queue.length) return state;
+      const next: BleedEditorState = { ...state, currentIndex: state.currentIndex + 1 };
+      return advanceOrFinish(next);
     });
-  }, [handleExport]);
+  }, [advanceOrFinish]);
 
   // 断ち切りエディタ: キャンセル（エクスポート中止）
   const handleBleedCancel = useCallback(() => {

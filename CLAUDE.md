@@ -1020,3 +1020,61 @@ pub struct PsdGuide {
 |---------|------|
 | `read_psd_guides` | PSDファイル内のガイド線情報を読み取る（リソースID 1032） |
 | `export_pages` | `blank_format` 引数を追加（白紙ページの出力形式を明示的に指定可能） |
+
+### 2026-04-20: 断ち切り話ごと対応・見開き/EPUBレイアウト刷新・白紙対応
+
+#### 断ち切り設定「一括／話ごと」モード追加（ExportModal.tsx, useExport.ts, App.tsx）
+- `BleedSettings` に `mode: 'bulk' | 'per-chapter'` と `perChapter?: Record<chapterId, BleedMargins>` を追加
+- `ExportOptions.bleedMode` を新設し、ExportModal で「一括断ち切り／話ごと」のラジオを表示（Photoshop変換選択時かつPSDあり時のみ）
+- `useExport` の状態をキュー駆動に刷新: `BleedQueueItem[]` + `currentIndex` で順次処理
+  - bulk モード: 表紙 + 本文の2ステップ
+  - per-chapter モード: 表紙 + 話チャプターごとのPSD
+- `resolveMargins()` で chapterId ベースの断ち切り適用。話ごとでは非話チャプターは先頭話の値をフォールバック
+- App.tsx: `BleedEditorModal` を2個ハードコードから1個のキュー駆動レンダリングへ変更（`key` でステップ遷移時リマウント）
+- サムネイル未生成PSDは `ensureThumbnail()` ヘルパーで on-demand 生成
+- 「ガイドをロック／ロック解除」→「ガイドを確定／確定解除」に文言変更
+
+#### エクスポート結果ダイアログUI改善（styles.css）
+- `.export-result-dialog .btn-epub` の上書き: テキスト付きボタン（「EPUBを生成」）のため `width/height: auto`、`border-radius: 8px` で他の `.btn-small` と同じ形状に統一
+
+#### サムネイル未生成対策（App.tsx）
+- `previewMode === 'spread' || 'epub'` のとき、全ファイルページの `thumbnailStatus === 'pending'` を検出して `queueThumbnail` を先行投入
+- チャプター並び替え後に未閲覧ページの画像が表示されない問題を解消
+
+#### 表紙チャプターの1ファイル制限（store.ts）
+- `addPagesToChapter` / `addPagesToChapterAt`: cover chapter では残り枠（1 - 既存ページ数）に制限
+- `movePage` / `movePages`: 他チャプターから cover へ純増移動する場合、合計2ページ以上になる操作をブロック
+
+#### 見開きビューアのレイアウト刷新（SpreadViewer.tsx, styles.css）
+- 表紙チャプター（`chapter.type === 'cover'`）のページは単独スプレッドとして処理
+  - RTL: `left` スロット（視覚的に左側）、LTR: `right` スロットに配置
+  - 対向側は `spread-page-hidden` クラスで完全透明＋不可視サイザーでサイズだけ保持
+- `renderPage(item, side, sibling)` の `sibling` 引数導入: 空スロットや白紙特殊ページで相手画像を不可視サイザーとして埋め込み、同サイズに揃える
+- 終端の単ページ（odd count）は `spread-page-blank` を白背景→点線枠の透明空ページに変更
+- ファイル無しの特殊ページ（白紙）は `spread-special-wrapper` で兄弟サイザーを埋め込み同サイズ表示、白紙は背景色を `white` に固定
+- `spread-info-bar` の RTL ラベル順を修正: `row-reverse` により視覚左=`currentSpread.left`、視覚右=`currentSpread.right` となるためDOM順も合わせて入れ替え
+- `getPageLabelName()` ヘルパーで白紙ページは「白紙」と表示
+
+#### EPUBビューのレイアウト刷新（EpubSpreadPreview.tsx, EpubMakerView.tsx, EpubThumbnailBar.tsx, store.ts, types.ts, styles.css）
+- `EpubPageInfo` に `isBlank?: boolean` と `originalChapterType?: ChapterType` を追加
+- `loadEpubFromDaidori`: 白紙ページをプレビュー用に含める（`isBlank: true`, `sourcePath: ''`）。EPUB生成側（`handleEpubGenerate`）は独自の配列構築のため出力には含まれない
+- `renderEpubPage(page, side, sibling)` ヘルパー導入で SpreadViewer と同じ構造に統一
+  - 空スロット: `epub-spread-page-hidden`（表紙対向）/ `epub-spread-page-blank`（点線空枠）
+  - 白紙ページ: `epub-spread-page-blankcontent`（白背景＋破線枠＋「白紙」ラベル）
+  - 通常画像: `originalChapterType` ベースのバッジ表示（話／表紙／白紙／幕間／奥付）
+- 表紙単独スプレッドは RTL で `slot1`（視覚的左側）に配置し、対向に非表示スロットを描画
+- サムネイルバー:
+  - `isBlank` ページの画像表示を「白紙」点線枠 div に差し替え（空 `sourcePath` 読み込み失敗を防止）
+  - `Math.floor(index/2)` ベースから、表紙単独を考慮した `pageToSpread` マップに変更
+- EpubMakerView `handleSelectPage`: 同じマッピングで右ページクリック時のスプレッド誤ジャンプを修正
+
+#### 白紙チャプター専用ボタン（ChapterItem.tsx）
+- 白紙チャプター（`chapter.type === 'blank'`）では「ページを追加」を非表示にし、代わりに「白紙を追加」ボタンを表示。クリックで `onAddSpecialPage('blank')` を呼び白紙ページを末尾追加
+
+#### 型定義追加
+- `EpubPageInfo.isBlank?: boolean`
+- `EpubPageInfo.originalChapterType?: ChapterType`
+- `BleedSettings.mode: 'bulk' | 'per-chapter'`
+- `BleedSettings.perChapter?: Record<string, BleedMargins>`
+- `BleedMode = 'bulk' | 'per-chapter'`
+- `ExportOptions.bleedMode: BleedMode`

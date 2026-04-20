@@ -35,10 +35,20 @@ export function EpubMakerView({
       return;
     }
     setEpubSelectedPageId(pageId);
+    // ページインデックス→スプレッドインデックスのマッピング（表紙単独スプレッド対応）
     const pageIndex = epubPages.findIndex(p => p.id === pageId);
-    if (pageIndex >= 0) {
-      const spreadIndex = Math.floor(pageIndex / 2);
-      setEpubCurrentSpread(spreadIndex);
+    if (pageIndex < 0) return;
+    let spreadIdx = 0;
+    let i = 0;
+    while (i < epubPages.length) {
+      const current = epubPages[i];
+      const spanCount = current.isCover ? 1 : (epubPages[i + 1] ? 2 : 1);
+      if (i <= pageIndex && pageIndex < i + spanCount) {
+        setEpubCurrentSpread(spreadIdx);
+        return;
+      }
+      i += spanCount;
+      spreadIdx++;
     }
   };
 
