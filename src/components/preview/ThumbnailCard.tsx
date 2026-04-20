@@ -16,6 +16,7 @@ export function ThumbnailCard({
   isHighlighted,
   isSelected,
   isMultiSelected,
+  isDimmed,
   chapterType,
   onSelect,
   onCtrlClick,
@@ -30,6 +31,7 @@ export function ThumbnailCard({
   isHighlighted?: boolean;
   isSelected?: boolean;
   isMultiSelected?: boolean;
+  isDimmed?: boolean;
   chapterType?: ChapterType;
   onSelect?: () => void;
   onCtrlClick?: () => void;
@@ -173,7 +175,7 @@ export function ThumbnailCard({
       }}
       {...attributes}
       {...listeners}
-      className={`thumbnail-card ${isHighlighted ? 'highlighted' : ''} ${isSpecialPage ? 'special' : ''} ${isSelected ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''}`}
+      className={`thumbnail-card ${isHighlighted ? 'highlighted' : ''} ${isSpecialPage ? 'special' : ''} ${isSelected ? 'selected' : ''} ${isMultiSelected ? 'multi-selected' : ''} ${isDimmed ? 'dimmed' : ''}`}
       data-page-id={page.id}
       data-page-type={page.pageType}
       onClick={(e) => {

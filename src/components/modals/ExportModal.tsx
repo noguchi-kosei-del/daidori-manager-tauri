@@ -3,6 +3,7 @@ import { save } from '@tauri-apps/plugin-dialog';
 import { desktopDir, join } from '@tauri-apps/api/path';
 import { invoke } from '@tauri-apps/api/core';
 import { Chapter, CHAPTER_TYPE_LABELS, CHAPTER_TYPE_COLORS } from '../../types';
+import { ExportIcon } from '../../icons';
 
 // チャプターごとのリネーム設定
 export interface ChapterRenameSettings {
@@ -181,7 +182,10 @@ export function ExportModal({
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content export-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>エクスポート</h2>
+          <h2>
+            <ExportIcon size={18} />
+            エクスポート
+          </h2>
           <button className="btn-icon modal-close" onClick={onClose}>
             ×
           </button>

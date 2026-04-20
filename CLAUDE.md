@@ -1235,4 +1235,58 @@ pub struct PsdGuide {
 - `EpubPageInfo.imageWidth/imageHeight/imageColorMode/imageDpi`
 - `ValidationGroupContext` / `ValidationContext`
 - Rust: `PageCheckResult` に `width/height/color_mode/dpi` を追加
+
+### 2026-04-20: カラーモードサマリーバー・UI改善・ダイアログアイコン
+
+#### カラーモードサマリーバー（App.tsx, ThumbnailCard.tsx, EpubMakerView.tsx, styles.css）
+- preview-area 上端に貼り付く形でカラーモードサマリーを追加（グリッド・見開き・EPUB 3モード共通表示）
+- 検出対象: モノクロ（Bitmap）/ グレー（Grayscale）/ RGB / CMYK の4種（件数0のバッジは非表示）
+- 各バッジはスウォッチ色・ラベル・件数を表示
+- **ホバー時の挙動**:
+  - 該当カラーモード以外のサムネイルカードが `opacity: 0.25` でdim表示（グリッドのみ）
+  - バッジ直下に該当ファイル名一覧のツールチップを表示（縦スクロール・最大320px）
+- **タイマーベースの遅延消去**: `hoverCloseTimerRef` で180ms遅延後に消去、バッジ・ツールチップのどちらに再入しても `cancelHoverClose` でキャンセル
+- **トグル折りたたみ機能**:
+  - `toolbar-collapse-btn` と同じ28×28アイコンボタン（SVG chevron、折りたたみ時180°回転）
+  - localStorage `daidori_color_summary_expanded` に永続化
+- **preview-area への貼り付け**:
+  - 負マージン（top/left/right）で preview-area の padding を相殺
+  - `position: sticky; top: calc(var(--spacing-xl) * -1)` でスクロール中も上端に固定
+  - `border-bottom` のみで preview-area との境界を表示
+
+#### 検証ロジック調整（store.ts）
+- `applyMismatchStatuses` の優先順位は `size_mismatch > color_mismatch > dpi_mismatch` のまま維持
+- カラーモード差異はサマリーバー + dim で視覚的に明示する方式に変更
+
+#### ThumbnailCardホバー時ガクガク修正（ThumbnailCard.tsx, styles.css）
+- 旧: `.thumbnail-card:hover { transform: translateY(-4px) scale(1.02) }` によりカード下端でホバー解除が連続発火
+- 新: `transform-origin: center bottom` + `transform: scale(1.04)` に変更（下端固定で上方向に膨張）
+- `isDimmed` prop追加（親から `hoveredColorMode` に応じて指定）、`.dimmed` クラスで opacity制御
+
+#### 見開きビューア画像サイズ調整（styles.css）
+- `.spread-pair .spread-thumbnail` の `max-height: 70vh → 66vh`
+- カラーモードサマリーバー追加分のスペースを考慮しつつ、ページバーとの間隔が開きすぎないよう微調整
+
+#### 右情報サイドバー: EPUB対応（App.tsx）
+- `selectedPageInfo` を `previewMode === 'epub'` 分岐で拡張
+- EPUB時は `epubSelectedPageId` → `epubPages` → `originalPageId` 経由で台割 `Page` を解決
+- 依存配列に `previewMode` / `epubPages` / `epubSelectedPageId` を追加
+
+#### ダイアログタイトルアイコン（ExportModal.tsx, EpubMetadataModal.tsx, styles.css）
+- エクスポートモーダル: `ExportIcon` をタイトル左に追加
+- EPUB生成モーダル: `BookIcon` をタイトル左に追加
+- `.modal-header h2` を `display: inline-flex; align-items: center; gap` に変更
+
+#### EpubMakerViewの拡張（EpubMakerView.tsx）
+- `topBar?: ReactNode` prop追加: preview-area先頭にレンダリング
+- カラーモードサマリーバーをApp.tsxから渡して3モード共通表示を実現
+
+#### 新規CSSクラス（styles.css）
+- `.color-mode-summary-container` / `.color-mode-summary` / `.color-mode-badge` / `.color-mode-swatch` / `.color-mode-label` / `.color-mode-count`
+- `.color-mode-badge-tooltip` / `.color-mode-badge-tooltip-item`
+- `.thumbnail-card.dimmed`
+
+#### 型定義追加
+- `ThumbnailCard`: `isDimmed?: boolean` prop
+- `EpubMakerViewProps`: `topBar?: ReactNode` prop
 - `ExportOptions.bleedMode: BleedMode`

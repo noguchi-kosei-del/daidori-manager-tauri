@@ -19,6 +19,7 @@ import {
   AUTHOR_ROLE_LABELS,
   Chapter,
 } from '../../types';
+import { BookIcon } from '../../icons';
 
 interface EpubMetadataModalProps {
   isOpen: boolean;
@@ -235,7 +236,10 @@ export function EpubMetadataModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <h2>EPUB生成</h2>
+          <h2>
+            <BookIcon size={18} />
+            EPUB生成
+          </h2>
           <button className="btn-icon modal-close" onClick={onClose}>
             ×
           </button>

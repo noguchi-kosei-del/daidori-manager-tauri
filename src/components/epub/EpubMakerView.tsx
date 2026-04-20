@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useStore } from '../../store';
 import { EpubSpreadPreview } from './EpubSpreadPreview';
 import { EpubThumbnailBar } from './EpubThumbnailBar';
@@ -11,6 +12,7 @@ interface EpubMakerViewProps {
   isPageBarVisible?: boolean;
   bindingDirection?: 'rtl' | 'ltr';
   onReplaceFile?: (originalPageId: string) => void;
+  topBar?: ReactNode;
 }
 
 export function EpubMakerView({
@@ -21,6 +23,7 @@ export function EpubMakerView({
   isPageBarVisible = true,
   bindingDirection = 'rtl',
   onReplaceFile,
+  topBar,
 }: EpubMakerViewProps) {
   const {
     epubPages,
@@ -61,6 +64,7 @@ export function EpubMakerView({
 
   return (
     <div className="preview-area">
+      {topBar}
       {epubPages.length === 0 ? (
         <div className="spread-viewer-empty">
           <NoPageIcon size={48} />

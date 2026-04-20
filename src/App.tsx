@@ -159,6 +159,35 @@ function App() {
   // プレビューエリアのチャプター折りたたみ状態（チャプターID -> 折りたたみ状態）
   const [previewCollapsedChapters, setPreviewCollapsedChapters] = useState<Set<string>>(new Set());
 
+  // カラーモードサマリー: ホバー中のカラーモード（非該当ページはdim表示）
+  const [hoveredColorMode, setHoveredColorMode] = useState<string | null>(null);
+  // カラーモードサマリー展開状態（localStorage永続化）
+  const [isColorSummaryExpanded, setIsColorSummaryExpanded] = useState(() => {
+    const saved = localStorage.getItem('daidori_color_summary_expanded');
+    return saved !== 'false';
+  });
+  useEffect(() => {
+    localStorage.setItem('daidori_color_summary_expanded', String(isColorSummaryExpanded));
+  }, [isColorSummaryExpanded]);
+  const hoverCloseTimerRef = useRef<number | null>(null);
+  const cancelHoverClose = useCallback(() => {
+    if (hoverCloseTimerRef.current !== null) {
+      window.clearTimeout(hoverCloseTimerRef.current);
+      hoverCloseTimerRef.current = null;
+    }
+  }, []);
+  const scheduleHoverClose = useCallback(() => {
+    cancelHoverClose();
+    hoverCloseTimerRef.current = window.setTimeout(() => {
+      setHoveredColorMode(null);
+      hoverCloseTimerRef.current = null;
+    }, 180);
+  }, [cancelHoverClose]);
+  const handleBadgeEnter = useCallback((mode: string) => {
+    cancelHoverClose();
+    setHoveredColorMode(mode);
+  }, [cancelHoverClose]);
+
   // プロジェクト名編集
 
   // プレビューエリアのチャプター折りたたみをトグル
@@ -204,11 +233,101 @@ function App() {
     return result;
   }, [chapters]);
 
-  // 情報サイドバー用: 選択中のページ
+  // 情報サイドバー用: 選択中のページ（EPUB表示時はepubSelectedPageId経由でoriginalPageIdを解決）
   const selectedPageInfo = useMemo(() => {
+    if (previewMode === 'epub') {
+      if (!epubSelectedPageId) return null;
+      const epubPage = epubPages.find((p) => p.id === epubSelectedPageId);
+      if (!epubPage?.originalPageId) return null;
+      return allPages.find((p) => p.page.id === epubPage.originalPageId) ?? null;
+    }
     if (!selectedPageId) return null;
     return allPages.find((p) => p.page.id === selectedPageId) ?? null;
-  }, [allPages, selectedPageId]);
+  }, [previewMode, allPages, selectedPageId, epubPages, epubSelectedPageId]);
+
+  // カラーモード集計（ファイルページのみ対象）
+  const colorModeGroups = useMemo(() => {
+    const groups: Record<string, string[]> = { Bitmap: [], Grayscale: [], RGB: [], CMYK: [] };
+    for (const { page } of allPages) {
+      if (page.pageType !== 'file') continue;
+      const mode = page.imageColorMode;
+      if (mode === 'Bitmap' || mode === 'Grayscale' || mode === 'RGB' || mode === 'CMYK') {
+        groups[mode].push(page.fileName || '(名称未設定)');
+      }
+    }
+    return groups;
+  }, [allPages]);
+  const colorModeCounts = useMemo(() => ({
+    Bitmap: colorModeGroups.Bitmap.length,
+    Grayscale: colorModeGroups.Grayscale.length,
+    RGB: colorModeGroups.RGB.length,
+    CMYK: colorModeGroups.CMYK.length,
+  }), [colorModeGroups]);
+  const colorModeTotalCount =
+    colorModeCounts.Bitmap + colorModeCounts.Grayscale + colorModeCounts.RGB + colorModeCounts.CMYK;
+  const colorModeSummaryBar = colorModeTotalCount > 0 ? (
+    <div className={`color-mode-summary-container ${isColorSummaryExpanded ? 'expanded' : 'collapsed'}`}>
+      <button
+        type="button"
+        className="toolbar-collapse-btn color-mode-summary-toggle"
+        onClick={() => setIsColorSummaryExpanded((v) => !v)}
+        title={isColorSummaryExpanded ? 'カラーモードサマリーを折りたたむ' : 'カラーモードサマリーを展開'}
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 16 16"
+          className={`collapse-icon ${!isColorSummaryExpanded ? 'collapsed' : ''}`}
+        >
+          <path
+            d="M4 6L8 10L12 6"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            fill="none"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
+      {isColorSummaryExpanded && (
+        <div className="color-mode-summary">
+          {(['Bitmap', 'Grayscale', 'RGB', 'CMYK'] as const).map((mode) => {
+            if (colorModeCounts[mode] === 0) return null;
+            const label = mode === 'Bitmap' ? 'モノクロ' : mode === 'Grayscale' ? 'グレー' : mode;
+            const swatch = mode === 'Bitmap' ? '#000000'
+              : mode === 'Grayscale' ? '#808080'
+              : mode === 'RGB' ? '#0078d4'
+              : '#0abfb4';
+            return (
+              <div
+                key={mode}
+                className={`color-mode-badge ${hoveredColorMode === mode ? 'active' : ''}`}
+                onMouseEnter={() => handleBadgeEnter(mode)}
+                onMouseLeave={scheduleHoverClose}
+              >
+                <span className="color-mode-swatch" style={{ background: swatch }} />
+                <span className="color-mode-label">{label}</span>
+                <span className="color-mode-count">{colorModeCounts[mode]}</span>
+                {hoveredColorMode === mode && colorModeGroups[mode].length > 0 && (
+                  <div
+                    className="color-mode-badge-tooltip"
+                    onMouseEnter={cancelHoverClose}
+                    onMouseLeave={scheduleHoverClose}
+                  >
+                    {colorModeGroups[mode].map((name, i) => (
+                      <div key={i} className="color-mode-badge-tooltip-item" title={name}>
+                        {name}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  ) : null;
 
   const {
     isExportModalOpen,
@@ -1550,9 +1669,11 @@ function App() {
                 isPageBarVisible={isPageBarVisible}
                 bindingDirection={bindingDirection}
                 onReplaceFile={handleSelectFile}
+                topBar={colorModeSummaryBar}
               />
             ) : (
             <div className="preview-area" ref={previewAreaRef}>
+              {colorModeSummaryBar}
               {previewMode === 'spread' ? (
               <SpreadViewer
                 key={displayPages.map(p => p.page.id).join(',')}
@@ -1693,6 +1814,11 @@ function App() {
                                                 isHighlighted={item.page.id === highlightedPageId}
                                                 isSelected={item.page.id === selectedPageId}
                                                 isMultiSelected={selectedPageIds.includes(item.page.id)}
+                                                isDimmed={
+                                                  hoveredColorMode !== null &&
+                                                  item.page.pageType === 'file' &&
+                                                  item.page.imageColorMode !== hoveredColorMode
+                                                }
                                                 chapterType={item.chapter.type}
                                                 onSelect={() => {
                                                   if (selectedPageId === item.page.id) {
