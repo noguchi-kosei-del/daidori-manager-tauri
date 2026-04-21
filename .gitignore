@@ -28,3 +28,14 @@ src-tauri/tauri_updater.key
 src-tauri/tauri_updater.key.pub
 src-tauri/*.key
 src-tauri/*.key.pub
+
+# Secrets / credentials (repo-wide safety net)
+*.key
+*.pem
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+secrets.json
+credentials.json
