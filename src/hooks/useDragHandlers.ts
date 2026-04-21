@@ -9,19 +9,15 @@ import {
   useSensors,
   CollisionDetection,
 } from '@dnd-kit/core';
-import { Chapter, ChapterType, Page } from '../types';
+import { Chapter, Page } from '../types';
 import {
   SIDEBAR_PREFIX,
-  NEW_CHAPTER_DROP_ZONE_ID,
-  NEW_CHAPTER_DROP_ZONE_START_ID,
-  SIDEBAR_NEW_CHAPTER_DROP_ZONE_ID,
-  SIDEBAR_NEW_CHAPTER_DROP_ZONE_START_ID,
   CHAPTER_REORDER_DROP_ZONE_START_ID,
   CHAPTER_REORDER_DROP_ZONE_END_ID,
 } from '../constants/dnd';
 
 export type DropTarget = {
-  type: 'page-before' | 'page-after' | 'chapter-before' | 'chapter-after' | 'chapter-end' | 'new-chapter-start' | 'new-chapter-end';
+  type: 'page-before' | 'page-after' | 'chapter-before' | 'chapter-after' | 'chapter-end';
   chapterId: string;
   pageId?: string;
 } | null;
@@ -41,8 +37,6 @@ interface UseDragHandlersParams {
   reorderPages: (chapterId: string, fromIndex: number, toIndex: number) => void;
   movePage: (fromChapterId: string, toChapterId: string, pageId: string, toIndex: number) => void;
   movePages: (pageIds: string[], toChapterId: string, toIndex: number) => void;
-  addChapter: (type: ChapterType, name?: string, skipInitialPage?: boolean, insertAt?: number) => string;
-  selectChapter: (id: string | null) => void;
 }
 
 export function useDragHandlers({
@@ -53,8 +47,6 @@ export function useDragHandlers({
   reorderPages,
   movePage,
   movePages,
-  addChapter,
-  selectChapter,
 }: UseDragHandlersParams) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeDragType, setActiveDragType] = useState<'page' | 'chapter' | null>(null);
@@ -164,16 +156,6 @@ export function useDragHandlers({
     const isSidebarDrag = activeIdStr.startsWith(SIDEBAR_PREFIX);
     const isOverSidebar = overIdStr.startsWith(SIDEBAR_PREFIX);
 
-    // 新規チャプターゾーンへのドロップ
-    if (overIdStr === SIDEBAR_NEW_CHAPTER_DROP_ZONE_START_ID || overIdStr === NEW_CHAPTER_DROP_ZONE_START_ID) {
-      setDropTarget({ type: 'new-chapter-start', chapterId: '' });
-      return;
-    }
-    if (overIdStr === SIDEBAR_NEW_CHAPTER_DROP_ZONE_ID || overIdStr === NEW_CHAPTER_DROP_ZONE_ID) {
-      setDropTarget({ type: 'new-chapter-end', chapterId: '' });
-      return;
-    }
-
     // サイドバーとプレビュー間のドラッグは無視
     if (isSidebarDrag !== isOverSidebar) {
       setDropTarget(null);
@@ -257,31 +239,6 @@ export function useDragHandlers({
 
       // 複数ページドラッグの場合
       const isMultiDrag = draggedPageIds.length > 1;
-
-      // 新規チャプターへのドロップ
-      if (dropTarget.type === 'new-chapter-start' || dropTarget.type === 'new-chapter-end') {
-        const page = activePage.page;
-
-        const chapterType: ChapterType = page.pageType !== 'file'
-          ? (page.pageType as ChapterType)
-          : 'chapter';
-
-        const insertAt = dropTarget.type === 'new-chapter-start' ? 0 : undefined;
-        const newChapterId = addChapter(chapterType, undefined, true, insertAt);
-
-        if (isMultiDrag) {
-          movePages(draggedPageIds, newChapterId, 0);
-        } else {
-          movePage(activePage.chapter.id, newChapterId, actualActiveId, 0);
-        }
-        selectChapter(newChapterId);
-
-        setActiveId(null);
-        setActiveDragType(null);
-        setDropTarget(null);
-        setDraggedPageIds([]);
-        return;
-      }
 
       // 通常のページ移動（page-before / page-after）
       if ((dropTarget.type === 'page-before' || dropTarget.type === 'page-after') && dropTarget.pageId) {

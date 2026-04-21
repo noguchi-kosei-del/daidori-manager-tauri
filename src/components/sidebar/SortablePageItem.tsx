@@ -18,6 +18,7 @@ export function SortablePageItem({
   onAddSpecialPage,
   onInsertFile,
   onSelectFile,
+  onRefreshFile,
   onDelete,
   showInsertionBefore,
   showInsertionAfter,
@@ -30,6 +31,7 @@ export function SortablePageItem({
   onAddSpecialPage: (pageType: PageType, afterPageId: string) => void;
   onInsertFile: (afterPageId: string) => void;
   onSelectFile: (pageId: string) => void;
+  onRefreshFile: (pageId: string) => void;
   onDelete: () => void;
   showInsertionBefore?: boolean;
   showInsertionAfter?: boolean;
@@ -99,17 +101,19 @@ export function SortablePageItem({
                 >
                   <AlertTriangleIcon size={12} />
                 </span>
-                <button
-                  className="page-file-replace-btn"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSelectFile(page.id);
-                  }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  title="ファイルを選択して差し替え"
-                >
-                  <ReplaceIcon size={11} />
-                </button>
+                {page.fileValidationStatus === 'modified' && (
+                  <button
+                    className="page-file-replace-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRefreshFile(page.id);
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    title="リンクを更新"
+                  >
+                    <ReplaceIcon size={11} />
+                  </button>
+                )}
               </>
             )}
             <div className="page-actions">

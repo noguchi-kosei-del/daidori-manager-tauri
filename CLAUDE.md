@@ -1290,3 +1290,61 @@ pub struct PsdGuide {
 - `ThumbnailCard`: `isDimmed?: boolean` prop
 - `EpubMakerViewProps`: `topBar?: ReactNode` prop
 - `ExportOptions.bleedMode: BleedMode`
+
+### 2026-04-21: EPUB閲覧モード拡張・リンク更新・情報サイドバー最適化・新規チャプター作成ドロップ削除
+
+#### F1閲覧モードの対象拡大（hooks/useKeyboardShortcuts.ts）
+- F1 トグルが `previewMode === 'spread'` だけでなく `previewMode === 'epub'` でも動作するよう条件拡張
+
+#### EPUB画像表示サイズ拡大（styles.css）
+- 通常時: `.epub-spread-page img` と各種 sizer の `max-height: 60vh → 80vh`、`max-width: 40vw → 46vw`
+- ガター高さも `60vh → 80vh` に合わせて拡大
+- 閲覧モード時の EPUB ルール（`body.viewer-mode .epub-spread-page img` 他）を新規追加し `max-height: 95vh / max-width: 48vw` で全画面化
+- EPUB の `.spread-nav-bar` は共通クラスのため既存 viewer-mode ルールで自動非表示
+
+#### 閲覧モード時のレイアウト調整（styles.css）
+- `body.viewer-mode .preview-area` に `padding: 0 / margin: 0 / border: none / border-radius: 0 / justify-content: center / align-items: center` を追加し、画像を画面中央に配置
+- `body.viewer-mode .color-mode-summary-container { display: none }` を追加し閲覧モード時はカラーモードサマリーを非表示
+
+#### リンク更新機能（InDesign風）
+- [handleRefreshFile(pageId)](src/App.tsx) を新設: ページの `filePath` を再読込して `get_folder_contents` → `setPageFile` で更新（サムネイル再生成・メタデータ更新・`fileValidationStatus: 'ok'` 復帰）
+- `SidebarNewChapterDropZone` の使用箇所3つ（EpubMakerView / SpreadViewer / ThumbnailCard）の `onReplaceFile` を `handleSelectFile` → `handleRefreshFile` に切替
+- [SortablePageItem.tsx](src/components/sidebar/SortablePageItem.tsx) に `onRefreshFile` prop を追加。[ChapterItem.tsx](src/components/sidebar/ChapterItem.tsx) 経由でバケツリレーし、App.tsx から `handleRefreshFile` を注入
+- 黄色の差し替えボタンは `fileValidationStatus === 'modified'` のときのみ表示（従来の `!== 'ok'` → `=== 'modified'`）。対象: SortablePageItem / ThumbnailCard / SpreadViewer / EpubSpreadPreview / EpubThumbnailBar の全5箇所
+- tooltip 文言: 「ファイルを選択して差し替え」→「リンクを更新」
+
+#### EPUB表紙サイズの統一（components/epub/EpubSpreadPreview.tsx, styles.css）
+- 表紙単独スプレッドで本文ページと同じ `max-height: 80vh / max-width: 46vw`（閲覧モード時 `95vh / 48vw`）を適用
+- 表紙スロットと非表示サイザー両方が同じ制約になるため、flex レイアウトがコンテナ幅を均等分割 → 見開き2ページ時の片ページと同じ幅に揃う
+
+#### 情報サイドバー展開・格納アニメーションの最適化（styles.css）
+- `.sidebar-content` に `width: var(--sidebar-width) / min-width: var(--sidebar-width) / box-sizing: border-box / overflow-x: hidden / scrollbar-gutter: stable` を追加
+- サイドバー折り畳み時も内部コンテンツは 320px 固定幅のまま。`.sidebar { overflow: hidden }` が余剰部分をクリップするだけで、画像リサイズ・aspect-ratio 再計算・メタデータ再レイアウトが走らない
+- 画像選択時の右サイドバー挙動が左サイドバーと同じ軽さに揃う
+
+#### ファイル選択+差し替えボタンの発動ボタン種別変更
+- `modified` のみ黄色ボタン表示（missing / meta_error / 各種 mismatch ではアラートアイコンのみ）
+- クリックは picker ではなく `handleRefreshFile` によるリンク更新
+
+#### ページドラッグで新規チャプター作成する機能を削除
+- [App.tsx](src/App.tsx): サイドバー先頭・末尾の `<SidebarNewChapterDropZone>` を撤去、import も削除
+- [useDragHandlers.ts](src/hooks/useDragHandlers.ts): `handleDragOver` / `handleDragEnd` の `new-chapter-start` / `new-chapter-end` 判定と処理を削除、`DropTarget` 型からも除去。`addChapter` / `selectChapter` 引数も不要になり削除
+- [ChapterItem.tsx](src/components/sidebar/ChapterItem.tsx): ローカル `DropTarget` 型から該当 variant を削除
+- [DropZones.tsx](src/components/dnd/DropZones.tsx): `NewChapterDropZone`・`SidebarNewChapterDropZone` コンポーネントを削除
+- [components/dnd/index.ts](src/components/dnd/index.ts): 対応するエクスポート削除
+- [constants/dnd.ts](src/constants/dnd.ts): `NEW_CHAPTER_DROP_ZONE_ID` / `NEW_CHAPTER_DROP_ZONE_START_ID` / `SIDEBAR_NEW_CHAPTER_DROP_ZONE_ID` / `SIDEBAR_NEW_CHAPTER_DROP_ZONE_START_ID` 定数を削除
+- 外部ファイルドロップ時の start/end 新規チャプター作成ゾーン（file drop フロー）は別機能として残存
+
+#### UI微調整（App.tsx）
+- カラーモードサマリートグルの tooltip を「カラーモードサマリーを折りたたむ/展開」→「カラーモードを非表示/表示」に変更
+
+#### 新規関数
+| 関数 | 説明 |
+|------|------|
+| `handleRefreshFile(pageId)` | 同じファイルパスを再読込してメタデータ・サムネイルを更新（InDesign の「リンクを更新」相当） |
+
+#### 型定義変更
+- `DropTarget.type` から `'new-chapter-start' | 'new-chapter-end'` を削除
+- `UseDragHandlersParams` から `addChapter` / `selectChapter` を削除
+- `SortablePageItem` props に `onRefreshFile: (pageId: string) => void` を追加
+- `ChapterItem` props に `onRefreshFile: (pageId: string) => void` を追加

@@ -218,14 +218,14 @@ export function EpubThumbnailBar({
                   >
                     <AlertTriangleIcon size={11} />
                   </span>
-                  {onReplaceFile && page.originalPageId && (
+                  {onReplaceFile && page.originalPageId && page.fileValidationStatus === 'modified' && (
                     <button
                       className="epub-thumb-file-replace-btn"
                       onClick={(e) => {
                         e.stopPropagation();
                         onReplaceFile(page.originalPageId!);
                       }}
-                      title="ファイルを選択して差し替え"
+                      title="リンクを更新"
                     >
                       <ReplaceIcon size={10} />
                     </button>

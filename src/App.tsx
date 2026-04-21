@@ -61,7 +61,6 @@ import {
   DragOverlayThumbnail,
   DragOverlaySidebarItem,
   DragOverlayChapterItem,
-  SidebarNewChapterDropZone,
   SidebarChapterReorderDropZone,
 } from './components/dnd';
 import { ExportModal, EpubMetadataModal, BleedEditorModal } from './components/modals';
@@ -271,7 +270,7 @@ function App() {
         type="button"
         className="toolbar-collapse-btn color-mode-summary-toggle"
         onClick={() => setIsColorSummaryExpanded((v) => !v)}
-        title={isColorSummaryExpanded ? 'カラーモードサマリーを折りたたむ' : 'カラーモードサマリーを展開'}
+        title={isColorSummaryExpanded ? 'カラーモードを非表示' : 'カラーモードを表示'}
       >
         <svg
           width="16"
@@ -661,8 +660,6 @@ function App() {
     reorderPages,
     movePage,
     movePages,
-    addChapter,
-    selectChapter,
   });
 
   const handleAddChapter = (type: ChapterType) => {
@@ -824,6 +821,23 @@ function App() {
       }
     } catch (error) {
       console.error('ファイル選択エラー:', error);
+    }
+  };
+
+  // リンク更新: 同じパスのファイルを再読込してメタデータ・サムネイルを更新（InDesign風）
+  const handleRefreshFile = async (pageId: string) => {
+    const target = allPages.find((p) => p.page.id === pageId)?.page;
+    if (!target || !target.filePath) return;
+    try {
+      const folderPath = target.filePath.replace(/[^\\/]+$/, '');
+      if (!folderPath) return;
+      const files: FileInfo[] = await invoke('get_folder_contents', { folderPath });
+      const fileInfo = files.find((f) => f.path === target.filePath);
+      if (fileInfo) {
+        setPageFile(pageId, fileInfo);
+      }
+    } catch (error) {
+      console.error('リンク更新エラー:', error);
     }
   };
 
@@ -1555,8 +1569,6 @@ function App() {
                     </div>
                   ) : (
                     <>
-                  {/* サイドバー用の新規チャプター作成ゾーン（先頭） */}
-                  <SidebarNewChapterDropZone isDragging={activeDragType === 'page'} position="start" />
                   {/* サイドバー用のチャプター並べ替えゾーン（先頭） */}
                   <SidebarChapterReorderDropZone isDragging={activeDragType === 'chapter'} position="start" />
                   <SortableContext
@@ -1591,14 +1603,13 @@ function App() {
                         onAddSpecialPage={(pageType, afterPageId) => addSpecialPage(chapter.id, pageType, afterPageId)}
                         onInsertFile={(afterPageId) => handleInsertFile(chapter.id, afterPageId)}
                         onSelectFile={handleSelectFile}
+                        onRefreshFile={handleRefreshFile}
                         dropTarget={dropTarget}
                       />
                     ))}
                   </SortableContext>
                   {/* サイドバー用のチャプター並べ替えゾーン（末尾） */}
                   <SidebarChapterReorderDropZone isDragging={activeDragType === 'chapter'} position="end" />
-                  {/* サイドバー用の新規チャプター作成ゾーン（末尾） */}
-                  <SidebarNewChapterDropZone isDragging={activeDragType === 'page'} position="end" />
                     </>
                   )}
                 </div>
@@ -1668,7 +1679,7 @@ function App() {
                 onExitViewerMode={() => setIsViewerMode(false)}
                 isPageBarVisible={isPageBarVisible}
                 bindingDirection={bindingDirection}
-                onReplaceFile={handleSelectFile}
+                onReplaceFile={handleRefreshFile}
                 topBar={colorModeSummaryBar}
               />
             ) : (
@@ -1687,7 +1698,7 @@ function App() {
                     selectPage(pageId);
                   }
                 }}
-                onReplaceFile={handleSelectFile}
+                onReplaceFile={handleRefreshFile}
                 isViewerMode={isViewerMode}
                 onExitViewerMode={() => setIsViewerMode(false)}
                 isPageBarVisible={isPageBarVisible}
@@ -1839,7 +1850,7 @@ function App() {
                                                     selectPage(item.page.id);
                                                   }
                                                 }}
-                                                onReplaceFile={() => handleSelectFile(item.page.id)}
+                                                onReplaceFile={() => handleRefreshFile(item.page.id)}
                                                 pageCount={isCollapsed ? group.pages.length : undefined}
                                                 lastGlobalIndex={isCollapsed && group.pages.length > 1 ? group.pages[group.pages.length - 1].globalIndex : undefined}
                                               />

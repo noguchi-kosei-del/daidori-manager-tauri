@@ -198,7 +198,7 @@ export function ThumbnailCard({
             >
               <AlertTriangleIcon size={16} />
             </span>
-            {onReplaceFile && (
+            {onReplaceFile && page.fileValidationStatus === 'modified' && (
               <button
                 className="thumbnail-file-replace-btn"
                 onClick={(e) => {
@@ -206,7 +206,7 @@ export function ThumbnailCard({
                   onReplaceFile();
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
-                title="ファイルを選択して差し替え"
+                title="リンクを更新"
               >
                 <ReplaceIcon size={14} />
               </button>

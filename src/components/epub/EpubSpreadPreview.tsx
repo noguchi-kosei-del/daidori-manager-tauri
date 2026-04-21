@@ -388,14 +388,14 @@ export function EpubSpreadPreview({
             >
               <AlertTriangleIcon size={18} />
             </span>
-            {onReplaceFile && page.originalPageId && (
+            {onReplaceFile && page.originalPageId && page.fileValidationStatus === 'modified' && (
               <button
                 className="spread-file-replace-btn"
                 onClick={(e) => {
                   e.stopPropagation();
                   onReplaceFile(page.originalPageId!);
                 }}
-                title="ファイルを選択して差し替え"
+                title="リンクを更新"
               >
                 <ReplaceIcon size={16} />
               </button>

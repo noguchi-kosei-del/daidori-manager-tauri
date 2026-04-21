@@ -24,6 +24,7 @@ export function ChapterItem({
   onAddSpecialPage,
   onInsertFile,
   onSelectFile,
+  onRefreshFile,
   dropTarget,
 }: {
   chapter: Chapter;
@@ -41,8 +42,9 @@ export function ChapterItem({
   onAddSpecialPage: (pageType: PageType, afterPageId?: string) => void;
   onInsertFile: (afterPageId: string) => void;
   onSelectFile: (pageId: string) => void;
+  onRefreshFile: (pageId: string) => void;
   dropTarget: {
-    type: 'page-before' | 'page-after' | 'chapter-before' | 'chapter-after' | 'chapter-end' | 'new-chapter-start' | 'new-chapter-end';
+    type: 'page-before' | 'page-after' | 'chapter-before' | 'chapter-after' | 'chapter-end';
     chapterId: string;
     pageId?: string;
   } | null;
@@ -185,6 +187,7 @@ export function ChapterItem({
                   onAddSpecialPage={onAddSpecialPage}
                   onInsertFile={onInsertFile}
                   onSelectFile={onSelectFile}
+                  onRefreshFile={onRefreshFile}
                   onDelete={() => onDeletePage(page.id)}
                   showInsertionBefore={dropTarget?.type === 'page-before' && dropTarget.pageId === page.id && dropTarget.chapterId === chapter.id}
                   showInsertionAfter={dropTarget?.type === 'page-after' && dropTarget.pageId === page.id && dropTarget.chapterId === chapter.id}

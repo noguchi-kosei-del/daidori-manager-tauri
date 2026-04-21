@@ -424,14 +424,14 @@ export function SpreadViewer({
                   >
                     <AlertTriangleIcon size={18} />
                   </span>
-                  {onReplaceFile && (
+                  {onReplaceFile && page.fileValidationStatus === 'modified' && (
                     <button
                       className="spread-file-replace-btn"
                       onClick={(e) => {
                         e.stopPropagation();
                         onReplaceFile(page.id);
                       }}
-                      title="ファイルを選択して差し替え"
+                      title="リンクを更新"
                     >
                       <ReplaceIcon size={16} />
                     </button>

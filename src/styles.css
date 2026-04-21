@@ -183,7 +183,7 @@ input, select { font-family: inherit; font-size: inherit; outline: none; }
 
 .sidebar-actions { display: grid; grid-template-columns: 1fr 1fr; gap: var(--spacing-xs); }
 .sidebar-actions .btn-primary { grid-column: span 2; }
-.sidebar-content { flex: 1; overflow-y: auto; padding: var(--spacing-sm); position: relative; z-index: 1; display: flex; flex-direction: column; }
+.sidebar-content { flex: 1; overflow-y: auto; overflow-x: hidden; padding: var(--spacing-sm); position: relative; z-index: 1; display: flex; flex-direction: column; width: var(--sidebar-width); min-width: var(--sidebar-width); box-sizing: border-box; scrollbar-gutter: stable; }
 .sidebar-empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--spacing-md); color: var(--color-text-muted); font-size: var(--font-size-sm); text-align: center; }
 .sidebar-empty-state svg { opacity: 0.5; }
 .sidebar-footer { padding: var(--spacing-lg); border-top: 1px solid var(--color-border); background: linear-gradient(180deg, var(--color-bg-tertiary) 0%, var(--color-bg-secondary) 100%); display: flex; flex-direction: column; gap: var(--spacing-md); }
@@ -479,9 +479,11 @@ body.sidebar-flipped .sidebar-right {
   flex-direction: column;
   gap: var(--spacing-sm);
   padding: var(--spacing-md);
+  min-width: 0;
 }
 .info-thumbnail {
   width: 100%;
+  min-width: 0;
   aspect-ratio: 3 / 4;
   background: var(--color-bg-tertiary);
   border: 1px solid var(--color-border);
@@ -3749,6 +3751,12 @@ body.viewer-mode .preview-area {
   bottom: 0;
   z-index: 9999;
   background: #000;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  justify-content: center;
+  align-items: center;
 }
 
 body.viewer-mode .preview-container {
@@ -3808,6 +3816,31 @@ body.viewer-mode .spread-info-bar,
 body.viewer-mode .spread-page-info {
   opacity: 0;
   transition: opacity 0.3s ease;
+}
+
+/* 閲覧モード時のEPUB表示（全画面化） */
+body.viewer-mode .epub-spread-preview {
+  background: #000;
+}
+body.viewer-mode .epub-spread-container {
+  height: 100vh;
+  background: #000;
+}
+body.viewer-mode .epub-spread-pages {
+  max-height: 100%;
+}
+body.viewer-mode .epub-spread-page img,
+body.viewer-mode .epub-spread-page.epub-spread-page-hidden .epub-spread-sizer,
+body.viewer-mode .epub-spread-page.epub-spread-page-blank .epub-spread-sizer,
+body.viewer-mode .epub-spread-page.epub-spread-page-blankcontent .epub-spread-sizer {
+  max-height: 95vh;
+  max-width: 48vw;
+}
+body.viewer-mode .epub-spread-gutter {
+  height: 95vh;
+}
+body.viewer-mode .color-mode-summary-container {
+  display: none;
 }
 
 /* 閲覧モード終了ボタン */
@@ -4368,12 +4401,13 @@ body.light-mode .epub-preview-info {
 }
 
 .epub-spread-page img {
-  max-height: 60vh;
-  max-width: 40vw;
+  max-height: 80vh;
+  max-width: 46vw;
   object-fit: contain;
   border-radius: 4px;
   box-shadow: var(--shadow-lg);
 }
+
 
 /* EPUB: 表紙の対向側はサイズだけ維持して非表示 */
 .epub-spread-page.epub-spread-page-hidden {
@@ -4382,8 +4416,8 @@ body.light-mode .epub-preview-info {
 }
 .epub-spread-page.epub-spread-page-hidden .epub-spread-sizer {
   visibility: hidden;
-  max-height: 60vh;
-  max-width: 40vw;
+  max-height: 80vh;
+  max-width: 46vw;
   object-fit: contain;
   border-radius: 4px;
   display: block;
@@ -4403,8 +4437,8 @@ body.light-mode .epub-preview-info {
 }
 .epub-spread-page.epub-spread-page-blank .epub-spread-sizer {
   visibility: hidden;
-  max-height: 60vh;
-  max-width: 40vw;
+  max-height: 80vh;
+  max-width: 46vw;
   object-fit: contain;
   display: block;
 }
@@ -4422,8 +4456,8 @@ body.light-mode .epub-preview-info {
 }
 .epub-spread-page.epub-spread-page-blankcontent .epub-spread-sizer {
   visibility: hidden;
-  max-height: 60vh;
-  max-width: 40vw;
+  max-height: 80vh;
+  max-width: 46vw;
   object-fit: contain;
   display: block;
 }
@@ -4442,7 +4476,7 @@ body.light-mode .epub-preview-info {
 
 .epub-spread-gutter {
   width: 8px;
-  height: 60vh;
+  height: 80vh;
   background: linear-gradient(90deg,
     rgba(0,0,0,0.3) 0%,
     rgba(0,0,0,0.1) 50%,

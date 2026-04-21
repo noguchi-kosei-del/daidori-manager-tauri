@@ -62,10 +62,10 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
         return;
       }
 
-      // F1: 閲覧モード切替（見開き表示時のみ）
+      // F1: 閲覧モード切替（見開き・EPUB表示時）
       if (e.key === 'F1') {
         e.preventDefault();
-        if (previewMode === 'spread') {
+        if (previewMode === 'spread' || previewMode === 'epub') {
           setIsViewerMode(prev => !prev);
         }
         return;
