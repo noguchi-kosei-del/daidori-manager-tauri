@@ -1,6 +1,6 @@
 [package]
 name = "daidori-manager-tauri"
-version = "1.0.1"
+version = "1.0.2"
 description = "漫画の台割管理・入稿データ生成ツール"
 authors = ["you"]
 edition = "2021"
