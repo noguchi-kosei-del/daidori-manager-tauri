@@ -32,8 +32,17 @@
       }
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/noguchi-kosei-del/daidori-manager-tauri/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkxNEQwQ0Q4NDc2Njg1Q0QKUldUTmhXWkgyQXhOa2FFY0lEbEtEcFdycWtxaUtGZUVxbnZ4Ty9ObFJDR1I2cFpmWHpDRXU0MDIK"
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["msi", "nsis"],
     "icon": [
       "icons/32x32.png",

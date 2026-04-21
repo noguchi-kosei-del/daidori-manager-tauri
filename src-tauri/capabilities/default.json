@@ -25,6 +25,12 @@
     {
       "identifier": "fs:scope",
       "allow": ["**"]
-    }
+    },
+    "updater:default",
+    "updater:allow-check",
+    "updater:allow-download-and-install",
+    "core:app:allow-version",
+    "process:default",
+    "process:allow-restart"
   ]
 }

@@ -13,7 +13,8 @@ import {
 } from '@dnd-kit/sortable';
 import { useStore, FileInfo, THUMBNAIL_SIZES, ThumbnailSize } from './store';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useKeyboardShortcuts, useDragHandlers, useExport, queueThumbnail } from './hooks';
+import { useKeyboardShortcuts, useDragHandlers, useExport, queueThumbnail, useAutoUpdate, scheduleStartupCheck } from './hooks';
+import { getVersion } from '@tauri-apps/api/app';
 import { describePhysicalSize } from './utils/paperSize';
 import {
   Chapter,
@@ -51,6 +52,7 @@ import {
   BindingLeftIcon,
   CheckIcon2,
   NoPageIcon,
+  DownloadIcon,
 } from './icons';
 
 // 抽出したコンポーネント
@@ -63,7 +65,7 @@ import {
   DragOverlayChapterItem,
   SidebarChapterReorderDropZone,
 } from './components/dnd';
-import { ExportModal, EpubMetadataModal, BleedEditorModal } from './components/modals';
+import { ExportModal, EpubMetadataModal, BleedEditorModal, UpdateDialog } from './components/modals';
 import { EpubMakerView } from './components/epub';
 import { EpubMetadata, EpubPage, EpubGenerateResponse } from './types';
 import {
@@ -217,6 +219,25 @@ function App() {
   // スプラッシュウィンドウを閉じてメインウィンドウを表示
   useEffect(() => {
     invoke('close_splash').catch(console.error);
+  }, []);
+
+  // 現在のアプリバージョン（ハンバーガーメニュー表示用）
+  const [currentAppVersion, setCurrentAppVersion] = useState<string>('');
+  useEffect(() => {
+    getVersion()
+      .then((v) => setCurrentAppVersion(v))
+      .catch((err) => console.warn('[App] getVersion failed:', err));
+  }, []);
+
+  // 自動更新
+  const autoUpdate = useAutoUpdate();
+  const autoUpdateRef = useRef(autoUpdate);
+  autoUpdateRef.current = autoUpdate;
+  useEffect(() => {
+    const cancel = scheduleStartupCheck(() => {
+      autoUpdateRef.current.checkForUpdate({ silent: true });
+    }, 2000);
+    return cancel;
   }, []);
 
   // chaptersからallPagesを計算（リアクティブに更新される）
@@ -2038,6 +2059,13 @@ function App() {
         projectName={projectName}
       />
 
+      {/* 自動更新ダイアログ */}
+      <UpdateDialog
+        state={autoUpdate.state}
+        onInstall={autoUpdate.installPending}
+        onDismiss={autoUpdate.dismiss}
+      />
+
       {/* 欠落ファイルダイアログ */}
       {showMissingFilesDialog && missingFiles.length > 0 && (
         <div className="modal-overlay">
@@ -2203,6 +2231,22 @@ function App() {
         </button>
       </div>
       <div className="hamburger-menu-body">
+        <div className="hamburger-update-section">
+          <div className="hamburger-update-row">
+            <span className="hamburger-update-label">バージョン</span>
+            <span className="hamburger-update-version">
+              {currentAppVersion ? `v${currentAppVersion}` : '—'}
+            </span>
+          </div>
+          <button
+            className="hamburger-update-btn"
+            onClick={() => autoUpdate.checkForUpdate({ silent: false })}
+            disabled={autoUpdate.state.state === 'checking' || autoUpdate.state.state === 'downloading' || autoUpdate.state.state === 'installing'}
+          >
+            <DownloadIcon size={16} />
+            {autoUpdate.state.state === 'checking' ? '確認中…' : '更新を確認'}
+          </button>
+        </div>
       </div>
       <div className="hamburger-menu-footer">
         <button
