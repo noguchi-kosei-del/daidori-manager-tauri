@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "台割マネージャー",
+  "productName": "DaidoriManager",
   "version": "1.0.1",
   "identifier": "com.daidori.manager",
   "build": {
