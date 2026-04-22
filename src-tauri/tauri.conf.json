@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "DaidoriManager",
-  "version": "1.0.3",
+  "productName": "Daiwari Manager",
+  "version": "1.0.4",
   "identifier": "com.daidori.manager",
   "build": {
     "beforeDevCommand": "npm run dev",
