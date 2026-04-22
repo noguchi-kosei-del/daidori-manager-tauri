@@ -73,7 +73,6 @@ export function UpdateDialog({ state, onInstall, onDismiss }: UpdateDialogProps)
 
   // available / downloading / installing / done
   const version = state.info?.version ?? '';
-  const body = state.info?.body?.trim() ?? '';
   const progressPercent =
     state.contentLength > 0
       ? Math.min(100, Math.round((state.downloaded / state.contentLength) * 100))
@@ -97,17 +96,9 @@ export function UpdateDialog({ state, onInstall, onDismiss }: UpdateDialogProps)
         </div>
         <div className="modal-body update-modal-body">
           {state.state === 'available' && (
-            <>
-              <div className="update-headline">
-                新しいバージョン <strong>v{version}</strong> が利用可能です
-              </div>
-              {body && (
-                <div className="update-release-notes">
-                  <div className="update-release-notes-title">変更内容</div>
-                  <pre>{body}</pre>
-                </div>
-              )}
-            </>
+            <div className="update-headline">
+              新しいバージョン <strong>v{version}</strong> が利用可能です
+            </div>
           )}
 
           {state.state === 'downloading' && (
