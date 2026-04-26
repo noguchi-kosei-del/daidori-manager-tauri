@@ -67,6 +67,7 @@ interface AppState {
   epubCurrentSpread: number;
   epubImageFolder: string | null;
   epubSelectedPageId: string | null;
+  epubSelectedPageIds: string[];  // EPUB複数選択
   isEpubModified: boolean;
 
   // アクション: チャプター管理
@@ -139,6 +140,9 @@ interface AppState {
   setEpubCurrentSpread: (index: number) => void;
   setEpubImageFolder: (folder: string | null) => void;
   setEpubSelectedPageId: (id: string | null) => void;
+  toggleEpubPageSelection: (pageId: string) => void;
+  selectEpubPageRange: (fromPageId: string, toPageId: string) => void;
+  clearEpubPageSelection: () => void;
   reorderEpubPage: (fromIndex: number, toIndex: number) => void;
   setEpubPageAsCover: (pageId: string) => void;
   setEpubPageAsColophon: (pageId: string) => void;
@@ -164,6 +168,8 @@ const getDefaultChapterName = (type: ChapterType, chapters: Chapter[]): string =
       return '幕間';
     case 'colophon':
       return '奥付';
+    case 'ad':
+      return 'AD';
     default:
       return '新規';
   }
@@ -362,6 +368,7 @@ export const useStore = create<AppState>((set, get) => {
   epubCurrentSpread: 0,
   epubImageFolder: null,
   epubSelectedPageId: null,
+  epubSelectedPageIds: [],
   isEpubModified: false,
 
   // チャプター追加
@@ -1034,7 +1041,43 @@ export const useStore = create<AppState>((set, get) => {
   },
 
   setEpubSelectedPageId: (id) => {
-    set({ epubSelectedPageId: id });
+    set({ epubSelectedPageId: id, epubSelectedPageIds: id ? [id] : [] });
+  },
+
+  toggleEpubPageSelection: (pageId) => {
+    set((state) => {
+      const isSelected = state.epubSelectedPageIds.includes(pageId);
+      if (isSelected) {
+        const newSelection = state.epubSelectedPageIds.filter((id) => id !== pageId);
+        return {
+          epubSelectedPageIds: newSelection,
+          epubSelectedPageId: newSelection.length > 0 ? newSelection[newSelection.length - 1] : null,
+        };
+      }
+      return {
+        epubSelectedPageIds: [...state.epubSelectedPageIds, pageId],
+        epubSelectedPageId: pageId,
+      };
+    });
+  },
+
+  selectEpubPageRange: (fromPageId, toPageId) => {
+    set((state) => {
+      const pages = state.epubPages;
+      const fromIdx = pages.findIndex((p) => p.id === fromPageId);
+      const toIdx = pages.findIndex((p) => p.id === toPageId);
+      if (fromIdx < 0 || toIdx < 0) return state;
+      const [start, end] = fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
+      const rangeIds = pages.slice(start, end + 1).map((p) => p.id);
+      return {
+        epubSelectedPageIds: rangeIds,
+        epubSelectedPageId: toPageId,
+      };
+    });
+  },
+
+  clearEpubPageSelection: () => {
+    set({ epubSelectedPageIds: [], epubSelectedPageId: null });
   },
 
   reorderEpubPage: (fromIndex, toIndex) => {
@@ -1163,6 +1206,7 @@ export const useStore = create<AppState>((set, get) => {
       epubMetadata: metadata,
       epubCurrentSpread: 0,
       epubSelectedPageId: null,
+      epubSelectedPageIds: [],
       isEpubModified: false,
     });
   },
@@ -1175,6 +1219,7 @@ export const useStore = create<AppState>((set, get) => {
       epubCurrentSpread: 0,
       epubImageFolder: null,
       epubSelectedPageId: null,
+      epubSelectedPageIds: [],
       isEpubModified: false,
     });
   },

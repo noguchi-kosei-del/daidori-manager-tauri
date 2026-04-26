@@ -536,13 +536,18 @@ body.sidebar-flipped .sidebar-right {
 }
 .info-panel-empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: var(--spacing-md);
   height: 100%;
   padding: var(--spacing-lg);
   color: var(--color-text-muted);
   font-size: var(--font-size-sm);
   text-align: center;
+}
+.info-panel-empty svg {
+  opacity: 0.5;
 }
 
 /* 閲覧モード時はハンバーガーメニューを非表示 */
@@ -1222,7 +1227,8 @@ body.viewer-mode .hamburger-overlay {
 
 .thumbnail-filename { font-size: var(--font-size-xs); color: var(--color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.chapter-actions-bar { display: flex; flex-wrap: wrap; gap: var(--spacing-xs); padding: var(--spacing-sm) 0; margin-bottom: var(--spacing-sm); }
+.chapter-actions-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--spacing-xs); padding: var(--spacing-sm) 0; }
+.chapter-actions-bar > .btn-secondary { width: 100%; min-width: 0; }
 
 .btn-clear-all { display: flex; align-items: center; justify-content: center; gap: var(--spacing-xs); width: 100%; }
 .btn-clear-all:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -1859,6 +1865,16 @@ body.viewer-mode .hamburger-overlay {
 
 /* 選択バー */
 .selection-bar { display: flex; align-items: center; gap: var(--spacing-md); padding: var(--spacing-xs) var(--spacing-md); background: linear-gradient(135deg, rgba(92, 156, 255, 0.15) 0%, rgba(92, 156, 255, 0.05) 100%); border: 1px solid var(--color-border-accent); border-radius: var(--border-radius); animation: selectionBarAppear 200ms ease; }
+.selection-bar-floating {
+  position: sticky;
+  top: var(--spacing-md);
+  align-self: flex-end;
+  z-index: 10;
+  background: var(--color-bg-secondary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(8px);
+  margin-bottom: calc(var(--spacing-md) * -1);
+}
 .selection-count { font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); color: var(--color-accent); }
 @keyframes selectionBarAppear { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
 

@@ -142,7 +142,7 @@ export function ChapterItem({
         )}
         <span className="chapter-page-count">({chapter.pages.length})</span>
         <div className="chapter-actions">
-          {(chapter.type === 'cover' || chapter.type === 'chapter' || chapter.type === 'intermission') && (
+          {(chapter.type === 'cover' || chapter.type === 'chapter' || chapter.type === 'intermission' || chapter.type === 'ad') && (
             <button
               className="btn-icon"
               onClick={(e) => {

@@ -1,5 +1,5 @@
 // アイテムの型定義
-export type ChapterType = 'chapter' | 'cover' | 'blank' | 'intermission' | 'colophon';
+export type ChapterType = 'chapter' | 'cover' | 'blank' | 'intermission' | 'colophon' | 'ad';
 
 export type ThumbnailStatus = 'pending' | 'loading' | 'ready' | 'error';
 
@@ -109,6 +109,7 @@ export const CHAPTER_TYPE_LABELS: Record<ChapterType, string> = {
   blank: '白紙',
   intermission: '幕間',
   colophon: '奥付',
+  ad: 'AD',
 };
 
 // 特殊ページのカラー
@@ -118,6 +119,7 @@ export const CHAPTER_TYPE_COLORS: Record<ChapterType, string> = {
   blank: '#8a8a8a',
   intermission: '#a855f7',
   colophon: '#34d399',
+  ad: '#f59e0b',
 };
 
 // ========== プロジェクトファイル関連 ==========

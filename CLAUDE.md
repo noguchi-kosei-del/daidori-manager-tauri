@@ -1348,3 +1348,74 @@ pub struct PsdGuide {
 - `UseDragHandlersParams` から `addChapter` / `selectChapter` を削除
 - `SortablePageItem` props に `onRefreshFile: (pageId: string) => void` を追加
 - `ChapterItem` props に `onRefreshFile: (pageId: string) => void` を追加
+
+### 2026-04-26: dev.bat自動セットアップ・ADチャプター・UI/UX整理 (v1.0.5)
+
+#### dev.bat の自動 npm install（dev.bat）
+- `node_modules\.bin\tauri.cmd` の存在チェックを追加し、未インストール時は自動で `npm install` を実行してから `npm run tauri dev` を起動
+- `npm install` 失敗時は exit code 1 で終了
+
+#### ADチャプタータイプ追加（types.ts, store.ts, App.tsx, ChapterItem.tsx）
+- `ChapterType` に `'ad'` を追加し、`CHAPTER_TYPE_LABELS.ad = 'AD'`、`CHAPTER_TYPE_COLORS.ad = '#f59e0b'`（オレンジ）を登録
+- `getDefaultChapterName` の `case 'ad'` でデフォルト名を「AD」に
+- chapter-actions-bar に「+AD」ボタンを追加（奥付ボタンの右）
+- ChapterItem の差し替え対応条件に `'ad'` を追加し、フォルダ差し替えボタンを表示（`'cover' | 'chapter' | 'intermission' | 'ad'`）
+
+#### chapter-actions-bar 3列グリッド化（styles.css）
+- `display: flex; flex-wrap: wrap` → `display: grid; grid-template-columns: repeat(3, 1fr)` に変更し、6ボタン（表紙/白紙/話/幕間/奥付/AD）を 3列×2行に
+- `.chapter-actions-bar > .btn-secondary` で `width: 100%; min-width: 0` 指定
+- `margin-bottom` を削除して上下余白を `padding: var(--spacing-sm) 0` のみで対称化
+
+#### 情報サイドバー空状態のアイコン追加（icons.tsx, App.tsx, styles.css）
+- `InfoIcon`（円の中に「i」）を新規追加
+- `info-panel-empty` のメッセージ上に48pxのInfoIconを表示
+- `flex-direction: column; gap: var(--spacing-md)` で縦並びに、アイコンは `opacity: 0.5`
+
+#### 複数選択時 selection-bar をフロート化（App.tsx, styles.css）
+- toolbar-content 内にあった `selection-bar` を preview-area 内（colorModeSummaryBar 直後）に移動
+- 新規 `.selection-bar-floating` クラス: `position: sticky; top: var(--spacing-md); align-self: flex-end; z-index: 10`
+- `background: var(--color-bg-secondary) + box-shadow + backdrop-filter: blur(8px)` でコンテンツとの視認性確保
+- `margin-bottom: -spacing-md` で下方向の余白を相殺
+
+#### 削除確認ダイアログの拡張（App.tsx）
+- `deleteConfirmDialog.type` に `'pages'` を追加
+- selection-bar の削除ボタンを即時削除→確認ダイアログ起動に変更
+- 「ページ削除」「選択中の N ページを削除しますか？」を表示し、確定時に `removeSelectedPages()` を実行
+
+#### キーボードショートカット削除（hooks/useKeyboardShortcuts.ts, App.tsx）
+- **Ctrl+Z（取り消し）と Ctrl+Y / Ctrl+Shift+Z（やり直し）** を削除
+  - useKeyboardShortcuts の引数・依存配列から `undo` / `redo` を除去
+  - App.tsx の useStore 取り出しと hook 呼び出しからも除去
+  - 削除確認ダイアログの「この操作は取り消せます（Ctrl+Z）」案内文も削除（store側の `undo` / `redo` 関数本体は残置）
+- **Ctrl+O（プロジェクトを開く）** を削除
+  - useKeyboardShortcuts の引数・依存配列から `handleOpenProject` を除去
+  - 呼び出し元が無くなった `handleOpenProject` 関数本体・関連 dead code（`missingFiles` state・欠落ファイルダイアログ・`loadFromProjectFile`・未使用 import: `DaidoriProjectFile` / `FileValidationResult` / `PageType` / `ThumbnailSize` / `AlertTriangleIcon` / `markAsSaved` / `loadProjectState`）も削除
+
+#### 見開き・EPUB の複数選択対応（store.ts, SpreadViewer.tsx, EpubSpreadPreview.tsx, EpubThumbnailBar.tsx, EpubMakerView.tsx, App.tsx）
+- store に `epubSelectedPageIds: string[]` と `toggleEpubPageSelection` / `selectEpubPageRange` / `clearEpubPageSelection` を追加
+  - `setEpubSelectedPageId(id)` は `epubSelectedPageIds` も同期（`id ? [id] : []`）
+  - `loadEpubFromDaidori` / `resetEpubState` で `epubSelectedPageIds: []` を初期化
+- SpreadViewer / EpubSpreadPreview / EpubThumbnailBar に `selectedPageIds?: string[]` prop を追加し、選択判定を `selectedPageId === id || selectedPageIds.includes(id)` に拡張
+- `onPageSelect` / `onSelectPage` のシグネチャに `MouseEvent` を追加し、`Ctrl/Cmd+クリック` → toggle、`Shift+クリック` → range、通常クリック → 単一選択（再クリックで解除）に
+- App.tsx の SpreadViewer onPageSelect ハンドラと EpubMakerView の handleSelectPage で修飾キーを処理
+- Photoshopボタン: EPUBモード分岐を `epubSelectedPageIds` 対応に更新（複数PSDの一括起動可・tooltip に件数表示）
+
+#### ラベル変更
+- 「Ad」表記を「AD」に統一（types.ts: CHAPTER_TYPE_LABELS / store.ts: getDefaultChapterName / App.tsx: chapter-actions-bar ボタン）
+
+#### 新規アイコン
+| アイコン | 説明 |
+|---------|------|
+| `InfoIcon` | 円の中に「i」（情報） |
+
+#### 新規CSSクラス（styles.css）
+- `.selection-bar-floating`: 複数選択バーの右上スティッキー表示
+- `.info-panel-empty svg`: 空状態アイコン用の opacity 制御
+
+#### 型定義変更
+- `ChapterType` に `'ad'` 追加
+- `CHAPTER_TYPE_LABELS` / `CHAPTER_TYPE_COLORS` に `ad` エントリ追加
+- store interface に `epubSelectedPageIds: string[]`、`toggleEpubPageSelection` / `selectEpubPageRange` / `clearEpubPageSelection` を追加
+- `SpreadViewer` / `EpubSpreadPreview` / `EpubThumbnailBar` props に `selectedPageIds?: string[]`
+- `onPageSelect` / `onSelectPage` のシグネチャに `MouseEvent` を追加
+- `deleteConfirmDialog.type` に `'pages'` を追加

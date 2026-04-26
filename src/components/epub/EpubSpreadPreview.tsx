@@ -13,8 +13,9 @@ interface EpubSpreadPreviewProps {
   pages: EpubPageInfo[];
   currentSpread: number;
   selectedPageId: string | null;
+  selectedPageIds?: string[];
   onSpreadChange: (index: number) => void;
-  onSelectPage: (pageId: string) => void;
+  onSelectPage: (pageId: string, e?: React.MouseEvent) => void;
   onReplaceFile?: (originalPageId: string) => void;
   zoom?: number;
   onZoomChange?: (zoom: number) => void;
@@ -28,6 +29,7 @@ export function EpubSpreadPreview({
   pages,
   currentSpread,
   selectedPageId,
+  selectedPageIds,
   onSpreadChange,
   onSelectPage,
   onReplaceFile,
@@ -38,6 +40,8 @@ export function EpubSpreadPreview({
   isPageBarVisible = true,
   bindingDirection = 'rtl',
 }: EpubSpreadPreviewProps) {
+  const isPageSelected = (pageId: string): boolean =>
+    selectedPageId === pageId || (selectedPageIds?.includes(pageId) ?? false);
   const isRTL = bindingDirection === 'rtl';
   const containerRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -341,8 +345,8 @@ export function EpubSpreadPreview({
       const sizerSrc = sibling && !sibling.isBlank ? getImageSrc(sibling) : null;
       return (
         <div
-          className={`epub-spread-page ${side}-page epub-spread-page-blankcontent ${selectedPageId === page.id ? 'selected' : ''}`}
-          onClick={() => !isViewerMode && onSelectPage(page.id)}
+          className={`epub-spread-page ${side}-page epub-spread-page-blankcontent ${isPageSelected(page.id) ? 'selected' : ''}`}
+          onClick={(e) => !isViewerMode && onSelectPage(page.id, e)}
         >
           {sizerSrc && (
             <img
@@ -376,8 +380,8 @@ export function EpubSpreadPreview({
     // 通常の画像ページ
     return (
       <div
-        className={`epub-spread-page ${side}-page ${selectedPageId === page.id ? 'selected' : ''}`}
-        onClick={() => !isViewerMode && onSelectPage(page.id)}
+        className={`epub-spread-page ${side}-page ${isPageSelected(page.id) ? 'selected' : ''}`}
+        onClick={(e) => !isViewerMode && onSelectPage(page.id, e)}
       >
         <img src={getImageSrc(page)} alt={`Page ${getPageIndex(page)}`} />
         {!isViewerMode && page.fileValidationStatus && page.fileValidationStatus !== 'ok' && (

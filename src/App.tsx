@@ -11,7 +11,7 @@ import {
   verticalListSortingStrategy,
   rectSortingStrategy,
 } from '@dnd-kit/sortable';
-import { useStore, FileInfo, THUMBNAIL_SIZES, ThumbnailSize } from './store';
+import { useStore, FileInfo, THUMBNAIL_SIZES } from './store';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useKeyboardShortcuts, useDragHandlers, useExport, queueThumbnail, useAutoUpdate, scheduleStartupCheck } from './hooks';
 import { getVersion } from '@tauri-apps/api/app';
@@ -22,16 +22,12 @@ import {
   CHAPTER_TYPE_LABELS,
   CHAPTER_TYPE_COLORS,
   Page,
-  PageType,
-  DaidoriProjectFile,
-  FileValidationResult,
   FileValidationStatus,
 } from './types';
 import {
   FolderIcon,
   PlusIcon,
   PlusCircleIcon,
-  AlertTriangleIcon,
   SunIcon,
   MoonIcon,
   ExportIcon,
@@ -53,6 +49,7 @@ import {
   CheckIcon2,
   NoPageIcon,
   DownloadIcon,
+  InfoIcon,
 } from './icons';
 
 // 抽出したコンポーネント
@@ -106,18 +103,15 @@ function App() {
     selectPageRange,
     clearPageSelection,
     removeSelectedPages,
-    undo,
-    redo,
     // ファイル検証
     updatePagesValidation,
     // プロジェクト管理
-    markAsSaved,
     resetProject,
-    loadProjectState,
     // EPUB_maker
     loadEpubFromDaidori,
     epubPages,
     epubSelectedPageId,
+    epubSelectedPageIds,
   } = useStore();
 
   const [isEpubModalOpen, setIsEpubModalOpen] = useState(false);
@@ -206,11 +200,9 @@ function App() {
 
 
   // プロジェクト関連のstate
-  const [missingFiles, setMissingFiles] = useState<FileValidationResult[]>([]);
-  const [showMissingFilesDialog, setShowMissingFilesDialog] = useState(false);
   const [deleteConfirmDialog, setDeleteConfirmDialog] = useState<{
     show: boolean;
-    type: 'chapter' | 'all';
+    type: 'chapter' | 'all' | 'pages';
     chapterId?: string;
     chapterName?: string;
     pageCount?: number;
@@ -362,81 +354,6 @@ function App() {
     setExportResultDialog,
     closeExportResultDialog,
   } = useExport(chapters, allPages);
-
-  // プロジェクトファイルから状態への変換
-  const loadFromProjectFile = (project: DaidoriProjectFile, _basePath: string): Chapter[] => {
-    return project.chapters.map(ch => ({
-      id: ch.id,
-      name: ch.name,
-      type: ch.type as ChapterType,
-      collapsed: project.uiState?.collapsedChapterIds?.includes(ch.id) || false,
-      folderPath: ch.folderPath,
-      pages: ch.pages.map(page => {
-        const p: Page = {
-          id: page.id,
-          pageType: page.pageType as PageType,
-          label: page.label,
-          thumbnailStatus: 'pending',
-        };
-        if (page.file) {
-          p.filePath = page.file.absolutePath;
-          p.fileName = page.file.fileName;
-          p.fileType = page.file.fileType as Page['fileType'];
-          p.fileSize = page.file.fileSize;
-          p.modifiedTime = page.file.modifiedTime;
-        }
-        return p;
-      }),
-    }));
-  };
-
-  // プロジェクト読み込み
-  const handleOpenProject = async (filePath?: string) => {
-    try {
-      let openPath = filePath;
-
-      if (!openPath) {
-        const result = await open({
-          filters: [{ name: '台割プロジェクト', extensions: ['daidori'] }],
-          multiple: false,
-        });
-        if (!result) return;
-        openPath = result as string;
-      }
-
-      const project = await invoke<DaidoriProjectFile>('load_project', { filePath: openPath });
-      const basePath = openPath.replace(/[\\\/][^\\\/]+$/, '');
-
-      // ファイル検証
-      const validationResults = await invoke<FileValidationResult[]>('validate_project_files', {
-        project,
-        basePath,
-      });
-
-      const missing = validationResults.filter(r => r.status === 'missing');
-      if (missing.length > 0) {
-        setMissingFiles(missing);
-        setShowMissingFilesDialog(true);
-      }
-
-      // 状態を読み込み
-      const loadedChapters = loadFromProjectFile(project, basePath);
-      loadProjectState(loadedChapters, project.uiState ? {
-        selectedChapterId: project.uiState.selectedChapterId ?? null,
-        selectedPageId: project.uiState.selectedPageId ?? null,
-        viewMode: (project.uiState.viewMode as 'selection' | 'all') ?? 'all',
-        thumbnailSize: (project.uiState.thumbnailSize as ThumbnailSize) ?? 'medium',
-        collapsedChapterIds: project.uiState.collapsedChapterIds ?? [],
-      } : undefined);
-
-      const name = openPath.split(/[\\\/]/).pop()?.replace(/\.daidori$/, '') || '新規プロジェクト';
-      markAsSaved(openPath);
-      await invoke('add_recent_file', { path: openPath, name });
-    } catch (error) {
-      console.error('プロジェクト読み込みエラー:', error);
-      alert(`読み込みに失敗しました: ${error}`);
-    }
-  };
 
   // 新規プロジェクト
   const handleNewProject = () => {
@@ -655,11 +572,8 @@ function App() {
     removeSelectedPages,
     selectChapter,
     selectPage,
-    undo,
-    redo,
     handleDeleteChapter,
     handleNewProject,
-    handleOpenProject,
     setIsViewerMode,
   });
 
@@ -1466,24 +1380,6 @@ function App() {
             </div>
 
             <div className={`toolbar-content ${isToolbarCollapsed ? 'collapsed' : ''}`}>
-              {selectedPageIds.length > 1 && (
-                <div className="selection-bar">
-                  <span className="selection-count">{selectedPageIds.length}件選択中</span>
-                  <button
-                    className="btn-secondary btn-small"
-                    onClick={clearPageSelection}
-                  >
-                    選択解除
-                  </button>
-                  <button
-                    className="btn-primary btn-small btn-danger"
-                    onClick={removeSelectedPages}
-                  >
-                    削除
-                  </button>
-                </div>
-              )}
-
               <button
                 className="export-btn"
                 onClick={() => openExportModal()}
@@ -1529,11 +1425,13 @@ function App() {
                 let psdPaths: string[] = [];
 
                 if (previewMode === 'epub') {
-                  const selected = epubSelectedPageId
-                    ? epubPages.find(p => p.id === epubSelectedPageId)
-                    : null;
-                  if (selected?.sourcePath?.toLowerCase().endsWith('.psd')) {
-                    psdPaths = [selected.sourcePath];
+                  const ids = epubSelectedPageIds.length > 0
+                    ? epubSelectedPageIds
+                    : (epubSelectedPageId ? [epubSelectedPageId] : []);
+                  const selectedEpub = epubPages.filter(p => ids.includes(p.id));
+                  const psdEpub = selectedEpub.filter(p => p.sourcePath?.toLowerCase().endsWith('.psd'));
+                  if (psdEpub.length > 0 && psdEpub.length === selectedEpub.length) {
+                    psdPaths = psdEpub.map(p => p.sourcePath);
                   }
                 } else {
                   const selectedPages = selectedPageIds.length > 0
@@ -1668,6 +1566,12 @@ function App() {
                   >
                     +奥付
                   </button>
+                  <button
+                    className="btn-secondary btn-small"
+                    onClick={() => handleAddChapter('ad')}
+                  >
+                    +AD
+                  </button>
                 </div>
                 <div className="footer-stats">
                   <span className="stats-label">合計</span>
@@ -1706,13 +1610,44 @@ function App() {
             ) : (
             <div className="preview-area" ref={previewAreaRef}>
               {colorModeSummaryBar}
+              {selectedPageIds.length > 1 && (
+                <div className="selection-bar selection-bar-floating">
+                  <span className="selection-count">{selectedPageIds.length}件選択中</span>
+                  <button
+                    className="btn-secondary btn-small"
+                    onClick={clearPageSelection}
+                  >
+                    選択解除
+                  </button>
+                  <button
+                    className="btn-primary btn-small btn-danger"
+                    onClick={() => setDeleteConfirmDialog({
+                      show: true,
+                      type: 'pages',
+                      pageCount: selectedPageIds.length,
+                    })}
+                  >
+                    削除
+                  </button>
+                </div>
+              )}
               {previewMode === 'spread' ? (
               <SpreadViewer
                 key={displayPages.map(p => p.page.id).join(',')}
                 pages={displayPages}
                 selectedPageId={selectedPageId}
-                onPageSelect={(chapterId, pageId) => {
-                  if (selectedPageId === pageId) {
+                selectedPageIds={selectedPageIds}
+                onPageSelect={(chapterId, pageId, e) => {
+                  if (e.ctrlKey || e.metaKey) {
+                    selectChapter(chapterId);
+                    togglePageSelection(pageId);
+                    return;
+                  }
+                  if (e.shiftKey && selectedPageId) {
+                    selectPageRange(selectedPageId, pageId);
+                    return;
+                  }
+                  if (selectedPageId === pageId && selectedPageIds.length <= 1) {
                     selectPage(null);
                   } else {
                     selectChapter(chapterId);
@@ -1994,6 +1929,7 @@ function App() {
                   </div>
                 ) : (
                   <div className="info-panel-empty">
+                    <InfoIcon size={48} />
                     <p>ページを選択すると<br />ここに情報が表示されます</p>
                   </div>
                 )}
@@ -2066,29 +2002,6 @@ function App() {
         onDismiss={autoUpdate.dismiss}
       />
 
-      {/* 欠落ファイルダイアログ */}
-      {showMissingFilesDialog && missingFiles.length > 0 && (
-        <div className="modal-overlay">
-          <div className="modal-content missing-files-dialog">
-            <h2>ファイルが見つかりません</h2>
-            <p>以下のファイルが見つかりませんでした。移動または削除された可能性があります。</p>
-            <div className="missing-files-list">
-              {missingFiles.map(file => (
-                <div key={file.pageId} className="missing-file-item">
-                  <span className="missing-file-icon"><AlertTriangleIcon size={16} /></span>
-                  <span className="missing-file-path">{file.originalPath}</span>
-                </div>
-              ))}
-            </div>
-            <div className="modal-footer">
-              <button className="btn-primary btn-small" onClick={() => setShowMissingFilesDialog(false)}>
-                閉じる
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* エクスポート結果ダイアログ */}
       {exportResultDialog.show && (
         <div className="modal-overlay">
@@ -2143,20 +2056,25 @@ function App() {
         </div>
       )}
 
-      {/* チャプター削除確認ダイアログ */}
+      {/* 削除確認ダイアログ */}
       {deleteConfirmDialog.show && (
         <div className="modal-overlay">
           <div className="modal-content delete-confirm-dialog">
             <h2>
-              {deleteConfirmDialog.type === 'all' ? 'すべて削除' : 'チャプター削除'}
+              {deleteConfirmDialog.type === 'all'
+                ? 'すべて削除'
+                : deleteConfirmDialog.type === 'pages'
+                ? 'ページ削除'
+                : 'チャプター削除'}
             </h2>
             <p>
               {deleteConfirmDialog.type === 'all'
                 ? `すべてのチャプター（${chapters.length}件、${deleteConfirmDialog.pageCount}ページ）を削除しますか？`
+                : deleteConfirmDialog.type === 'pages'
+                ? `選択中の${deleteConfirmDialog.pageCount}ページを削除しますか？`
                 : `「${deleteConfirmDialog.chapterName}」（${deleteConfirmDialog.pageCount}ページ）を削除しますか？`
               }
             </p>
-            <p className="delete-warning">この操作は取り消せます（Ctrl+Z）</p>
             <div className="modal-footer">
               <button
                 className="btn-secondary btn-small"
@@ -2169,6 +2087,8 @@ function App() {
                 onClick={() => {
                   if (deleteConfirmDialog.type === 'all') {
                     clearChapters();
+                  } else if (deleteConfirmDialog.type === 'pages') {
+                    removeSelectedPages();
                   } else if (deleteConfirmDialog.chapterId) {
                     removeChapter(deleteConfirmDialog.chapterId);
                   }

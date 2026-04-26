@@ -14,6 +14,7 @@ const NAV_HINT_SHOW_DURATION = 3000;
 export function SpreadViewer({
   pages,
   selectedPageId,
+  selectedPageIds,
   onPageSelect,
   onReplaceFile,
   isViewerMode = false,
@@ -25,7 +26,8 @@ export function SpreadViewer({
 }: {
   pages: { page: Page; chapter: Chapter; globalIndex: number }[];
   selectedPageId?: string | null;
-  onPageSelect?: (chapterId: string, pageId: string) => void;
+  selectedPageIds?: string[];
+  onPageSelect?: (chapterId: string, pageId: string, e: React.MouseEvent) => void;
   onReplaceFile?: (pageId: string) => void;
   isViewerMode?: boolean;
   onExitViewerMode?: () => void;
@@ -370,7 +372,10 @@ export function SpreadViewer({
     const isSpecialPage = page.pageType !== 'file';
     const hasFile = page.filePath && page.modifiedTime;
     const typeColor = PAGE_TYPE_COLORS[page.pageType] || '#888';
-    const isSelected = !isViewerMode && selectedPageId === page.id;
+    const isSelected = !isViewerMode && (
+      selectedPageId === page.id ||
+      (selectedPageIds?.includes(page.id) ?? false)
+    );
 
     // ファイル無しの特殊ページ（白紙等）は兄弟画像でサイズを合わせる
     const isBlankSpecial = isSpecialPage && !hasFile;
@@ -382,7 +387,7 @@ export function SpreadViewer({
     return (
       <div
         className={`spread-page ${side}${isSelected ? ' selected' : ''}`}
-        onClick={() => !isViewerMode && onPageSelect?.(item.chapter.id, page.id)}
+        onClick={(e) => !isViewerMode && onPageSelect?.(item.chapter.id, page.id, e)}
       >
         <div className="spread-page-content">
           {isBlankSpecial ? (

@@ -21,11 +21,8 @@ interface UseKeyboardShortcutsOptions {
   removeSelectedPages: () => void;
   selectChapter: (id: string | null) => void;
   selectPage: (id: string | null) => void;
-  undo: () => void;
-  redo: () => void;
   handleDeleteChapter: (chapterId: string) => void;
   handleNewProject: () => void;
-  handleOpenProject: () => Promise<void>;
   setIsViewerMode: (value: boolean | ((prev: boolean) => boolean)) => void;
 }
 
@@ -44,11 +41,8 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
     removeSelectedPages,
     selectChapter,
     selectPage,
-    undo,
-    redo,
     handleDeleteChapter,
     handleNewProject,
-    handleOpenProject,
     setIsViewerMode,
   } = options;
 
@@ -75,27 +69,6 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
       if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
         e.preventDefault();
         handleNewProject();
-        return;
-      }
-
-      // Ctrl+O: プロジェクトを開く
-      if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
-        e.preventDefault();
-        handleOpenProject();
-        return;
-      }
-
-      // Ctrl+Z: 元に戻す
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-        e.preventDefault();
-        undo();
-        return;
-      }
-
-      // Ctrl+Y または Ctrl+Shift+Z: やり直し
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
-        e.preventDefault();
-        redo();
         return;
       }
 
@@ -179,11 +152,8 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
     removeSelectedPages,
     selectChapter,
     selectPage,
-    undo,
-    redo,
     handleDeleteChapter,
     handleNewProject,
-    handleOpenProject,
     setIsViewerMode,
   ]);
 }

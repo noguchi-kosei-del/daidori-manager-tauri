@@ -29,13 +29,24 @@ export function EpubMakerView({
     epubPages,
     epubCurrentSpread,
     epubSelectedPageId,
+    epubSelectedPageIds,
     setEpubCurrentSpread,
     setEpubSelectedPageId,
+    toggleEpubPageSelection,
+    selectEpubPageRange,
   } = useStore();
 
-  // ページ選択（再選択で解除）
-  const handleSelectPage = (pageId: string) => {
-    if (epubSelectedPageId === pageId) {
+  // ページ選択（Ctrl/Shift対応・再選択で解除）
+  const handleSelectPage = (pageId: string, e?: React.MouseEvent) => {
+    if (e?.ctrlKey || e?.metaKey) {
+      toggleEpubPageSelection(pageId);
+      return;
+    }
+    if (e?.shiftKey && epubSelectedPageId) {
+      selectEpubPageRange(epubSelectedPageId, pageId);
+      return;
+    }
+    if (epubSelectedPageId === pageId && epubSelectedPageIds.length <= 1) {
       setEpubSelectedPageId(null);
       return;
     }
@@ -76,6 +87,7 @@ export function EpubMakerView({
             pages={epubPages}
             currentSpread={epubCurrentSpread}
             selectedPageId={epubSelectedPageId}
+            selectedPageIds={epubSelectedPageIds}
             onSpreadChange={handleSpreadChange}
             onSelectPage={handleSelectPage}
             onReplaceFile={onReplaceFile}
@@ -91,6 +103,7 @@ export function EpubMakerView({
               pages={epubPages}
               currentSpread={epubCurrentSpread}
               selectedPageId={epubSelectedPageId}
+              selectedPageIds={epubSelectedPageIds}
               onSelectPage={handleSelectPage}
               onSpreadChange={handleSpreadChange}
               onReplaceFile={onReplaceFile}

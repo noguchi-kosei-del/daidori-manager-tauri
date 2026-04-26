@@ -9,7 +9,8 @@ interface EpubThumbnailBarProps {
   pages: EpubPageInfo[];
   currentSpread: number;
   selectedPageId: string | null;
-  onSelectPage: (pageId: string) => void;
+  selectedPageIds?: string[];
+  onSelectPage: (pageId: string, e?: React.MouseEvent) => void;
   onSpreadChange: (index: number) => void;
   onReplaceFile?: (originalPageId: string) => void;
   bindingDirection?: 'rtl' | 'ltr';
@@ -19,6 +20,7 @@ export function EpubThumbnailBar({
   pages,
   currentSpread,
   selectedPageId,
+  selectedPageIds,
   onSelectPage,
   onSpreadChange,
   onReplaceFile,
@@ -182,12 +184,12 @@ export function EpubThumbnailBar({
           <div
             key={page.id}
             className={`epub-thumbnail-item ${
-              selectedPageId === page.id ? 'selected' : ''
+              selectedPageId === page.id || (selectedPageIds?.includes(page.id) ?? false) ? 'selected' : ''
             } ${pageToSpread[index] === currentSpread ? 'current-spread' : ''} ${
               dropIndex === index ? 'drop-target' : ''
             }`}
-            onClick={() => {
-              onSelectPage(page.id);
+            onClick={(e) => {
+              onSelectPage(page.id, e);
               onSpreadChange(pageToSpread[index]);
             }}
             onContextMenu={(e) => handleContextMenu(e, page.id)}
