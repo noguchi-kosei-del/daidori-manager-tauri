@@ -1419,3 +1419,32 @@ pub struct PsdGuide {
 - `SpreadViewer` / `EpubSpreadPreview` / `EpubThumbnailBar` props に `selectedPageIds?: string[]`
 - `onPageSelect` / `onSelectPage` のシグネチャに `MouseEvent` を追加
 - `deleteConfirmDialog.type` に `'pages'` を追加
+
+### 2026-04-27: CSP修正（PSDサムネイル表示バグ）・DevTools有効化・ドラッグオーバーレイ簡素化
+
+#### 本番ビルドでPSDサムネイルが表示されないバグ修正（src-tauri/tauri.conf.json）
+- 症状: インストール済みアプリ（リリースビルド）でPSDファイルを読み込ませると、サムネイルがすべて壊れた画像アイコン+altテキストになる
+- 原因: CSPが Tauri 2 の `http://asset.localhost`（Windows）を許可していなかった。旧CSPは `https://asset.localhost` のみ許可、`connect-src` も未指定で `default-src 'self'` フォールバックにより IPC `http://ipc.localhost` までブロックされていた
+- DevToolsコンソールに `Loading the image '<URL>' violates the following Content Security Policy directive: "img-src 'self' asset: <URL> data: blob:"` および `Connecting to 'http://ipc.localhost/...' violates the following CSP directive: "default-src 'self'"` が記録されていた
+- 修正後CSP:
+  ```
+  default-src 'self' ipc: http://ipc.localhost;
+  connect-src 'self' ipc: http://ipc.localhost;
+  img-src 'self' asset: http://asset.localhost https://asset.localhost data: blob:;
+  style-src 'self' 'unsafe-inline'
+  ```
+- 副次的に IPC のpostMessageフォールバック（`IPC custom protocol failed, Tauri will now use the postMessage interface instead`）も解消
+
+#### 本番ビルドでDevTools有効化（src-tauri/Cargo.toml）
+- リリースビルドのデバッグ用に `tauri` クレートに `devtools` フィーチャーを追加
+- `tauri = { version = "2", features = ["protocol-asset", "devtools"] }`
+- これによりインストール済みアプリでも F12 / Ctrl+Shift+I / 右クリック「検証」でDevToolsが開くようになる
+
+#### ドラッグオーバーレイのシンプル化（src/styles.css）
+- カーソル位置とドラッグカードの位置関係を直感的にするため、視覚エフェクトを大幅削減してCSS translateで右側固定に
+- `.thumbnail-drag-overlay` / `.sidebar-drag-overlay` / `.chapter-drag-overlay` 3クラス共通の変更:
+  - **削除**: `rotate()` / `scale()` / `animation`（thumbnailDragAppear, dragOverlayAppear, chapterDragAppear, shimmerSlide, badgeGlow）/ `backdrop-filter` / 複雑なグラデーション・複数レイヤーのアクセントglow
+  - **追加**: `transform: translate(100%, 0)` — カードの自身の幅まるごと右にシフト
+- 結果: ドラッグ中のカードはカード幅分以上カーソルの右に表示される（カーソル位置にカードの左辺が来るのを上限に、カード全体が必ず右側）
+- `.chapter-drag-overlay::before`（光が流れるアニメーション疑似要素）と `.chapter-drag-overlay .chapter-type-badge` の `badgeGlow` アニメーションも削除
+- 背景は `var(--color-bg-secondary)` 単色、影は `var(--shadow-lg)` のみ、枠線 `1px solid var(--color-accent)` で統一
