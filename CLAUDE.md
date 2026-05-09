@@ -1448,3 +1448,87 @@ pub struct PsdGuide {
 - 結果: ドラッグ中のカードはカード幅分以上カーソルの右に表示される（カーソル位置にカードの左辺が来るのを上限に、カード全体が必ず右側）
 - `.chapter-drag-overlay::before`（光が流れるアニメーション疑似要素）と `.chapter-drag-overlay .chapter-type-badge` の `badgeGlow` アニメーションも削除
 - 背景は `var(--color-bg-secondary)` 単色、影は `var(--shadow-lg)` のみ、枠線 `1px solid var(--color-accent)` で統一
+
+### 2026-05-09: EPUB生成パイプライン整備・CMYK警告・総扉/目次チャプター・ドロッププレースホルダー (v1.0.7)
+
+#### EPUB生成バグ修正: PSD/TIFFが含まれるとEPUBが開けない（src-tauri/src/epub/builder.rs）
+- 症状: ソースがPSD/TIFFの場合、コピー先ファイル名が `.psd`/`.tif` となり OPF/XHTML がそれを参照するが、ZIP梱包の拡張子フィルタ `["jpg","jpeg","png"]` が PSD/TIFF を除外してしまうため、マニフェストが存在しないファイルを参照する不正なEPUBが生成されていた
+- 修正:
+  - `EpubBuilder::new()` で PSD/TIFF ソースのページ `filename` 拡張子を `.jpg` に正規化（OPF/XHTML 参照と実ファイル名を一致させる）
+  - `copy_images()` で PSD は `psd::Psd::from_bytes` → JPEG エンコード、TIFF は `image::open` → JPEG エンコードに置換
+  - `convert_psd_to_jpeg` / `convert_via_image_crate_to_jpeg` / `write_jpeg`（JpegEncoder, 品質90, RGB変換）を新規追加
+  - JPG/PNG ソースは従来通り `fs::copy` でパススルー
+
+#### EPUB生成のフリーズ対策（src-tauri/src/epub/builder.rs, src-tauri/src/commands/epub.rs）
+- PSD合成（`psd_file.rgba()`）がCPU重く、順次処理ではUIが応答停止に見えていた問題を解消
+- `copy_images()` を rayon `par_iter().enumerate().try_for_each` に置き換えて全コアで並列変換
+- Tauri進捗イベント `epub-progress` を送信:
+  - `EpubProgressPayload { phase: &str, current: usize, total: usize }` を `tauri::Emitter::emit` で発火
+  - `EpubBuilder::with_app_handle(AppHandle)` セッターを追加、`AtomicUsize` で完了ページ数を集計してフェーズ別に送信
+  - 送信タイミング: `images` 開始時(0/total) → 各ページ完了時(N/total) → `packaging` 開始(0/1) → 完了(1/1)
+
+#### EPUB生成中のプログレスバーダイアログ（src/components/modals/EpubMetadataModal.tsx, src/styles.css）
+- メタデータモーダルの上に z-index 1100 のオーバーレイで進捗ダイアログを重ねる
+- フェーズ別表示:
+  - 準備中: アニメーション付き不確定バー（`@keyframes epubProgressIndeterminate`）
+  - 画像変換中: `current / total ページ` と `N%` 表示の確定バー
+  - EPUB梱包中: 95% 固定バー
+- 生成中はメタデータモーダルの×ボタンと枠外クリック閉じが無効化
+- 新規CSS: `.epub-progress-overlay` / `.epub-progress-dialog` / `.epub-progress-title` / `.epub-progress-phase` / `.epub-progress-bar-track` / `.epub-progress-bar-fill`（含 `indeterminate`）/ `.epub-progress-meta`
+- `listen('epub-progress')` でイベントを購読し progress state を更新
+
+#### 白紙ページのEPUB反映・多数派サイズ生成（src-tauri/src/types/epub.rs, src-tauri/src/commands/epub.rs, src-tauri/src/epub/builder.rs, src/types.ts, src/App.tsx）
+- 従来は白紙ページがEPUB生成時にスキップされていた問題を修正
+- `EpubPage` に `is_blank: bool` フィールド追加（フロントの `EpubPage.isBlank?: boolean`）
+- `validate_pages`:
+  - 白紙のみで構成された場合 `白紙ページのみではEPUBを生成できません` でエラー（フロントでも事前にチェックして早期return）
+  - 白紙ページのソース存在チェックをスキップ
+- `EpubBuilder::new()`:
+  - `majority_size_of_non_blank()` で非白紙ページの (width,height) を集計し最頻値を算出
+  - 白紙ページの `width/height` を多数派サイズで上書き、ファイル名を `.jpg` に正規化
+- `copy_images()` で `is_blank` ページは `generate_blank_jpeg()` で白JPEGを生成（並列パイプライン内で他ページと同時処理）
+- フロント `handleEpubGenerate`:
+  - 白紙判定 `page.pageType === 'blank' || (chapter.type === 'blank' && !page.filePath)`
+  - 白紙チャプターのページも epubPages に含める（`isBlank: true`, `sourcePath: ''`, filename は `.jpg` 固定）
+  - 白紙は isCover/isColophon 判定対象外
+  - `nonBlankCount === 0` で警告ダイアログ表示し早期return
+
+#### CMYK判定の精度向上（src-tauri/src/commands/project.rs）
+- 症状: CMYK TIFFが「RGB」と誤判定されていた。`image` クレートのTIFFデコーダーが内部でCMYK→RGBに変換してから `color_type()` を返すため
+- 修正:
+  - `read_tiff_photometric()` 関数を新規追加: TIFFのIFDから `PhotometricInterpretation` タグ(262)を直接読み取る
+  - 値`5` (Separated) のとき `color_mode` を `"CMYK"` に上書き
+  - リトル/ビッグエンディアン両対応、classic TIFF (magic=42) 専用（BigTIFFは無視）
+- PSDは既存の `read_psd_header` で ColorMode ID `4` から CMYK 判定済み
+
+#### CMYKバッジを赤色警告スタイルに（src/App.tsx, src/styles.css）
+- カラーモードサマリーバーで CMYK バッジを赤色で強調表示
+- スウォッチ色を ティール `#0abfb4` → 赤 `#dc2626` に変更
+- `.color-mode-badge-warning` クラスを CMYK 時のみ付与:
+  - ダーク: 半透明赤背景 `rgba(220,38,38,0.12)`、赤枠 `#dc2626`、赤テキスト `#fca5a5`、ラベル `font-weight: 600`、カウント部分は赤背景白文字
+  - ライト: `#b91c1c` 系の濃い赤
+  - ホバー/アクティブ時はより濃い赤に変化
+- ツールチップに「CMYK画像はEPUBで正しく表示されない可能性があります」を表示
+
+#### CMYKファイルのエクスポート/EPUB生成ガード（src/App.tsx）
+- CMYKファイルが台割上に存在するときエクスポート/EPUB生成をブロック
+- `blockIfCmyk(action)` ヘルパーを追加: `colorModeCounts.CMYK > 0` のとき既存のエクスポート結果ダイアログ（`isError: true`）を再利用して警告
+  - タイトル: 「CMYKファイルが含まれています」
+  - メッセージ: 件数とアクション別の説明 + 「RGB/グレースケールに変換してから再度お試しください」
+  - details: 該当ファイル名一覧（先頭20件、超過分は「…他N件」と省略）
+- 適用箇所: ツールバーのエクスポートボタン、EPUB生成ボタン、エクスポート完了ダイアログ内のEPUB生成ボタン
+
+#### 総扉・目次チャプタータイプ追加（src/types.ts, src/store.ts, src/App.tsx, src/components/sidebar/ChapterItem.tsx）
+- `ChapterType` に `'title'`(総扉) と `'toc'`(目次) を追加
+- `CHAPTER_TYPE_LABELS`: `title: '総扉'`, `toc: '目次'`
+- `CHAPTER_TYPE_COLORS`: `title: '#ec4899'`(ピンク), `toc: '#06b6d4'`(シアン)
+- `getDefaultChapterName`: `title` → `'総扉'`, `toc` → `'目次'`
+- `chapter-actions-bar` のボタン並び順: 表紙 → 総扉 → 白紙 → 目次 → 話 → 幕間 → 奥付 → AD（3列グリッドで2行+1配置）
+- ChapterItem のフォルダ差し替えボタン表示条件に `'title' | 'toc'` を追加
+
+#### リスト表示のドロッププレースホルダー強化（src/components/dnd/DropZones.tsx, src/hooks/useDragHandlers.ts, src/App.tsx, src/styles.css）
+- リスト表示でページをドラッグ中、挿入予定位置に空白プレースホルダーカードを絶対配置で表示
+- 新規コンポーネント `DropPlaceholder({ id, width, height, variant, side })`: `useDroppable` で `'ph:before:<pageId>'` / `'ph:after:<pageId>'` をドロップ可能ID化
+- `useDragHandlers.handleDragOver` でプレースホルダー上ホバー時に `setDropTarget({ type: 'page-before' | 'page-after' })` で位置をロック
+- リスト表示は横並びwrapのため、位置判定をX軸基準に変更（サイドバー縦並びはY軸のまま）
+- 新規CSS: `.chapter-page-placeholder`（base + side-before/side-after/locked/file-drop バリアント）、`@keyframes placeholderPulse` / `placeholderPulseFile`

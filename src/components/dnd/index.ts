@@ -1,2 +1,2 @@
 export { DragOverlayThumbnail, DragOverlaySidebarItem, DragOverlayChapterItem } from './DragOverlays';
-export { InsertionLine, SidebarChapterReorderDropZone } from './DropZones';
+export { InsertionLine, SidebarChapterReorderDropZone, DropPlaceholder } from './DropZones';

@@ -247,18 +247,86 @@ fn read_image_header(path: &Path) -> Option<ImageHeaderInfo> {
     let reader = reader.with_guessed_format().ok()?;
     let decoder = reader.into_decoder().ok()?;
     let (width, height) = decoder.dimensions();
-    let color_mode = match decoder.color_type() {
+    let mut color_mode = match decoder.color_type() {
         image::ColorType::L8 | image::ColorType::L16 |
         image::ColorType::La8 | image::ColorType::La16 => "Grayscale",
         image::ColorType::Rgb8 | image::ColorType::Rgb16 | image::ColorType::Rgb32F |
         image::ColorType::Rgba8 | image::ColorType::Rgba16 | image::ColorType::Rgba32F => "RGB",
         _ => "RGB",
-    };
+    }
+    .to_string();
+
+    // image クレートは CMYK TIFF を内部で RGB に変換してしまうため、
+    // PhotometricInterpretation タグ(262)を直接読んで CMYK を識別する。
+    let lower = path.to_string_lossy().to_lowercase();
+    if lower.ends_with(".tif") || lower.ends_with(".tiff") {
+        if let Some(photometric) = read_tiff_photometric(path) {
+            // 5 = Separated (CMYK)
+            if photometric == 5 {
+                color_mode = "CMYK".to_string();
+            }
+        }
+    }
+
     Some(ImageHeaderInfo {
         width,
         height,
-        color_mode: color_mode.to_string(),
+        color_mode,
     })
+}
+
+// TIFFのPhotometricInterpretationタグ(262)を読み取る
+// 0=WhiteIsZero, 1=BlackIsZero, 2=RGB, 3=Palette, 4=Mask, 5=Separated(CMYK), 6=YCbCr, 8=CIELab
+fn read_tiff_photometric(path: &Path) -> Option<u16> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut header = [0u8; 8];
+    file.read_exact(&mut header).ok()?;
+
+    let little_endian = match &header[0..2] {
+        b"II" => true,
+        b"MM" => false,
+        _ => return None,
+    };
+
+    let read_u16 = |b: &[u8]| -> u16 {
+        if little_endian {
+            u16::from_le_bytes([b[0], b[1]])
+        } else {
+            u16::from_be_bytes([b[0], b[1]])
+        }
+    };
+    let read_u32 = |b: &[u8]| -> u32 {
+        if little_endian {
+            u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+        } else {
+            u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+        }
+    };
+
+    // magic = 42 (classic TIFF)。BigTIFF(43)はサポート対象外
+    if read_u16(&header[2..4]) != 42 {
+        return None;
+    }
+
+    let ifd_offset = read_u32(&header[4..8]);
+    file.seek(SeekFrom::Start(ifd_offset as u64)).ok()?;
+
+    let mut count_buf = [0u8; 2];
+    file.read_exact(&mut count_buf).ok()?;
+    let entry_count = read_u16(&count_buf);
+
+    let mut entry = [0u8; 12];
+    for _ in 0..entry_count {
+        if file.read_exact(&mut entry).is_err() {
+            break;
+        }
+        let tag = read_u16(&entry[0..2]);
+        if tag == 262 {
+            // type=3(SHORT) count=1 のとき値は entry[8..10] に直接入っている
+            return Some(read_u16(&entry[8..10]));
+        }
+    }
+    None
 }
 
 // 単一ページの検証(ステータス + 画像メタ)

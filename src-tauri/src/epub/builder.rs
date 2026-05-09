@@ -1,12 +1,62 @@
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use image::codecs::jpeg::JpegEncoder;
+use image::DynamicImage;
+use rayon::prelude::*;
+use serde::Serialize;
+use tauri::{AppHandle, Emitter};
 use zip::write::FileOptions;
 use zip::CompressionMethod;
 use zip::ZipWriter;
 
 use crate::types::{EpubFormat, EpubGenerateConfig, EpubGenerateResponse, HybridCssProfile};
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct EpubProgressPayload<'a> {
+    phase: &'a str,
+    current: usize,
+    total: usize,
+}
+
+const EPUB_JPEG_QUALITY: u8 = 90;
+
+fn replace_filename_ext(filename: &str, new_ext: &str) -> String {
+    match filename.rsplit_once('.') {
+        Some((stem, _)) => format!("{}.{}", stem, new_ext),
+        None => format!("{}.{}", filename, new_ext),
+    }
+}
+
+fn source_needs_conversion(source_path: &str) -> Option<&'static str> {
+    let lower = source_path.to_ascii_lowercase();
+    if lower.ends_with(".psd") {
+        Some("psd")
+    } else if lower.ends_with(".tif") || lower.ends_with(".tiff") {
+        Some("tiff")
+    } else {
+        None
+    }
+}
+
+/// 非白紙ページの幅×高さで最頻値（最頻サイズ）を返す
+fn majority_size_of_non_blank(pages: &[crate::types::EpubPage]) -> Option<(u32, u32)> {
+    use std::collections::HashMap;
+    let mut counts: HashMap<(u32, u32), usize> = HashMap::new();
+    for page in pages {
+        if page.is_blank {
+            continue;
+        }
+        if page.width == 0 || page.height == 0 {
+            continue;
+        }
+        *counts.entry((page.width, page.height)).or_insert(0) += 1;
+    }
+    counts.into_iter().max_by_key(|(_, c)| *c).map(|(s, _)| s)
+}
 
 use super::templates::{
     generate_container_xml, generate_nav_xhtml, generate_ncx, generate_opf, generate_page_xhtml,
@@ -19,16 +69,40 @@ pub struct EpubBuilder {
     config: EpubGenerateConfig,
     temp_dir: PathBuf,
     css_resource_dir: Option<PathBuf>,
+    app_handle: Option<AppHandle>,
 }
 
 impl EpubBuilder {
     /// 新しいビルダーを作成
-    pub fn new(config: EpubGenerateConfig) -> Self {
+    pub fn new(mut config: EpubGenerateConfig) -> Self {
+        // 白紙ページのサイズは非白紙ページの多数派サイズに揃える
+        let majority = majority_size_of_non_blank(&config.pages);
+
+        for page in &mut config.pages {
+            // 白紙ページは多数派サイズで白JPEGを生成する
+            if page.is_blank {
+                if let Some((mw, mh)) = majority {
+                    page.width = mw;
+                    page.height = mh;
+                }
+                page.filename = replace_filename_ext(&page.filename, "jpg");
+                continue;
+            }
+
+            // EPUB readers only support jpg/jpeg/png. PSD/TIFF sources are converted
+            // to JPG during copy_images, so normalize the manifest filename ext here
+            // so the OPF/XHTML references match the actual file we will write.
+            if source_needs_conversion(&page.source_path).is_some() {
+                page.filename = replace_filename_ext(&page.filename, "jpg");
+            }
+        }
+
         let temp_dir = std::env::temp_dir().join(format!("epub_build_{}", uuid::Uuid::new_v4()));
         Self {
             config,
             temp_dir,
             css_resource_dir: None,
+            app_handle: None,
         }
     }
 
@@ -36,6 +110,25 @@ impl EpubBuilder {
     pub fn with_css_resource_dir(mut self, dir: PathBuf) -> Self {
         self.css_resource_dir = Some(dir);
         self
+    }
+
+    /// 進捗イベント送信用の AppHandle を設定
+    pub fn with_app_handle(mut self, handle: AppHandle) -> Self {
+        self.app_handle = Some(handle);
+        self
+    }
+
+    fn emit_progress(&self, phase: &str, current: usize, total: usize) {
+        if let Some(handle) = &self.app_handle {
+            let _ = handle.emit(
+                "epub-progress",
+                EpubProgressPayload {
+                    phase,
+                    current,
+                    total,
+                },
+            );
+        }
     }
 
     /// EPUBを生成
@@ -90,7 +183,9 @@ impl EpubBuilder {
         }
 
         // ZIPで梱包
+        self.emit_progress("packaging", 0, 1);
         let file_size = self.package_epub()?;
+        self.emit_progress("packaging", 1, 1);
 
         Ok(EpubGenerateResponse {
             success: true,
@@ -133,7 +228,7 @@ impl EpubBuilder {
         fs::write(&path, content).map_err(|e| format!("Failed to write container.xml: {}", e))
     }
 
-    /// 画像ファイルをコピー
+    /// 画像ファイルをコピー（PSD/TIFFはJPGに並列変換）
     fn copy_images(&self) -> Result<(), String> {
         let format = &self.config.metadata.output_format;
         let image_dir = self
@@ -141,19 +236,41 @@ impl EpubBuilder {
             .join(root_folder(format))
             .join(image_folder(format));
 
-        for (idx, page) in self.config.pages.iter().enumerate() {
-            let src = Path::new(&page.source_path);
-            if !src.exists() {
-                return Err(format!("Source image not found: {}", page.source_path));
-            }
+        let total = self.config.pages.len();
+        self.emit_progress("images", 0, total);
+        let counter = AtomicUsize::new(0);
 
-            let dest_filename = image_filename(format, idx, page);
-            let dest = image_dir.join(&dest_filename);
-            fs::copy(src, &dest)
-                .map_err(|e| format!("Failed to copy image {}: {}", dest_filename, e))?;
-        }
+        // 各ページのコピー/変換は独立しているので rayon で並列化する。
+        // PSD 合成は CPU バウンドで重い処理なので並列化の効果が大きい。
+        self.config
+            .pages
+            .par_iter()
+            .enumerate()
+            .try_for_each(|(idx, page)| -> Result<(), String> {
+                let dest_filename = image_filename(format, idx, page);
+                let dest = image_dir.join(&dest_filename);
 
-        Ok(())
+                let result = if page.is_blank {
+                    generate_blank_jpeg(page.width, page.height, &dest)
+                } else {
+                    let src = Path::new(&page.source_path);
+                    if !src.exists() {
+                        return Err(format!("Source image not found: {}", page.source_path));
+                    }
+                    match source_needs_conversion(&page.source_path) {
+                        Some("psd") => convert_psd_to_jpeg(src, &dest),
+                        Some("tiff") => convert_via_image_crate_to_jpeg(src, &dest),
+                        _ => fs::copy(src, &dest)
+                            .map(|_| ())
+                            .map_err(|e| format!("Failed to copy image {}: {}", dest_filename, e)),
+                    }
+                };
+                result?;
+
+                let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                self.emit_progress("images", done, total);
+                Ok(())
+            })
     }
 
     /// CSSファイルをコピー
@@ -506,4 +623,50 @@ svg {
 
         Ok(())
     }
+}
+
+fn write_jpeg(image: DynamicImage, dest: &Path) -> Result<(), String> {
+    // CMYK等のRGBA以外のPSDが来てもJPEG（RGB）にエンコードできるよう変換。
+    let rgb = image.to_rgb8();
+    let file = File::create(dest)
+        .map_err(|e| format!("Failed to create JPG output {}: {}", dest.display(), e))?;
+    let mut writer = BufWriter::new(file);
+    let mut encoder = JpegEncoder::new_with_quality(&mut writer, EPUB_JPEG_QUALITY);
+    encoder
+        .encode(
+            rgb.as_raw(),
+            rgb.width(),
+            rgb.height(),
+            image::ExtendedColorType::Rgb8,
+        )
+        .map_err(|e| format!("Failed to encode JPG {}: {}", dest.display(), e))?;
+    writer
+        .flush()
+        .map_err(|e| format!("Failed to flush JPG {}: {}", dest.display(), e))?;
+    Ok(())
+}
+
+fn convert_psd_to_jpeg(src: &Path, dest: &Path) -> Result<(), String> {
+    let bytes = fs::read(src).map_err(|e| format!("Failed to read PSD {}: {}", src.display(), e))?;
+    let psd_file = psd::Psd::from_bytes(&bytes)
+        .map_err(|e| format!("Failed to parse PSD {}: {:?}", src.display(), e))?;
+    let width = psd_file.width();
+    let height = psd_file.height();
+    let rgba = psd_file.rgba();
+    let buffer = image::RgbaImage::from_raw(width, height, rgba)
+        .ok_or_else(|| format!("Invalid PSD image data: {}", src.display()))?;
+    write_jpeg(DynamicImage::ImageRgba8(buffer), dest)
+}
+
+fn convert_via_image_crate_to_jpeg(src: &Path, dest: &Path) -> Result<(), String> {
+    let img = image::open(src)
+        .map_err(|e| format!("Failed to decode image {}: {}", src.display(), e))?;
+    write_jpeg(img, dest)
+}
+
+fn generate_blank_jpeg(width: u32, height: u32, dest: &Path) -> Result<(), String> {
+    let w = width.max(1);
+    let h = height.max(1);
+    let img = image::RgbImage::from_pixel(w, h, image::Rgb([255, 255, 255]));
+    write_jpeg(DynamicImage::ImageRgb8(img), dest)
 }

@@ -170,6 +170,10 @@ const getDefaultChapterName = (type: ChapterType, chapters: Chapter[]): string =
       return '奥付';
     case 'ad':
       return 'AD';
+    case 'title':
+      return '総扉';
+    case 'toc':
+      return '目次';
     default:
       return '新規';
   }

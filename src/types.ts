@@ -1,5 +1,5 @@
 // アイテムの型定義
-export type ChapterType = 'chapter' | 'cover' | 'blank' | 'intermission' | 'colophon' | 'ad';
+export type ChapterType = 'chapter' | 'cover' | 'blank' | 'intermission' | 'colophon' | 'ad' | 'title' | 'toc';
 
 export type ThumbnailStatus = 'pending' | 'loading' | 'ready' | 'error';
 
@@ -110,6 +110,8 @@ export const CHAPTER_TYPE_LABELS: Record<ChapterType, string> = {
   intermission: '幕間',
   colophon: '奥付',
   ad: 'AD',
+  title: '総扉',
+  toc: '目次',
 };
 
 // 特殊ページのカラー
@@ -120,6 +122,8 @@ export const CHAPTER_TYPE_COLORS: Record<ChapterType, string> = {
   intermission: '#a855f7',
   colophon: '#34d399',
   ad: '#f59e0b',
+  title: '#ec4899',
+  toc: '#06b6d4',
 };
 
 // ========== プロジェクトファイル関連 ==========
@@ -323,6 +327,7 @@ export interface EpubPage {
   height: number;
   isCover: boolean;
   isColophon: boolean;
+  isBlank?: boolean;
 }
 
 // EPUB生成結果

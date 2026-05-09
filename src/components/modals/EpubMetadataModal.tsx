@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { save } from '@tauri-apps/plugin-dialog';
 import { desktopDir, join } from '@tauri-apps/api/path';
 import {
@@ -70,6 +71,21 @@ export function EpubMetadataModal({
 
   // 生成中フラグ
   const [isGenerating, setIsGenerating] = useState(false);
+  const [progress, setProgress] = useState<{ phase: string; current: number; total: number } | null>(null);
+
+  // 進捗イベントを購読
+  useEffect(() => {
+    if (!isGenerating) return;
+    const unlisten = listen<{ phase: string; current: number; total: number }>(
+      'epub-progress',
+      (event) => {
+        setProgress(event.payload);
+      },
+    );
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [isGenerating]);
 
   // 初期化
   useEffect(() => {
@@ -189,6 +205,7 @@ export function EpubMetadataModal({
     }
 
     setIsGenerating(true);
+    setProgress({ phase: 'images', current: 0, total: 0 });
 
     const metadata: EpubMetadata = {
       title: title.trim(),
@@ -221,6 +238,7 @@ export function EpubMetadataModal({
       await onGenerate(metadata, outputPath);
     } finally {
       setIsGenerating(false);
+      setProgress(null);
     }
   };
 
@@ -229,8 +247,55 @@ export function EpubMetadataModal({
 
   if (!isOpen) return null;
 
+  const renderProgressDialog = () => {
+    if (!isGenerating) return null;
+    const isImagesPhase = progress?.phase === 'images' && progress.total > 0;
+    const isPackagingPhase = progress?.phase === 'packaging';
+    const phaseLabel = isImagesPhase
+      ? '画像を変換しています…'
+      : isPackagingPhase
+      ? 'EPUBファイルを梱包しています…'
+      : '準備中…';
+    const percent = isImagesPhase
+      ? Math.round((progress!.current / progress!.total) * 100)
+      : isPackagingPhase
+      ? 95
+      : 0;
+    return (
+      <div className="modal-overlay epub-progress-overlay" onClick={(e) => e.stopPropagation()}>
+        <div className="epub-progress-dialog">
+          <div className="epub-progress-title">
+            <BookIcon size={20} />
+            EPUB生成中
+          </div>
+          <div className="epub-progress-phase">{phaseLabel}</div>
+          <div className="epub-progress-bar-track">
+            <div
+              className={`epub-progress-bar-fill ${isImagesPhase || isPackagingPhase ? '' : 'indeterminate'}`}
+              style={
+                isImagesPhase || isPackagingPhase
+                  ? { width: `${percent}%` }
+                  : undefined
+              }
+            />
+          </div>
+          <div className="epub-progress-meta">
+            {isImagesPhase ? (
+              <>
+                <span>{progress!.current} / {progress!.total} ページ</span>
+                <span>{percent}%</span>
+              </>
+            ) : (
+              <span>{phaseLabel}</span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onClick={isGenerating ? undefined : onClose}>
       <div
         className="modal-content epub-modal"
         onClick={(e) => e.stopPropagation()}
@@ -240,10 +305,11 @@ export function EpubMetadataModal({
             <BookIcon size={18} />
             EPUB生成
           </h2>
-          <button className="btn-icon modal-close" onClick={onClose}>
+          <button className="btn-icon modal-close" onClick={onClose} disabled={isGenerating}>
             ×
           </button>
         </div>
+        {renderProgressDialog()}
 
         <div className="modal-body epub-modal-body">
           {/* 出力設定 */}

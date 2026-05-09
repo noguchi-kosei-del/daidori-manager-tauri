@@ -9,6 +9,33 @@ export function InsertionLine() {
   return <div className="insertion-line" />;
 }
 
+// リスト表示の挿入予定位置に表示する空白カードプレースホルダー（ドロップ可能・絶対配置）
+export function DropPlaceholder({
+  id,
+  width,
+  height,
+  variant,
+  side,
+}: {
+  id: string;
+  width: number;
+  height: number;
+  variant?: string;
+  side: 'before' | 'after';
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  const classes = ['chapter-page-placeholder', `side-${side}`];
+  if (variant) classes.push(variant);
+  if (isOver) classes.push('locked');
+  return (
+    <div
+      ref={setNodeRef}
+      className={classes.join(' ')}
+      style={{ width, height }}
+    />
+  );
+}
+
 // サイドバー用のチャプター並べ替えゾーン（ドロップ可能）
 export function SidebarChapterReorderDropZone({ isDragging, position = 'end' }: { isDragging: boolean; position?: 'start' | 'end' }) {
   const { setNodeRef, isOver } = useDroppable({

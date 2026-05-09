@@ -120,6 +120,22 @@ export function useDragHandlers({
 
     const overIdStr = String(over.id);
 
+    // プレースホルダー上にホバー: 位置をロック
+    if (overIdStr.startsWith('ph:')) {
+      const parts = overIdStr.split(':');
+      const position = parts[1];
+      const pageId = parts.slice(2).join(':');
+      const overPage = allPages.find((p) => p.page.id === pageId);
+      if (overPage) {
+        setDropTarget({
+          type: position === 'before' ? 'page-before' : 'page-after',
+          chapterId: overPage.chapter.id,
+          pageId,
+        });
+      }
+      return;
+    }
+
     // ドラッグ中のアイテムの現在位置（中央）を計算
     const activeRect = active.rect.current.translated;
     const activeCenterY = activeRect ? activeRect.top + activeRect.height / 2 : 0;
@@ -169,12 +185,20 @@ export function useDragHandlers({
     const overPage = allPages.find((p) => p.page.id === actualOverId);
 
     if (activePage && overPage) {
-      // ドラッグ中のアイテムの中央位置とover要素の中央を比較
       const overRect = over.rect;
-      const overCenterY = overRect.top + overRect.height / 2;
+      let insertType: 'page-before' | 'page-after';
 
-      // ドラッグアイテムの中央がover要素の中央より上なら「前」、下なら「後」
-      const insertType = activeCenterY < overCenterY ? 'page-before' : 'page-after';
+      if (isSidebarDrag) {
+        // サイドバー: 縦並びなのでY軸で判定
+        const overCenterY = overRect.top + overRect.height / 2;
+        insertType = activeCenterY < overCenterY ? 'page-before' : 'page-after';
+      } else {
+        // リスト表示: 横並びwrapなのでX軸で判定
+        const activeCenterX = activeRect ? activeRect.left + activeRect.width / 2 : 0;
+        const overCenterX = overRect.left + overRect.width / 2;
+        insertType = activeCenterX < overCenterX ? 'page-before' : 'page-after';
+      }
+
       setDropTarget({ type: insertType, chapterId: overPage.chapter.id, pageId: actualOverId });
     } else {
       setDropTarget(null);

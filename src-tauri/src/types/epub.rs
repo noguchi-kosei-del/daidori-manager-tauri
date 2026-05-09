@@ -232,7 +232,7 @@ pub struct EpubPage {
     pub id: String,
     /// 出力ファイル名（例: p001.jpg）
     pub filename: String,
-    /// 元ファイルパス
+    /// 元ファイルパス（白紙ページの場合は空文字）
     pub source_path: String,
     /// 画像幅
     pub width: u32,
@@ -244,6 +244,9 @@ pub struct EpubPage {
     /// 奥付フラグ
     #[serde(default)]
     pub is_colophon: bool,
+    /// 白紙ページフラグ（true の場合は width/height で白JPEGを生成）
+    #[serde(default)]
+    pub is_blank: bool,
 }
 
 /// EPUB生成設定

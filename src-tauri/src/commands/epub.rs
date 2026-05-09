@@ -38,7 +38,9 @@ pub async fn generate_epub(
     let css_dir = get_css_resource_dir(&app_handle)?;
 
     // ビルダーを作成して実行
-    let builder = EpubBuilder::new(config).with_css_resource_dir(css_dir);
+    let builder = EpubBuilder::new(config)
+        .with_css_resource_dir(css_dir)
+        .with_app_handle(app_handle);
 
     // 別スレッドで実行（ブロッキング処理のため）
     tokio::task::spawn_blocking(move || builder.build())
@@ -79,6 +81,11 @@ fn validate_pages(metadata: &EpubMetadata, pages: &[EpubPage]) -> Result<(), Str
         return Err("ページが1つもありません".to_string());
     }
 
+    // 白紙ページのみではEPUB生成不可（基準サイズが算出できないため）
+    if pages.iter().all(|p| p.is_blank) {
+        return Err("白紙ページのみではEPUBを生成できません。画像ページを追加してください".to_string());
+    }
+
     // 奥付ページの確認
     let has_colophon = pages.iter().any(|p| p.is_colophon);
     let allow_missing_colophon = metadata.output_format == EpubFormat::Hybrid
@@ -88,8 +95,11 @@ fn validate_pages(metadata: &EpubMetadata, pages: &[EpubPage]) -> Result<(), Str
         return Err("奥付ページを設定してください".to_string());
     }
 
-    // ソースファイルの存在確認
+    // ソースファイルの存在確認（白紙ページはスキップ）
     for page in pages {
+        if page.is_blank {
+            continue;
+        }
         let path = std::path::Path::new(&page.source_path);
         if !path.exists() {
             return Err(format!(

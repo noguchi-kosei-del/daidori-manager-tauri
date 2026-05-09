@@ -61,6 +61,7 @@ import {
   DragOverlaySidebarItem,
   DragOverlayChapterItem,
   SidebarChapterReorderDropZone,
+  DropPlaceholder,
 } from './components/dnd';
 import { ExportModal, EpubMetadataModal, BleedEditorModal, UpdateDialog } from './components/modals';
 import { EpubMakerView } from './components/epub';
@@ -277,6 +278,27 @@ function App() {
   }), [colorModeGroups]);
   const colorModeTotalCount =
     colorModeCounts.Bitmap + colorModeCounts.Grayscale + colorModeCounts.RGB + colorModeCounts.CMYK;
+
+  // CMYKチェック: エクスポート/EPUB生成前のガード。CMYKがあれば警告ダイアログを出してブロックする。
+  // 戻り値: true=ブロック(中断), false=続行可
+  const blockIfCmyk = (action: 'export' | 'epub') => {
+    if (colorModeCounts.CMYK === 0) return false;
+    const fileList = colorModeGroups.CMYK.slice(0, 20).join('\n');
+    const more = colorModeGroups.CMYK.length > 20
+      ? `\n…他${colorModeGroups.CMYK.length - 20}件`
+      : '';
+    setExportResultDialog({
+      show: true,
+      title: 'CMYKファイルが含まれています',
+      message:
+        action === 'export'
+          ? `CMYKカラーモードのファイルが${colorModeCounts.CMYK}件含まれているため、エクスポートできません。\nRGB/グレースケールに変換してから再度お試しください。`
+          : `CMYKカラーモードのファイルが${colorModeCounts.CMYK}件含まれているため、EPUBを生成できません。\nRGB/グレースケールに変換してから再度お試しください。`,
+      details: fileList + more,
+      isError: true,
+    });
+    return true;
+  };
   const colorModeSummaryBar = colorModeTotalCount > 0 ? (
     <div className={`color-mode-summary-container ${isColorSummaryExpanded ? 'expanded' : 'collapsed'}`}>
       <button
@@ -309,13 +331,15 @@ function App() {
             const swatch = mode === 'Bitmap' ? '#000000'
               : mode === 'Grayscale' ? '#808080'
               : mode === 'RGB' ? '#0078d4'
-              : '#0abfb4';
+              : '#dc2626';
+            const isCmyk = mode === 'CMYK';
             return (
               <div
                 key={mode}
-                className={`color-mode-badge ${hoveredColorMode === mode ? 'active' : ''}`}
+                className={`color-mode-badge ${hoveredColorMode === mode ? 'active' : ''} ${isCmyk ? 'color-mode-badge-warning' : ''}`}
                 onMouseEnter={() => handleBadgeEnter(mode)}
                 onMouseLeave={scheduleHoverClose}
+                title={isCmyk ? 'CMYK画像はEPUBで正しく表示されない可能性があります' : undefined}
               >
                 <span className="color-mode-swatch" style={{ background: swatch }} />
                 <span className="color-mode-label">{label}</span>
@@ -791,11 +815,14 @@ function App() {
       let pageNumber = 1;
       let coverAssigned = false;
       let colophonAssignedFromChapter = false;
+      let nonBlankCount = 0;
 
       for (const chapter of chapters) {
         for (const page of chapter.pages) {
-          // ファイルページのみ（白紙はスキップ）
-          if (page.pageType === 'blank' || !page.filePath) {
+          const isBlankPage =
+            page.pageType === 'blank' || (chapter.type === 'blank' && !page.filePath);
+          // ファイルがなく白紙でもないページは除外
+          if (!isBlankPage && !page.filePath) {
             continue;
           }
           if (isLegacyHybrid && (chapter.type === 'colophon' || page.pageType === 'colophon')) {
@@ -803,29 +830,35 @@ function App() {
           }
 
           const isCover =
-            !coverAssigned && (chapter.type === 'cover' || page.pageType === 'cover');
+            !isBlankPage && !coverAssigned && (chapter.type === 'cover' || page.pageType === 'cover');
           if (isCover) {
             coverAssigned = true;
           }
 
           const isColophon =
-            page.pageType === 'colophon' ||
-            (!colophonAssignedFromChapter && chapter.type === 'colophon');
+            !isBlankPage &&
+            (page.pageType === 'colophon' ||
+              (!colophonAssignedFromChapter && chapter.type === 'colophon'));
           if (chapter.type === 'colophon' && isColophon) {
             colophonAssignedFromChapter = true;
           }
 
-          // 画像サイズを取得
-          let width = generateMetadata.viewportWidth;
-          let height = generateMetadata.viewportHeight;
-          try {
-            const dimensions = await invoke<[number, number]>('get_image_dimensions', {
-              path: page.filePath,
-            });
-            width = dimensions[0];
-            height = dimensions[1];
-          } catch {
-            console.warn(`画像サイズ取得失敗: ${page.filePath}`);
+          // 画像サイズを取得（白紙はバックエンドで多数派サイズに置換される）
+          let width = 0;
+          let height = 0;
+          if (!isBlankPage && page.filePath) {
+            try {
+              const dimensions = await invoke<[number, number]>('get_image_dimensions', {
+                path: page.filePath,
+              });
+              width = dimensions[0];
+              height = dimensions[1];
+            } catch {
+              console.warn(`画像サイズ取得失敗: ${page.filePath}`);
+              width = generateMetadata.viewportWidth;
+              height = generateMetadata.viewportHeight;
+            }
+            nonBlankCount++;
           }
 
           // ページIDを生成
@@ -835,8 +868,10 @@ function App() {
             ? 'p-colophon'
             : `p-${String(pageNumber).padStart(3, '0')}`;
 
-          // ファイル名を生成
-          const ext = page.filePath.split('.').pop()?.toLowerCase() || 'jpg';
+          // ファイル名を生成（白紙は .jpg 固定）
+          const ext = isBlankPage
+            ? 'jpg'
+            : page.filePath?.split('.').pop()?.toLowerCase() || 'jpg';
           const filename = isCover
             ? `cover.${ext}`
             : isColophon
@@ -846,17 +881,28 @@ function App() {
           epubPages.push({
             id: pageId,
             filename,
-            sourcePath: page.filePath,
+            sourcePath: isBlankPage ? '' : page.filePath || '',
             width,
             height,
             isCover,
             isColophon,
+            isBlank: isBlankPage,
           });
 
           if (!isCover && !isColophon) {
             pageNumber++;
           }
         }
+      }
+
+      if (nonBlankCount === 0) {
+        setExportResultDialog({
+          show: true,
+          title: 'EPUB生成失敗',
+          message: '白紙ページのみではEPUBを生成できません。画像ページを追加してください',
+          isError: true,
+        });
+        return;
       }
 
       // EPUB生成
@@ -1382,7 +1428,7 @@ function App() {
             <div className={`toolbar-content ${isToolbarCollapsed ? 'collapsed' : ''}`}>
               <button
                 className="export-btn"
-                onClick={() => openExportModal()}
+                onClick={() => { if (!blockIfCmyk('export')) openExportModal(); }}
                 title="エクスポート"
                 disabled={allPages.length === 0}
               >
@@ -1391,7 +1437,7 @@ function App() {
 
               <button
                 className="btn-epub"
-                onClick={() => setIsEpubModalOpen(true)}
+                onClick={() => { if (!blockIfCmyk('epub')) setIsEpubModalOpen(true); }}
                 title="EPUBを生成"
                 disabled={allPages.length === 0}
               >
@@ -1544,9 +1590,21 @@ function App() {
                   </button>
                   <button
                     className="btn-secondary btn-small"
+                    onClick={() => handleAddChapter('title')}
+                  >
+                    +総扉
+                  </button>
+                  <button
+                    className="btn-secondary btn-small"
                     onClick={() => handleAddChapter('blank')}
                   >
                     +白紙
+                  </button>
+                  <button
+                    className="btn-secondary btn-small"
+                    onClick={() => handleAddChapter('toc')}
+                  >
+                    +目次
                   </button>
                   <button
                     className="btn-secondary btn-small"
@@ -1742,9 +1800,30 @@ function App() {
                                             style={{ backgroundColor: CHAPTER_TYPE_COLORS[group.chapter.type] }}
                                           />
                                         </div>
-                                      ) : (
+                                      ) : (() => {
+                                        // 単一ドラッグ時のソース位置を取得（no-op判定用）
+                                        const singleDraggedId = draggedPageIds.length === 1 ? draggedPageIds[0] : null;
+                                        const sourceChapter = singleDraggedId
+                                          ? chapters.find(c => c.pages.some(p => p.id === singleDraggedId))
+                                          : null;
+                                        const sourceChapterId = sourceChapter?.id ?? null;
+                                        const sourceIdx = sourceChapter?.pages.findIndex(p => p.id === singleDraggedId) ?? -1;
                                         // ページがある場合：各ページにヘッダーとアンダーラインを付ける
-                                        pagesToShow.map((item, idx) => (
+                                        return pagesToShow.map((item, idx) => {
+                                          // この対象ページのチャプター内インデックス
+                                          const targetIdxInChapter = group.chapter.pages.findIndex(p => p.id === item.page.id);
+                                          const isSameChapterDrag = singleDraggedId !== null && sourceChapterId === group.chapter.id;
+                                          // no-op: 同チャプター内で隣接位置 or 自分自身へのドロップ
+                                          const isNoopBefore = isSameChapterDrag && (sourceIdx === targetIdxInChapter || sourceIdx === targetIdxInChapter - 1);
+                                          const isNoopAfter = isSameChapterDrag && (sourceIdx === targetIdxInChapter || sourceIdx === targetIdxInChapter + 1);
+                                          const isInternalBefore = !!(dropTarget?.pageId === item.page.id && activeId && dropTarget?.type === 'page-before' && !isNoopBefore);
+                                          const isInternalAfter = !!(dropTarget?.pageId === item.page.id && activeId && dropTarget?.type === 'page-after' && !isNoopAfter);
+                                          const isFileBefore = !!(fileDropTargetPageId === item.page.id && isDraggingFiles && insertPosition === 'before');
+                                          const isFileAfter = !!(fileDropTargetPageId === item.page.id && isDraggingFiles && insertPosition === 'after');
+                                          const showBeforePlaceholder = isInternalBefore || isFileBefore;
+                                          const showAfterPlaceholder = isInternalAfter || isFileAfter;
+                                          const placeholderVariant = (isFileBefore || isFileAfter) ? 'file-drop' : '';
+                                          return (
                                           <div key={item.page.id} className="chapter-page-wrapper">
                                             {/* 最初のページのみヘッダーを表示 */}
                                             {idx === 0 && (
@@ -1768,11 +1847,23 @@ function App() {
                                             )}
                                             {/* ページ */}
                                             <div className="thumbnail-wrapper-with-indicator chapter-flow-page">
-                                              {dropTarget?.pageId === item.page.id && activeId && (dropTarget?.type === 'page-before' || dropTarget?.type === 'page-after') && (
-                                                <div className={`drop-indicator ${dropTarget?.type === 'page-after' ? 'right' : 'left'}`} />
+                                              {showBeforePlaceholder && (
+                                                <DropPlaceholder
+                                                  id={`ph:before:${item.page.id}`}
+                                                  width={thumbnailSizeValue}
+                                                  height={thumbnailSizeValue * 1.4}
+                                                  side="before"
+                                                  variant={placeholderVariant || undefined}
+                                                />
                                               )}
-                                              {fileDropTargetPageId === item.page.id && isDraggingFiles && (
-                                                <div className={`drop-indicator file-drop ${insertPosition === 'after' ? 'right' : 'left'}`} />
+                                              {showAfterPlaceholder && (
+                                                <DropPlaceholder
+                                                  id={`ph:after:${item.page.id}`}
+                                                  width={thumbnailSizeValue}
+                                                  height={thumbnailSizeValue * 1.4}
+                                                  side="after"
+                                                  variant={placeholderVariant || undefined}
+                                                />
                                               )}
                                               <ThumbnailCard
                                                 page={item.page}
@@ -1817,8 +1908,9 @@ function App() {
                                               style={{ backgroundColor: CHAPTER_TYPE_COLORS[group.chapter.type] }}
                                             />
                                           </div>
-                                        ))
-                                      )}
+                                          );
+                                        });
+                                      })()}
                                     </div>
                                   );
                                 })}
@@ -1953,7 +2045,7 @@ function App() {
           ) : (
             <DragOverlayThumbnail
               page={activePageData.page}
-              thumbnailSize={thumbnailSizeValue}
+              thumbnailSize={80}
               dragCount={draggedPageIds.length}
             />
           )
@@ -2038,7 +2130,7 @@ function App() {
                   className="btn-epub btn-small"
                   onClick={() => {
                     closeExportResultDialog();
-                    setIsEpubModalOpen(true);
+                    if (!blockIfCmyk('epub')) setIsEpubModalOpen(true);
                   }}
                 >
                   <BookIcon size={14} />
