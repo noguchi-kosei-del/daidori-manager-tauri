@@ -1532,3 +1532,108 @@ pub struct PsdGuide {
 - `useDragHandlers.handleDragOver` でプレースホルダー上ホバー時に `setDropTarget({ type: 'page-before' | 'page-after' })` で位置をロック
 - リスト表示は横並びwrapのため、位置判定をX軸基準に変更（サイドバー縦並びはY軸のまま）
 - 新規CSS: `.chapter-page-placeholder`（base + side-before/side-after/locked/file-drop バリアント）、`@keyframes placeholderPulse` / `placeholderPulseFile`
+
+### 2026-05-10: UX大改修・EPUB生成プレビュー統合・ダイアログアニメーション (v1.1.0)
+
+#### サイドバーチャプターのファイル/フォルダドロップ対応（src/App.tsx, src/components/sidebar/ChapterItem.tsx, src/styles.css）
+- サイドバーの `.chapter-item` に `data-chapter-id` を付与し、`isFileDropTarget` prop でハイライト
+- `__getDropInfoFromPosition` でサイドバー `.chapter-item[data-chapter-id]` を検出して `mode: 'append-chapter'` 設定
+- 旧 `.chapter-separator` セレクタ（未使用）を `.chapter-underline-header[data-chapter-id]` に修正
+- `__dropHandler` をフォルダ対応化: 個別画像ファイルとフォルダ候補に分類し、フォルダパスは `get_folder_contents` を直接呼んで中身を全件追加
+- 新規CSS `.chapter-item.file-drop-target`: アクセントカラー枠線+ハイライト
+
+#### preview-area 右下フローティングアクションボタン（後にツールバー右側へ移動）（src/App.tsx, src/styles.css）
+- Comic-Bridge の PDF 化ボタンを参考にエクスポート/EPUB 生成ボタンを preview-area 右下に配置
+- 後の指摘で `toolbar-content` 右側に移動し、`.toolbar-spacer { flex: 1 }` で左右ボタングループを離す
+- `.preview-fab` ピル形状（`border-radius: 999px`）+ プライマリ青グラデーション/セカンダリアクセント枠線
+- `.preview-fab-toolbar` バリアント: 高さ 36px / 最小幅 132px / 影なし
+
+#### 「話」→「本文」リネーム（src/types.ts, src/store.ts, src/App.tsx, src/components/modals/ExportModal.tsx）
+- `CHAPTER_TYPE_LABELS.chapter`: `'話'` → `'本文'`
+- デフォルトチャプター名: `第${n}話` → `本文${n}`
+- サイドバー追加ボタン `+話` → `+本文`
+- 断ち切り設定ラジオ `話ごと` → `本文ごと`、説明文 `各話チャプター` → `各本文チャプター`
+
+#### 複数フォルダ → 本文チャプター分割ダイアログ（src/store.ts, src/components/modals/SplitFoldersDialog.tsx, src/App.tsx）
+- 新規 store アクション `insertChaptersFromFolders(insertAt, type, folders)`: 複数フォルダを各々別チャプターとして指定位置に一括挿入。type 引数で生成タイプを選択（cover は1ファイル制限維持）
+- 新規モーダル `SplitFoldersDialog`: フォルダごとのチェックボックス + チャプター名編集UI、3列グリッド、ピル型ボタン、ESCキャンセル対応
+- 起動条件: `mode === 'append-chapter'` + 2 個以上のフォルダドロップ + 白紙以外のチャプタータイプ
+- ドロップ先チャプターを「先頭行（ドロップ先）」として含め、選択時は `addPagesToChapter` で内容追加 + `renameChapter` でリネーム、残りは `insertChaptersFromFolders` で直後に挿入
+- フォルダ選択ピッカー（`handleAddFolder`）も `multiple: true; directory: true` に変更し、複数選択で同じ分割ダイアログを起動
+- 全チャプタータイプ対応（chapter/cover/intermission/colophon/ad/title/toc）。タイプごとにダイアログタイトル・デフォルト名を切替
+
+#### EPUB出版社のトグル化（src/components/modals/EpubMetadataModal.tsx, src/styles.css）
+- 出版社入力をピル型トグル `[CLLENN | その他]` に変更。CLLENN 選択時は `publisher='CLLENN'` + `publisherFileAs='シレン'` を自動設定
+- その他選択時は自由入力欄を表示（直前が CLLENN なら値をクリア）
+- デフォルトは CLLENN
+
+#### EPUB生成ダイアログに見開きプレビュー統合（src/components/modals/EpubMetadataModal.tsx, src/styles.css）
+- モーダル幅を 600px → 1300px（max-width 95vw）に拡大
+- 左ペイン（flex: 1）: `EpubSpreadPreview` 再利用（綴じ方向 RTL/LTR をフォーム選択と連動）。`isOpen` 切替で `loadEpubFromDaidori()` を実行し最新台割を反映
+- 右ペイン（560px固定）: 既存メタデータフォーム
+- `@media (max-width: 1100px)` で縦並びにフォールバック
+- `EpubThumbnailBar` は表示せず、見開きビューア内蔵のフローティングナビゲーションバーで操作
+
+#### モーダルのキャンセル時フェードアウトアニメーション（src/hooks/useModalAnimation.ts, src/styles.css, 各モーダル）
+- 新規フック `useModalAnimation(isOpen, exitDuration=300)`: `isOpen` 偽転換時に `isClosing=true` を立て、300ms 後に `shouldRender=false` でアンマウント
+- 新規キーフレーム `fadeOut` / `slideDown`（既存 `fadeIn` / `slideUp` の逆）+ `.modal-overlay.closing` / `.modal-content.closing` で適用
+- 適用先: ExportModal / EpubMetadataModal / BleedEditorModal / SplitFoldersDialog / 削除確認ダイアログ / ウィンドウ終了確認ダイアログ / エクスポート結果ダイアログ
+- SplitFoldersDialog は `isOpen` prop を新設、App.tsx 側で `splitFoldersDialog.open` フラグと `closeSplitFoldersDialog()` ヘルパで「フェードアウト → 300ms 後にデータをnull」のフローを実装
+
+#### ダイアログUI共通刷新（src/styles.css, 各モーダル）
+- `.modal-footer` をグローバル化: `background: transparent` + `border-top: none` + パディング拡大、ボタンを `border-radius: 999px` ピル形状 + `padding: 10px var(--spacing-xl)` + `min-width: 120px` + `font-weight: semibold` に統一
+- ホバーで `brightness(1.08)` + 影強調 + `translateY(-1px)`、押下で `scale(0.97)`
+- 全ダイアログから `btn-icon modal-close`（×ボタン）を削除（オーバーレイクリック・ESC・フッターボタンで閉じ）
+- アプリ終了警告ダイアログのタイトル色を warning（黄）→ error（赤）に変更
+- `label.section-heading` / `h3.section-heading` クラス: 18px/700 で見出し強調。エクスポートでは「出力先フォルダ・出力方法・リネーム設定」、EPUB生成では「出力設定・書籍情報・著者情報・識別子」の見出しに付与
+
+#### 文言調整（src/components/modals/ExportModal.tsx）
+- 「高画質JPGに変換して出力」→「高画質JPGに変換して出力（対応ファイル：PSD）」
+- 「PhotoshopでTIFFに変換（PSD・JPEG）」→「PhotoshopでTIFFに変換（対応ファイル：PSD・JPEG）」
+- 「PhotoshopでJPEGに変換（PSD）」→「PhotoshopでJPEGに変換（対応ファイル：PSD）」
+- 「プレフィックス（任意）」→「ファイル名（任意）」
+- 「プレビュー」→「ファイル名プレビュー」
+- 「リネームモード」ラベル削除（一括設定/チャプターごとに設定 ラジオはそのまま残置）
+
+#### ウィンドウ終了確認ダイアログ（src/App.tsx）
+- `getCurrentWindow().onCloseRequested()` で X ボタン・Alt+F4・Cmd+Q をインターセプト
+- `chapters.some(c => c.pages.some(p => p.pageType === 'file'))` でファイル読み込み中を検出
+- ファイルがある場合は `event.preventDefault()` + 警告ダイアログ表示、確定で `getCurrentWindow().destroy()`（onCloseRequested を発火させずに即時終了）
+
+#### サイドバーチャプター並べ替えバグ修正（src/hooks/useDragHandlers.ts, src/components/sidebar/ChapterItem.tsx, src/styles.css）
+- 下→上ドラッグ時に上手く移動しない問題を修正: `verticalListSortingStrategy` のシフトで `over.rect` のセンターが変動して判定が反転する問題
+- rect ベース判定 → 配列インデックス方向ベース判定に変更: `activeIndex > overIndex ? 'chapter-before' : 'chapter-after'`
+- 「先頭に移動」「末尾に移動」ラベル付き SidebarChapterReorderDropZone を撤去
+- 旧 `chapter-header-insertion-line`（細線）を廃止し、ChapterItem を `<>` でラップして `.chapter-drop-placeholder`（点線枠 56px / 2px dashed accent / accent-subtle 背景）を直前/直後に描画
+
+#### リスト表示ドラッグ仕様変更（src/App.tsx, src/hooks/useDragHandlers.ts）
+- `rectSortingStrategy` を `noShiftStrategy: SortingStrategy = () => null` に置換し、ドラッグ中に他のカードが動かないように
+- `DropTarget` 型に `locked?: boolean` フィールド追加
+- `ph:` プレースホルダー上ホバー時のみ `locked: true`、カードに近いだけの状態は `locked: undefined`
+- handleDragEnd でページ並べ替えを `dropTarget.locked` で gate: 点線（locked=false）状態でリリースされた場合は元の位置に戻る
+- サイドバー / チャプター並べ替えは従来通り即ロック確定
+
+#### EPUB生成・エクスポートボタン位置・形状調整（src/styles.css）
+- ボタン形状をダイアログボタンと同じ `border-radius: 999px` ピル形状に統一
+- 影削除: disabled / hover / 通常状態の box-shadow をすべて除去
+- ツールバー右側配置（`toolbar-spacer` 経由）
+
+#### chapter-actions-bar 4列化（src/styles.css）
+- `grid-template-columns: repeat(3, 1fr)` → `repeat(4, 1fr)`: 8ボタン（表紙・総扉・白紙・目次・本文・幕間・奥付・AD）が 4列×2行 で配置
+
+#### 新規ファイル
+| ファイル | 説明 |
+|---------|------|
+| `src/components/modals/SplitFoldersDialog.tsx` | 複数フォルダ→チャプター分割ダイアログ |
+| `src/hooks/useModalAnimation.ts` | モーダルのフェードイン/フェードアウトアニメーション制御フック |
+
+#### 新規CSSクラス
+- `.chapter-item.file-drop-target` / `.chapter-drop-placeholder`
+- `.preview-fab` / `.preview-fab-primary` / `.preview-fab-secondary` / `.preview-fab-toolbar` / `.preview-fab-label` / `.toolbar-spacer`
+- `.publisher-toggle` / `.publisher-toggle-btn` / `.publisher-custom-input`
+- `.epub-modal-split` / `.epub-preview-pane`
+- `.split-folders-modal` / `.split-folders-list` / `.split-folders-row` / `.split-folders-folder` / `.split-folders-name-input` / `.split-folders-summary` / `.split-folders-annotation`
+- `label.section-heading` / `h3.section-heading`
+- `.modal-overlay.closing` / `.modal-content.closing`
+- `@keyframes fadeOut` / `@keyframes slideDown`
+

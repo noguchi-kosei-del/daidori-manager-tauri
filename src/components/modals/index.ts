@@ -4,3 +4,5 @@ export { EpubMetadataModal } from './EpubMetadataModal';
 export { BleedEditorModal } from './BleedEditorModal';
 export { UpdateDialog } from './UpdateDialog';
 export type { UpdateDialogProps } from './UpdateDialog';
+export { SplitFoldersDialog } from './SplitFoldersDialog';
+export type { SplitFolderEntry, SplitFoldersDialogResult } from './SplitFoldersDialog';

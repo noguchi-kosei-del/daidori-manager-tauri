@@ -3,6 +3,7 @@ import { convertFileSrc } from '@tauri-apps/api/core';
 import { invoke } from '@tauri-apps/api/core';
 import { BleedMargins } from './ExportModal';
 import { LockIcon, UnlockIcon, ResetIcon } from '../../icons';
+import { useModalAnimation } from '../../hooks';
 
 interface Guide {
   type: 'h' | 'v';
@@ -324,11 +325,12 @@ export function BleedEditorModal({
     return { left: l, top: t, width: r - l, height: b - t };
   })();
 
-  if (!isOpen) return null;
+  const { shouldRender, isClosing } = useModalAnimation(isOpen);
+  if (!shouldRender) return null;
 
   return (
-    <div className="modal-overlay bleed-editor-overlay">
-      <div className="bleed-editor-modal" onClick={(e) => e.stopPropagation()}>
+    <div className={`modal-overlay bleed-editor-overlay ${isClosing ? 'closing' : ''}`}>
+      <div className={`bleed-editor-modal ${isClosing ? 'closing' : ''}`} onClick={(e) => e.stopPropagation()}>
         <div className="bleed-editor-header">
           <h2>{label}の断ち切り範囲設定</h2>
           <div className="bleed-editor-hint">{hint}</div>

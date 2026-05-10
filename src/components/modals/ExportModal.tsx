@@ -4,6 +4,7 @@ import { desktopDir, join } from '@tauri-apps/api/path';
 import { invoke } from '@tauri-apps/api/core';
 import { Chapter, CHAPTER_TYPE_LABELS, CHAPTER_TYPE_COLORS } from '../../types';
 import { ExportIcon } from '../../icons';
+import { useModalAnimation } from '../../hooks';
 
 // チャプターごとのリネーム設定
 export interface ChapterRenameSettings {
@@ -176,23 +177,21 @@ export function ExportModal({
   const previewName1 = `${prefix}${String(startNumber).padStart(digits, '0')}.jpg`;
   const previewName2 = `${prefix}${String(startNumber + 1).padStart(digits, '0')}.jpg`;
 
-  if (!isOpen) return null;
+  const { shouldRender, isClosing } = useModalAnimation(isOpen);
+  if (!shouldRender) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content export-modal" onClick={(e) => e.stopPropagation()}>
+    <div className={`modal-overlay ${isClosing ? 'closing' : ''}`} onClick={onClose}>
+      <div className={`modal-content export-modal ${isClosing ? 'closing' : ''}`} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>
             <ExportIcon size={18} />
             エクスポート
           </h2>
-          <button className="btn-icon modal-close" onClick={onClose}>
-            ×
-          </button>
         </div>
         <div className="modal-body">
           <div className="form-group">
-            <label>出力先フォルダ</label>
+            <label className="section-heading">出力先フォルダ</label>
             <div className="input-with-button">
               <input
                 type="text"
@@ -208,7 +207,7 @@ export function ExportModal({
           </div>
 
           <div className="form-group">
-            <label>出力方法</label>
+            <label className="section-heading">出力方法</label>
             <div className="radio-group">
               <label className="radio-label">
                 <input
@@ -246,7 +245,7 @@ export function ExportModal({
                   }
                 }}
               />
-              高画質JPGに変換して出力
+              高画質JPGに変換して出力（対応ファイル：PSD）
             </label>
             {convertToJpg && (
               <div className="quality-slider">
@@ -280,7 +279,7 @@ export function ExportModal({
                   }
                 }}
               />
-              PhotoshopでTIFFに変換（PSD・JPEG）
+              PhotoshopでTIFFに変換（対応ファイル：PSD・JPEG）
               {!photoshopInstalled && photoshopInstalled !== null && (
                 <span className="option-note"> - Photoshopが見つかりません</span>
               )}
@@ -311,7 +310,7 @@ export function ExportModal({
                   }
                 }}
               />
-              PhotoshopでJPEGに変換（PSD）
+              PhotoshopでJPEGに変換（対応ファイル：PSD）
               {!photoshopInstalled && photoshopInstalled !== null && (
                 <span className="option-note"> - Photoshopが見つかりません</span>
               )}
@@ -349,17 +348,16 @@ export function ExportModal({
                     checked={bleedMode === 'per-chapter'}
                     onChange={() => setBleedMode('per-chapter')}
                   />
-                  話ごと
-                  <span className="radio-description">各話チャプターごとに個別設定</span>
+                  本文ごと
+                  <span className="radio-description">各本文チャプターごとに個別設定</span>
                 </label>
               </div>
             </div>
           )}
 
           <div className="form-section">
-            <h3>リネーム設定</h3>
+            <h3 className="section-heading">リネーム設定</h3>
             <div className="form-group">
-              <label>リネームモード</label>
               <div className="radio-group">
                 <label className="radio-label">
                   <input
@@ -435,7 +433,7 @@ export function ExportModal({
                   </div>
                 </div>
                 <div className="form-group">
-                  <label>プレフィックス（任意）</label>
+                  <label>ファイル名（任意）</label>
                   <input
                     type="text"
                     value={prefix}
@@ -444,7 +442,7 @@ export function ExportModal({
                   />
                 </div>
                 <div className="form-group">
-                  <label>プレビュー</label>
+                  <label>ファイル名プレビュー</label>
                   <div className="filename-preview">
                     {previewName1}, {previewName2}, ...
                   </div>

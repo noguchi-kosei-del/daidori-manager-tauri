@@ -10,16 +10,14 @@ import {
   CollisionDetection,
 } from '@dnd-kit/core';
 import { Chapter, Page } from '../types';
-import {
-  SIDEBAR_PREFIX,
-  CHAPTER_REORDER_DROP_ZONE_START_ID,
-  CHAPTER_REORDER_DROP_ZONE_END_ID,
-} from '../constants/dnd';
+import { SIDEBAR_PREFIX } from '../constants/dnd';
 
 export type DropTarget = {
   type: 'page-before' | 'page-after' | 'chapter-before' | 'chapter-after' | 'chapter-end';
   chapterId: string;
   pageId?: string;
+  /** リスト表示の点線プレースホルダー上にカーソルが乗っている（ロック状態）: ドロップで実際に並べ替えを実行する */
+  locked?: boolean;
 } | null;
 
 interface AllPageItem {
@@ -71,9 +69,7 @@ export function useDragHandlers({
       const chapterIds = new Set(chapters.map(c => c.id));
       const chapterContainers = droppableContainers.filter(container => {
         const id = String(container.id);
-        return chapterIds.has(id) ||
-               id === CHAPTER_REORDER_DROP_ZONE_START_ID ||
-               id === CHAPTER_REORDER_DROP_ZONE_END_ID;
+        return chapterIds.has(id);
       });
 
       // フィルタリングされたコンテナでclosestCenterを使用
@@ -120,7 +116,7 @@ export function useDragHandlers({
 
     const overIdStr = String(over.id);
 
-    // プレースホルダー上にホバー: 位置をロック
+    // プレースホルダー上にホバー: 位置をロック（実線表示・ドロップで並べ替え確定）
     if (overIdStr.startsWith('ph:')) {
       const parts = overIdStr.split(':');
       const position = parts[1];
@@ -131,6 +127,7 @@ export function useDragHandlers({
           type: position === 'before' ? 'page-before' : 'page-after',
           chapterId: overPage.chapter.id,
           pageId,
+          locked: true,
         });
       }
       return;
@@ -142,25 +139,17 @@ export function useDragHandlers({
 
     // チャプタードラッグの場合
     if (activeDragType === 'chapter') {
-      // 特殊ドロップゾーンのチェック
-      if (overIdStr === CHAPTER_REORDER_DROP_ZONE_START_ID) {
-        setDropTarget({ type: 'chapter-before', chapterId: chapters[0]?.id || '' });
-        return;
-      }
-      if (overIdStr === CHAPTER_REORDER_DROP_ZONE_END_ID) {
-        setDropTarget({ type: 'chapter-after', chapterId: chapters[chapters.length - 1]?.id || '' });
-        return;
-      }
-
       // チャプター上にホバー（サイドバー）
-      const isChapterId = chapters.some(c => c.id === overIdStr);
-      if (isChapterId) {
-        // ドラッグ中のアイテムの中央位置とover要素の中央を比較
-        const overRect = over.rect;
-        const overCenterY = overRect.top + overRect.height / 2;
-        // ドラッグアイテムの中央がover要素の中央より上なら「前」、下なら「後」
-        const insertType = activeCenterY < overCenterY ? 'chapter-before' : 'chapter-after';
-        setDropTarget({ type: insertType, chapterId: overIdStr });
+      // ドラッグ方向（active が over より上か下か）でビジュアル指標を切替:
+      //  - active が over より下にある（下→上にドラッグ中） → 'chapter-before'（over の上に挿入）
+      //  - active が over より上にある（上→下にドラッグ中） → 'chapter-after'（over の下に挿入）
+      // この方式は SortableContext の verticalListSortingStrategy が
+      // active.id を over の位置に挿入する dnd-kit 標準動作と一致する
+      const overIndex = chapters.findIndex(c => c.id === overIdStr);
+      const activeIndex = chapters.findIndex(c => c.id === String(active.id));
+      if (overIndex !== -1 && activeIndex !== -1) {
+        const insertType = activeIndex > overIndex ? 'chapter-before' : 'chapter-after';
+        setDropTarget({ type: insertType, chapterId: overIdStr, locked: true });
       } else {
         setDropTarget(null);
       }
@@ -199,7 +188,13 @@ export function useDragHandlers({
         insertType = activeCenterX < overCenterX ? 'page-before' : 'page-after';
       }
 
-      setDropTarget({ type: insertType, chapterId: overPage.chapter.id, pageId: actualOverId });
+      // サイドバーは従来通り即ロック（ドロップで確定）。リスト表示は点線プレースホルダー上にホバーするまでロックしない
+      setDropTarget({
+        type: insertType,
+        chapterId: overPage.chapter.id,
+        pageId: actualOverId,
+        locked: isSidebarDrag,
+      });
     } else {
       setDropTarget(null);
     }
@@ -231,12 +226,14 @@ export function useDragHandlers({
       if (dropTarget.type === 'chapter-before' || dropTarget.type === 'chapter-after') {
         const targetIndex = chapters.findIndex((c) => c.id === dropTarget.chapterId);
         if (targetIndex !== -1) {
-          const newIndex = dropTarget.type === 'chapter-after' ? targetIndex + 1 : targetIndex;
-          // 自分より後ろに移動する場合は、自分が抜けた分を考慮
-          const adjustedIndex = newIndex > oldIndex ? newIndex - 1 : newIndex;
-          // 実際に位置が変わる場合のみ移動
-          if (adjustedIndex !== oldIndex) {
-            reorderChapters(oldIndex, adjustedIndex);
+          // dnd-kit 標準パターン: over.id の位置に active を移動（splice ベースの reorderChapters と整合）
+          // 'chapter-after' の場合のみ +1 する。reorderChapters は from を抜いた後の配列に対して to で挿入するので
+          // 自分より後ろへの移動のオフセット補正は不要（splice(from,1) で一旦抜く実装のため）。
+          let newIndex = dropTarget.type === 'chapter-after' ? targetIndex + 1 : targetIndex;
+          // newIndex が oldIndex より後ろの場合、抜いた分だけ index を1つ前にずらす
+          if (newIndex > oldIndex) newIndex -= 1;
+          if (newIndex !== oldIndex) {
+            reorderChapters(oldIndex, newIndex);
           }
         }
       }
@@ -265,7 +262,8 @@ export function useDragHandlers({
       const isMultiDrag = draggedPageIds.length > 1;
 
       // 通常のページ移動（page-before / page-after）
-      if ((dropTarget.type === 'page-before' || dropTarget.type === 'page-after') && dropTarget.pageId) {
+      // dropTarget.locked が false の場合は確定せずキャンセル（点線プレースホルダー上にホバーしていない状態でリリースされた）
+      if ((dropTarget.type === 'page-before' || dropTarget.type === 'page-after') && dropTarget.pageId && dropTarget.locked) {
         const toChapterId = dropTarget.chapterId;
         const targetChapter = chapters.find(c => c.id === toChapterId);
 

@@ -9,11 +9,14 @@ import {
 import {
   SortableContext,
   verticalListSortingStrategy,
-  rectSortingStrategy,
 } from '@dnd-kit/sortable';
+import type { SortingStrategy } from '@dnd-kit/sortable';
+
+// 他のカードを動かさない（自動シフトしない）並べ替えストラテジー
+const noShiftStrategy: SortingStrategy = () => null;
 import { useStore, FileInfo, THUMBNAIL_SIZES } from './store';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useKeyboardShortcuts, useDragHandlers, useExport, queueThumbnail, useAutoUpdate, scheduleStartupCheck } from './hooks';
+import { useKeyboardShortcuts, useDragHandlers, useExport, queueThumbnail, useAutoUpdate, scheduleStartupCheck, useModalAnimation } from './hooks';
 import { getVersion } from '@tauri-apps/api/app';
 import { describePhysicalSize } from './utils/paperSize';
 import {
@@ -60,10 +63,10 @@ import {
   DragOverlayThumbnail,
   DragOverlaySidebarItem,
   DragOverlayChapterItem,
-  SidebarChapterReorderDropZone,
   DropPlaceholder,
 } from './components/dnd';
-import { ExportModal, EpubMetadataModal, BleedEditorModal, UpdateDialog } from './components/modals';
+import { ExportModal, EpubMetadataModal, BleedEditorModal, UpdateDialog, SplitFoldersDialog } from './components/modals';
+import type { SplitFolderEntry, SplitFoldersDialogResult } from './components/modals';
 import { EpubMakerView } from './components/epub';
 import { EpubMetadata, EpubPage, EpubGenerateResponse } from './types';
 import {
@@ -92,6 +95,7 @@ function App() {
     addPagesToChapter,
     replacePagesInChapter,
     addPagesToChapterAt,
+    insertChaptersFromFolders,
     addSpecialPage,
     setPageFile,
     removePage,
@@ -147,6 +151,15 @@ function App() {
     const saved = localStorage.getItem('daidori_dark_mode');
     return saved !== 'false'; // 明示的にfalseでない限りダークモード
   });
+  const [splitFoldersDialog, setSplitFoldersDialog] = useState<{
+    folders: SplitFolderEntry[];
+    targetChapterId: string;
+    open: boolean;
+  } | null>(null);
+  const closeSplitFoldersDialog = () => {
+    setSplitFoldersDialog((prev) => (prev ? { ...prev, open: false } : null));
+    setTimeout(() => setSplitFoldersDialog(null), 300);
+  };
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [fileDropTargetPageId, setFileDropTargetPageId] = useState<string | null>(null);
   const [fileDropMode, setFileDropMode] = useState<'insert' | 'append-chapter' | 'new-chapter' | 'new-chapter-start' | null>(null);
@@ -208,6 +221,54 @@ function App() {
     chapterName?: string;
     pageCount?: number;
   }>({ show: false, type: 'chapter' });
+
+  // ウィンドウ終了確認ダイアログ
+  const [showCloseConfirmDialog, setShowCloseConfirmDialog] = useState(false);
+  const closeConfirmAnim = useModalAnimation(showCloseConfirmDialog);
+  const deleteConfirmAnim = useModalAnimation(deleteConfirmDialog.show);
+  // exportResultDialog はuseExport フック内で管理されているので useModalAnimation 適用は後で（ローカル useEffect で）
+
+  // ウィンドウクローズ要求のインターセプト
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let mounted = true;
+    (async () => {
+      try {
+        const win = getCurrentWindow();
+        const fn = await win.onCloseRequested((event) => {
+          // ファイル（pageType='file'）が読み込まれているかチェック
+          const hasLoadedFiles = useStore
+            .getState()
+            .chapters.some((c) => c.pages.some((p) => p.pageType === 'file'));
+          if (hasLoadedFiles) {
+            event.preventDefault();
+            setShowCloseConfirmDialog(true);
+          }
+        });
+        if (mounted) {
+          unlisten = fn;
+        } else {
+          fn();
+        }
+      } catch (e) {
+        console.error('ウィンドウクローズ監視の登録に失敗:', e);
+      }
+    })();
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, []);
+
+  const handleConfirmClose = async () => {
+    setShowCloseConfirmDialog(false);
+    try {
+      // destroy() は onCloseRequested を発火させずに即座に閉じる
+      await getCurrentWindow().destroy();
+    } catch (e) {
+      console.error('ウィンドウクローズ失敗:', e);
+    }
+  };
 
   // スプラッシュウィンドウを閉じてメインウィンドウを表示
   useEffect(() => {
@@ -378,6 +439,34 @@ function App() {
     setExportResultDialog,
     closeExportResultDialog,
   } = useExport(chapters, allPages);
+
+  const exportResultAnim = useModalAnimation(exportResultDialog.show);
+
+  // ツールバー右側のアクションボタン（エクスポート・EPUB生成）
+  const toolbarActionButtons = (
+    <>
+      <button
+        type="button"
+        className="preview-fab preview-fab-secondary preview-fab-toolbar"
+        onClick={() => { if (!blockIfCmyk('epub')) setIsEpubModalOpen(true); }}
+        disabled={allPages.length === 0}
+        title="EPUBを生成"
+      >
+        <BookIcon size={16} />
+        <span className="preview-fab-label">EPUB生成</span>
+      </button>
+      <button
+        type="button"
+        className="preview-fab preview-fab-primary preview-fab-toolbar"
+        onClick={() => { if (!blockIfCmyk('export')) openExportModal(); }}
+        disabled={allPages.length === 0}
+        title="エクスポート"
+      >
+        <ExportIcon size={16} />
+        <span className="preview-fab-label">エクスポート</span>
+      </button>
+    </>
+  );
 
   // 新規プロジェクト
   const handleNewProject = () => {
@@ -675,16 +764,56 @@ function App() {
       const selected = await open({
         title: 'フォルダを選択',
         directory: true,
+        multiple: true,
       });
 
-      if (selected && typeof selected === 'string' && selected.trim().length > 0) {
-        const files: FileInfo[] = await invoke('get_folder_contents', {
-          folderPath: selected,
-        });
+      if (!selected) return;
+      const rawPaths = Array.isArray(selected) ? selected : [selected];
+      const folderPaths: string[] = rawPaths.filter(
+        (p): p is string => typeof p === 'string' && p.trim().length > 0
+      );
 
-        if (files.length > 0) {
-          addPagesToChapter(chapterId, files);
+      if (folderPaths.length === 0) return;
+
+      // フォルダごとに内容を取得
+      const folderEntries: SplitFolderEntry[] = [];
+      const getFolderName = (folderPath: string): string => {
+        const cleaned = folderPath.replace(/[\\/]+$/, '');
+        const parts = cleaned.split(/[\\/]/);
+        return parts[parts.length - 1] || folderPath;
+      };
+      for (const folderPath of folderPaths) {
+        try {
+          const files: FileInfo[] = await invoke('get_folder_contents', { folderPath });
+          if (files.length > 0) {
+            folderEntries.push({
+              folderPath,
+              folderName: getFolderName(folderPath),
+              files,
+            });
+          }
+        } catch (e) {
+          console.error('フォルダ読み取りエラー:', folderPath, e);
         }
+      }
+
+      if (folderEntries.length === 0) return;
+
+      // 複数フォルダ選択 + 白紙以外 → 分割ダイアログ
+      const targetChapter = chapters.find(c => c.id === chapterId);
+      if (folderEntries.length >= 2 && targetChapter && targetChapter.type !== 'blank') {
+        setSplitFoldersDialog({
+          folders: folderEntries,
+          targetChapterId: chapterId,
+          open: true,
+        });
+        return;
+      }
+
+      // 単一フォルダまたは白紙チャプターは従来通り全ファイル追加
+      const allFiles = folderEntries.flatMap(e => e.files);
+      if (allFiles.length > 0) {
+        addPagesToChapter(chapterId, allFiles);
       }
     } catch (error) {
       console.error('フォルダ追加エラー:', error);
@@ -1044,13 +1173,23 @@ function App() {
     // elementFromPoint で直接ヒットする要素を確認
     const element = document.elementFromPoint(x, y);
 
-    // チャプターセパレーターの上 → そのチャプターの末尾に追加
+    // サイドバーのチャプターアイテム上 → そのチャプターの末尾に追加
     if (element) {
-      const chapterSeparator = element.closest('.chapter-separator');
-      if (chapterSeparator) {
-        const chapterGroup = chapterSeparator.closest('.chapter-group');
-        if (chapterGroup) {
-          const chapterId = chapterGroup.getAttribute('data-chapter-id');
+      const sidebarChapter = element.closest('.chapter-item[data-chapter-id]');
+      if (sidebarChapter) {
+        const chapterId = sidebarChapter.getAttribute('data-chapter-id');
+        if (chapterId) {
+          return { pageId: null, chapterId, mode: 'append-chapter' as const, insertPosition: null };
+        }
+      }
+    }
+
+    // プレビューエリアのチャプターヘッダー上 → そのチャプターの末尾に追加
+    if (element) {
+      const previewChapterHeader = element.closest('.chapter-underline-header[data-chapter-id]');
+      if (previewChapterHeader) {
+        const chapterId = previewChapterHeader.getAttribute('data-chapter-id');
+        if (chapterId) {
           return { pageId: null, chapterId, mode: 'append-chapter' as const, insertPosition: null };
         }
       }
@@ -1189,36 +1328,68 @@ function App() {
     console.log('Processing drop at', now, 'mode:', mode, 'targetPageId:', targetPageId, 'targetChapterId:', targetChapterId, 'insertPos:', insertPos);
 
     try {
-      // 画像ファイルのみをフィルタリング
+      // 画像ファイルとフォルダ候補に分類
       const imageExtensions = ['jpg', 'jpeg', 'png', 'psd', 'tif', 'tiff'];
-      const imagePaths = paths.filter(path => {
-        const ext = path.split('.').pop()?.toLowerCase();
-        return ext && imageExtensions.includes(ext);
-      });
-
-      if (imagePaths.length === 0) {
-        window.__isProcessingDrop = false;
-        return;
+      const imagePaths: string[] = [];
+      const folderCandidates: string[] = [];
+      for (const p of paths) {
+        const ext = p.split('.').pop()?.toLowerCase();
+        if (ext && imageExtensions.includes(ext)) {
+          imagePaths.push(p);
+        } else {
+          folderCandidates.push(p);
+        }
       }
 
-      // ファイル情報を取得（複数フォルダ対応）
-      const folderSet = new Set<string>();
+      // フォルダ単位で取り込み内容をまとめる（後で分割ダイアログ判定にも利用）
+      const folderEntries: SplitFolderEntry[] = [];
+      const getFolderName = (folderPath: string): string => {
+        const cleaned = folderPath.replace(/[\\/]+$/, '');
+        const parts = cleaned.split(/[\\/]/);
+        return parts[parts.length - 1] || folderPath;
+      };
+
+      // 個別ファイル: 親フォルダ単位でグルーピング
+      const parentFolderSet = new Set<string>();
       for (const p of imagePaths) {
         const folder = p.replace(/[^\\/]+$/, '');
-        if (folder) folderSet.add(folder);
+        if (folder) parentFolderSet.add(folder);
       }
-      let allDropFiles: FileInfo[] = [];
-      for (const folder of folderSet) {
-        const files: FileInfo[] = await invoke('get_folder_contents', { folderPath: folder });
-        allDropFiles.push(...files);
+      for (const folder of parentFolderSet) {
+        try {
+          const files: FileInfo[] = await invoke('get_folder_contents', { folderPath: folder });
+          const matched = files.filter(f => imagePaths.includes(f.path));
+          if (matched.length > 0) {
+            folderEntries.push({
+              folderPath: folder,
+              folderName: getFolderName(folder),
+              files: matched,
+            });
+          }
+        } catch (e) {
+          console.error('Failed to read folder:', folder, e);
+        }
       }
 
-      const droppedFiles = allDropFiles.filter((f) =>
-        imagePaths.some((p) => p === f.path)
-      );
+      // フォルダ候補: 直接 get_folder_contents を試行（成功したらフォルダごとにエントリ追加）
+      for (const candidate of folderCandidates) {
+        try {
+          const files: FileInfo[] = await invoke('get_folder_contents', { folderPath: candidate });
+          if (files.length > 0) {
+            folderEntries.push({
+              folderPath: candidate,
+              folderName: getFolderName(candidate),
+              files,
+            });
+          }
+        } catch {
+          // フォルダではない or 読み取り不可はスキップ
+        }
+      }
+
+      const droppedFiles: FileInfo[] = folderEntries.flatMap(e => e.files);
 
       if (droppedFiles.length === 0) {
-        window.__isProcessingDrop = false;
         return;
       }
 
@@ -1226,6 +1397,20 @@ function App() {
       const currentState = useStore.getState();
       const currentChapters = currentState.chapters;
       const currentSelectedChapterId = currentState.selectedChapterId;
+
+      // 2 個以上のフォルダがチャプターにドロップされた場合は分割ダイアログを表示
+      // （白紙はファイルを持たないため除外。他のすべてのチャプタータイプで対応）
+      if (mode === 'append-chapter' && targetChapterId && folderEntries.length >= 2) {
+        const targetChapter = currentChapters.find(c => c.id === targetChapterId);
+        if (targetChapter && targetChapter.type !== 'blank') {
+          setSplitFoldersDialog({
+            folders: folderEntries,
+            targetChapterId,
+            open: true,
+          });
+          return;
+        }
+      }
 
       // モードに応じて処理
       if (mode === 'new-chapter-start') {
@@ -1427,24 +1612,6 @@ function App() {
 
             <div className={`toolbar-content ${isToolbarCollapsed ? 'collapsed' : ''}`}>
               <button
-                className="export-btn"
-                onClick={() => { if (!blockIfCmyk('export')) openExportModal(); }}
-                title="エクスポート"
-                disabled={allPages.length === 0}
-              >
-                <ExportIcon size={18} />
-              </button>
-
-              <button
-                className="btn-epub"
-                onClick={() => { if (!blockIfCmyk('epub')) setIsEpubModalOpen(true); }}
-                title="EPUBを生成"
-                disabled={allPages.length === 0}
-              >
-                <BookIcon size={14} />
-              </button>
-
-              <button
                 className="viewer-mode-btn"
                 onClick={() => setIsViewerMode(true)}
                 title="閲覧モード (F1)"
@@ -1510,6 +1677,10 @@ function App() {
                   </button>
                 );
               })()}
+
+              {/* ツールバー右側: エクスポート・EPUB生成 */}
+              <div className="toolbar-spacer" />
+              {toolbarActionButtons}
             </div>
           </div>
 
@@ -1534,8 +1705,6 @@ function App() {
                     </div>
                   ) : (
                     <>
-                  {/* サイドバー用のチャプター並べ替えゾーン（先頭） */}
-                  <SidebarChapterReorderDropZone isDragging={activeDragType === 'chapter'} position="start" />
                   <SortableContext
                     items={chapters.map((c) => c.id)}
                     strategy={verticalListSortingStrategy}
@@ -1570,11 +1739,10 @@ function App() {
                         onSelectFile={handleSelectFile}
                         onRefreshFile={handleRefreshFile}
                         dropTarget={dropTarget}
+                        isFileDropTarget={fileDropMode === 'append-chapter' && fileDropTargetChapterId === chapter.id}
                       />
                     ))}
                   </SortableContext>
-                  {/* サイドバー用のチャプター並べ替えゾーン（末尾） */}
-                  <SidebarChapterReorderDropZone isDragging={activeDragType === 'chapter'} position="end" />
                     </>
                   )}
                 </div>
@@ -1610,7 +1778,7 @@ function App() {
                     className="btn-secondary btn-small"
                     onClick={() => handleAddChapter('chapter')}
                   >
-                    +話
+                    +本文
                   </button>
                   <button
                     className="btn-secondary btn-small"
@@ -1730,7 +1898,7 @@ function App() {
                 ) : (
                 <SortableContext
                   items={displayPages.map((p) => p.page.id)}
-                  strategy={rectSortingStrategy}
+                  strategy={noShiftStrategy}
                 >
                   {/* 新規チャプター作成ゾーン（先頭・外部ファイルドラッグ時） */}
                   {isDraggingFiles && (
@@ -2059,6 +2227,71 @@ function App() {
         chapters={chapters}
       />
 
+      {/* 複数フォルダ → チャプター分割ダイアログ */}
+      {splitFoldersDialog && (() => {
+        const currentChapters = useStore.getState().chapters;
+        const targetChapter = currentChapters.find(c => c.id === splitFoldersDialog.targetChapterId);
+        const targetType = targetChapter?.type ?? 'chapter';
+        const typeLabel = CHAPTER_TYPE_LABELS[targetType];
+        // 「本文」は連番付き、それ以外のタイプも統一で連番付きで命名
+        const existingTypeCount = currentChapters.filter(c => c.type === targetType).length;
+        const defaultNames = splitFoldersDialog.folders.map((_, i) =>
+          i === 0
+            ? (targetChapter?.name ?? `${typeLabel}${existingTypeCount + i}`)
+            : `${typeLabel}${existingTypeCount + i}`
+        );
+        const rowAnnotations = splitFoldersDialog.folders.map((_, i) =>
+          i === 0 ? '（ドロップ先）' : null
+        );
+        return (
+          <SplitFoldersDialog
+            isOpen={splitFoldersDialog.open}
+            folders={splitFoldersDialog.folders}
+            defaultNames={defaultNames}
+            rowAnnotations={rowAnnotations}
+            chapterTypeLabel={typeLabel}
+            onCancel={closeSplitFoldersDialog}
+            onConfirm={(selected: SplitFoldersDialogResult[]) => {
+              if (!splitFoldersDialog) return;
+              const latestChapters = useStore.getState().chapters;
+              const targetIdx = latestChapters.findIndex(c => c.id === splitFoldersDialog.targetChapterId);
+              const targetId = splitFoldersDialog.targetChapterId;
+              const insertType = latestChapters[targetIdx]?.type ?? targetType;
+
+              // 先頭行（ドロップ先チャプター）が選択されているか
+              const firstRowEnabled =
+                splitFoldersDialog.folders.length > 0 &&
+                selected.length > 0 &&
+                selected[0].files === splitFoldersDialog.folders[0].files;
+
+              if (firstRowEnabled && targetIdx >= 0) {
+                // 1) ドロップ先チャプターをリネーム + 先頭フォルダの内容を追加
+                const first = selected[0];
+                if (first.name !== latestChapters[targetIdx].name) {
+                  renameChapter(targetId, first.name);
+                }
+                addPagesToChapter(targetId, first.files);
+
+                // 2) 残りのフォルダはドロップ先の直後に新規チャプター（同じタイプ）として挿入
+                const rest = selected.slice(1);
+                if (rest.length > 0) {
+                  insertChaptersFromFolders(targetIdx + 1, insertType, rest);
+                }
+                selectChapter(targetId);
+              } else {
+                // 先頭行が未選択 or ターゲットが見つからない: すべて新規挿入
+                const insertAt = targetIdx >= 0 ? targetIdx + 1 : latestChapters.length;
+                const newIds = insertChaptersFromFolders(insertAt, insertType, selected);
+                if (newIds.length > 0) {
+                  selectChapter(newIds[0]);
+                }
+              }
+              closeSplitFoldersDialog();
+            }}
+          />
+        );
+      })()}
+
       {/* 断ち切りエディタ（キュー駆動） */}
       {(() => {
         const { queue, currentIndex } = bleedEditorState;
@@ -2095,9 +2328,9 @@ function App() {
       />
 
       {/* エクスポート結果ダイアログ */}
-      {exportResultDialog.show && (
-        <div className="modal-overlay">
-          <div className={`modal-content export-result-dialog ${exportResultDialog.isError ? 'has-error' : ''}`}>
+      {exportResultAnim.shouldRender && (
+        <div className={`modal-overlay ${exportResultAnim.isClosing ? 'closing' : ''}`}>
+          <div className={`modal-content export-result-dialog ${exportResultDialog.isError ? 'has-error' : ''} ${exportResultAnim.isClosing ? 'closing' : ''}`}>
             <h2>{exportResultDialog.title}</h2>
             <p className="export-result-message">{exportResultDialog.message}</p>
             {exportResultDialog.details && (
@@ -2149,9 +2382,9 @@ function App() {
       )}
 
       {/* 削除確認ダイアログ */}
-      {deleteConfirmDialog.show && (
-        <div className="modal-overlay">
-          <div className="modal-content delete-confirm-dialog">
+      {deleteConfirmAnim.shouldRender && (
+        <div className={`modal-overlay ${deleteConfirmAnim.isClosing ? 'closing' : ''}`}>
+          <div className={`modal-content delete-confirm-dialog ${deleteConfirmAnim.isClosing ? 'closing' : ''}`}>
             <h2>
               {deleteConfirmDialog.type === 'all'
                 ? 'すべて削除'
@@ -2188,6 +2421,37 @@ function App() {
                 }}
               >
                 削除する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ウィンドウ終了確認ダイアログ */}
+      {closeConfirmAnim.shouldRender && (
+        <div className={`modal-overlay ${closeConfirmAnim.isClosing ? 'closing' : ''}`} onClick={() => setShowCloseConfirmDialog(false)}>
+          <div
+            className={`modal-content unsaved-dialog ${closeConfirmAnim.isClosing ? 'closing' : ''}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2>アプリを終了しますか？</h2>
+            <p>
+              読み込まれているチャプターのデータは保存されません。
+              <br />
+              本当に終了してもよろしいですか？
+            </p>
+            <div className="modal-footer">
+              <button
+                className="btn-secondary"
+                onClick={() => setShowCloseConfirmDialog(false)}
+              >
+                キャンセル
+              </button>
+              <button
+                className="btn-danger"
+                onClick={handleConfirmClose}
+              >
+                終了する
               </button>
             </div>
           </div>

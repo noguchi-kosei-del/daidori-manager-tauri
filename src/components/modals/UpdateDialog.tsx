@@ -50,9 +50,6 @@ export function UpdateDialog({ state, onInstall, onDismiss }: UpdateDialogProps)
               <DownloadIcon size={18} />
               アップデート
             </h2>
-            <button className="btn-icon modal-close" onClick={onDismiss}>
-              ×
-            </button>
           </div>
           <div className="modal-body">
             <p className="update-error-message">
@@ -88,11 +85,6 @@ export function UpdateDialog({ state, onInstall, onDismiss }: UpdateDialogProps)
             <DownloadIcon size={18} />
             アップデート
           </h2>
-          {allowClose && (
-            <button className="btn-icon modal-close" onClick={onDismiss}>
-              ×
-            </button>
-          )}
         </div>
         <div className="modal-body update-modal-body">
           {state.state === 'available' && (

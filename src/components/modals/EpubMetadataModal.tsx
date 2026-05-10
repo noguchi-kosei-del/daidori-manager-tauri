@@ -20,7 +20,10 @@ import {
   AUTHOR_ROLE_LABELS,
   Chapter,
 } from '../../types';
-import { BookIcon } from '../../icons';
+import { BookIcon, NoPageIcon } from '../../icons';
+import { useStore } from '../../store';
+import { EpubSpreadPreview } from '../epub/EpubSpreadPreview';
+import { useModalAnimation } from '../../hooks';
 
 interface EpubMetadataModalProps {
   isOpen: boolean;
@@ -40,8 +43,9 @@ export function EpubMetadataModal({
   // 基本情報
   const [title, setTitle] = useState('');
   const [titleFileAs, setTitleFileAs] = useState('');
-  const [publisher, setPublisher] = useState('');
-  const [publisherFileAs, setPublisherFileAs] = useState('');
+  const [publisher, setPublisher] = useState('CLLENN');
+  const [publisherMode, setPublisherMode] = useState<'preset' | 'custom'>('preset');
+  const [publisherFileAs, setPublisherFileAs] = useState('シレン');
   const [isbn, setIsbn] = useState('');
   const [description, setDescription] = useState('');
   const [language] = useState('ja');
@@ -72,6 +76,22 @@ export function EpubMetadataModal({
   // 生成中フラグ
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState<{ phase: string; current: number; total: number } | null>(null);
+
+  // 左ペイン EPUBプレビュー用 store 連携
+  const epubPages = useStore((s) => s.epubPages);
+  const epubCurrentSpread = useStore((s) => s.epubCurrentSpread);
+  const epubSelectedPageId = useStore((s) => s.epubSelectedPageId);
+  const epubSelectedPageIds = useStore((s) => s.epubSelectedPageIds);
+  const setEpubCurrentSpread = useStore((s) => s.setEpubCurrentSpread);
+  const setEpubSelectedPageId = useStore((s) => s.setEpubSelectedPageId);
+  const loadEpubFromDaidori = useStore((s) => s.loadEpubFromDaidori);
+
+  // モーダル開閉と chapters 変化に同期して台割→EPUBページ変換を実行
+  useEffect(() => {
+    if (isOpen) {
+      loadEpubFromDaidori();
+    }
+  }, [isOpen, chapters, loadEpubFromDaidori]);
 
   // 進捗イベントを購読
   useEffect(() => {
@@ -245,7 +265,8 @@ export function EpubMetadataModal({
   // ページ数カウント
   const totalPages = chapters.reduce((sum, ch) => sum + ch.pages.length, 0);
 
-  if (!isOpen) return null;
+  const { shouldRender, isClosing } = useModalAnimation(isOpen);
+  if (!shouldRender) return null;
 
   const renderProgressDialog = () => {
     if (!isGenerating) return null;
@@ -295,9 +316,9 @@ export function EpubMetadataModal({
   };
 
   return (
-    <div className="modal-overlay" onClick={isGenerating ? undefined : onClose}>
+    <div className={`modal-overlay ${isClosing ? 'closing' : ''}`} onClick={isGenerating ? undefined : onClose}>
       <div
-        className="modal-content epub-modal"
+        className={`modal-content epub-modal ${isClosing ? 'closing' : ''}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
@@ -305,16 +326,36 @@ export function EpubMetadataModal({
             <BookIcon size={18} />
             EPUB生成
           </h2>
-          <button className="btn-icon modal-close" onClick={onClose} disabled={isGenerating}>
-            ×
-          </button>
         </div>
         {renderProgressDialog()}
 
-        <div className="modal-body epub-modal-body">
+        <div className="epub-modal-split">
+          {/* 左ペイン: EPUB見開きプレビュー + サムネイルバー */}
+          <div className="epub-preview-pane">
+            {epubPages.length === 0 ? (
+              <div className="spread-viewer-empty">
+                <NoPageIcon size={48} />
+                <p>ページがありません</p>
+              </div>
+            ) : (
+              <EpubSpreadPreview
+                pages={epubPages}
+                currentSpread={epubCurrentSpread}
+                selectedPageId={epubSelectedPageId}
+                selectedPageIds={epubSelectedPageIds}
+                onSpreadChange={setEpubCurrentSpread}
+                onSelectPage={(pageId) => setEpubSelectedPageId(pageId)}
+                bindingDirection={pageDirection}
+                isPageBarVisible={true}
+              />
+            )}
+          </div>
+
+          {/* 右ペイン: メタデータフォーム */}
+          <div className="modal-body epub-modal-body">
           {/* 出力設定 */}
           <div className="form-section">
-            <h3>出力設定</h3>
+            <h3 className="section-heading">出力設定</h3>
             <div className="form-group">
               <label>出力形式</label>
               <select
@@ -375,7 +416,7 @@ export function EpubMetadataModal({
 
           {/* 書籍情報 */}
           <div className="form-section">
-            <h3>書籍情報</h3>
+            <h3 className="section-heading">書籍情報</h3>
             <div className="form-group">
               <label>タイトル *</label>
               <input
@@ -397,12 +438,39 @@ export function EpubMetadataModal({
             <div className="form-row">
               <div className="form-group">
                 <label>出版社 *</label>
-                <input
-                  type="text"
-                  value={publisher}
-                  onChange={(e) => setPublisher(e.target.value)}
-                  placeholder="出版社名"
-                />
+                <div className="publisher-toggle">
+                  <button
+                    type="button"
+                    className={`publisher-toggle-btn ${publisherMode === 'preset' ? 'active' : ''}`}
+                    onClick={() => {
+                      setPublisherMode('preset');
+                      setPublisher('CLLENN');
+                      setPublisherFileAs('シレン');
+                    }}
+                  >
+                    CLLENN
+                  </button>
+                  <button
+                    type="button"
+                    className={`publisher-toggle-btn ${publisherMode === 'custom' ? 'active' : ''}`}
+                    onClick={() => {
+                      setPublisherMode('custom');
+                      if (publisher === 'CLLENN') setPublisher('');
+                      if (publisherFileAs === 'シレン') setPublisherFileAs('');
+                    }}
+                  >
+                    その他
+                  </button>
+                </div>
+                {publisherMode === 'custom' && (
+                  <input
+                    type="text"
+                    className="publisher-custom-input"
+                    value={publisher}
+                    onChange={(e) => setPublisher(e.target.value)}
+                    placeholder="出版社名"
+                  />
+                )}
               </div>
               <div className="form-group">
                 <label>出版社読み仮名</label>
@@ -436,7 +504,7 @@ export function EpubMetadataModal({
 
           {/* 著者情報 */}
           <div className="form-section">
-            <h3>著者情報</h3>
+            <h3 className="section-heading">著者情報</h3>
             {authors.map((author, index) => (
               <div key={index} className="author-entry">
                 <div className="form-row">
@@ -557,7 +625,7 @@ export function EpubMetadataModal({
 
           {/* 識別子 */}
           <div className="form-section">
-            <h3>識別子</h3>
+            <h3 className="section-heading">識別子</h3>
             <div className="form-group">
               <label>UUID</label>
               <div className="input-with-button">
@@ -597,6 +665,7 @@ export function EpubMetadataModal({
                 <span className="stat-value">{EPUB_FORMAT_LABELS[outputFormat]}</span>
               </div>
             </div>
+          </div>
           </div>
         </div>
 

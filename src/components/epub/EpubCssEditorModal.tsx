@@ -132,9 +132,6 @@ export function EpubCssEditorModal({ isOpen, onClose }: EpubCssEditorModalProps)
       >
         <div className="modal-header">
           <h2>CSSエディタ</h2>
-          <button className="btn-icon modal-close" onClick={onClose}>
-            ×
-          </button>
         </div>
 
         <div className="css-editor-toolbar">

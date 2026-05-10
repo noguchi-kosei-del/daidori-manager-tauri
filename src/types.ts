@@ -104,7 +104,7 @@ export interface Chapter {
 
 // 特殊ページのラベル
 export const CHAPTER_TYPE_LABELS: Record<ChapterType, string> = {
-  chapter: '話',
+  chapter: '本文',
   cover: '表紙',
   blank: '白紙',
   intermission: '幕間',

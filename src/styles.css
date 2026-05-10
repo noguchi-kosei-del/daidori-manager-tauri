@@ -597,6 +597,11 @@ body.viewer-mode .hamburger-overlay {
 .chapter-item { margin-bottom: var(--spacing-sm); border-radius: var(--border-radius-lg); background: linear-gradient(145deg, var(--color-bg-tertiary) 0%, var(--color-bg-secondary) 100%); border: 1px solid var(--color-border); overflow: hidden; box-shadow: var(--shadow-sm); flex-shrink: 0; }
 .chapter-item:hover { border-color: var(--color-border-light); box-shadow: var(--shadow-md); }
 .chapter-item.selected { border-color: var(--color-border-accent); box-shadow: var(--shadow-md), 0 0 0 1px var(--color-accent-glow); }
+.chapter-item.file-drop-target {
+  border-color: var(--color-accent) !important;
+  background: var(--color-accent-subtle) !important;
+  box-shadow: 0 0 0 2px var(--color-accent-glow), var(--shadow-md);
+}
 .chapter-item.dragging {
   opacity: 0.5;
 }
@@ -615,6 +620,16 @@ body.viewer-mode .hamburger-overlay {
   background: var(--color-accent);
   border-radius: 0 0 2px 2px;
   box-shadow: 0 0 8px var(--color-accent);
+}
+/* チャプター並べ替え時のドロップ先プレースホルダー（点線枠） */
+.chapter-drop-placeholder {
+  height: 56px;
+  margin-bottom: var(--spacing-sm);
+  border: 2px dashed var(--color-accent);
+  border-radius: var(--border-radius-lg);
+  background: var(--color-accent-subtle);
+  box-sizing: border-box;
+  flex-shrink: 0;
 }
 .chapter-type-badge { padding: var(--spacing-2xs) var(--spacing-sm); border-radius: var(--border-radius-full); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); margin-right: var(--spacing-sm); box-shadow: var(--shadow-sm); }
 .chapter-name { flex: 1; font-weight: var(--font-weight-medium); color: var(--color-text-primary); }
@@ -1318,11 +1333,49 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
 .modal-header { display: flex; align-items: center; justify-content: space-between; padding: var(--spacing-lg) var(--spacing-xl); border-bottom: 1px solid var(--color-border); background: linear-gradient(90deg, var(--color-accent-subtle) 0%, transparent 100%); }
 .modal-header h2 { font-size: var(--font-size-lg); font-weight: var(--font-weight-semibold); color: var(--color-text-primary); display: inline-flex; align-items: center; gap: var(--spacing-sm); }
 .modal-body { padding: var(--spacing-xl); overflow-y: auto; }
-.modal-footer { display: flex; justify-content: flex-end; gap: var(--spacing-sm); padding: var(--spacing-lg) var(--spacing-xl); border-top: 1px solid var(--color-border); background: var(--color-bg-tertiary); }
-.modal-footer .btn-small {
-  padding: var(--spacing-sm) var(--spacing-lg);
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md) var(--spacing-xl) var(--spacing-xl);
+  background: transparent;
+  border-top: none;
+}
+.modal-footer .btn-primary,
+.modal-footer .btn-secondary,
+.modal-footer .btn-danger {
+  padding: 10px var(--spacing-xl);
+  border-radius: 999px;
   font-size: var(--font-size-sm);
-  border-radius: var(--border-radius);
+  font-weight: var(--font-weight-semibold);
+  min-width: 120px;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.2s ease, border-color 0.2s ease, filter 0.2s ease;
+}
+.modal-footer .btn-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  box-shadow: var(--shadow-md), 0 4px 12px var(--color-accent-glow);
+  transform: translateY(-1px);
+}
+.modal-footer .btn-secondary:hover:not(:disabled) {
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+.modal-footer .btn-danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+.modal-footer .btn-primary:active:not(:disabled),
+.modal-footer .btn-secondary:active:not(:disabled),
+.modal-footer .btn-danger:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.modal-footer .btn-small {
+  padding: 8px var(--spacing-lg);
+  font-size: var(--font-size-sm);
   min-width: 100px;
 }
 
@@ -1345,6 +1398,12 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideUp { from { opacity: 0; transform: translateY(20px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+@keyframes slideDown { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(20px) scale(0.98); } }
+
+/* キャンセル時のフェードアウト・スライドダウンアニメーション */
+.modal-overlay.closing { animation: fadeOut var(--transition-base) forwards; }
+.modal-content.closing { animation: slideDown var(--transition-slow) forwards; }
 @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
 @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
 @keyframes highlightPulse {
@@ -1381,7 +1440,7 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
 
 .thumbnail-filename { font-size: var(--font-size-xs); color: var(--color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.chapter-actions-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--spacing-xs); padding: var(--spacing-sm) 0; }
+.chapter-actions-bar { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--spacing-xs); padding: var(--spacing-sm) 0; }
 .chapter-actions-bar > .btn-secondary { width: 100%; min-width: 0; }
 
 .btn-clear-all { display: flex; align-items: center; justify-content: center; gap: var(--spacing-xs); width: 100%; }
@@ -1503,6 +1562,7 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
 .export-modal input[type="number"] {
   width: 100%;
 }
+
 .filename-preview {
   padding: var(--spacing-sm) var(--spacing-md);
   background: var(--color-bg-tertiary);
@@ -3435,7 +3495,7 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
 
 .unsaved-dialog h2 {
   margin-bottom: var(--spacing-md);
-  color: var(--color-warning);
+  color: var(--color-error);
 }
 
 .unsaved-dialog p {
@@ -4223,15 +4283,84 @@ body.light-mode .save-menu-dropdown kbd {
 /* ==================== EPUBモーダル ==================== */
 
 .epub-modal {
-  width: 600px;
-  max-width: 90vw;
-  max-height: 85vh;
+  width: 1300px;
+  max-width: 95vw;
+  max-height: 90vh;
 }
 
+/* 左右分割レイアウト: 左=プレビュー / 右=フォーム */
+.epub-modal-split {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+}
+
+.epub-preview-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-bg-primary);
+  overflow: hidden;
+}
+
+/* モーダル内のEPUBページ画像はプレビューペイン幅に収まるよう制約 */
+.epub-preview-pane .epub-spread-page img,
+.epub-preview-pane .epub-spread-sizer {
+  max-width: 100%;
+  max-height: 70vh;
+}
+.epub-preview-pane .epub-spread-pages {
+  width: 100%;
+  justify-content: center;
+}
+
+/* 右ペイン（フォーム）は固定幅 */
 .epub-modal-body {
-  max-height: calc(85vh - 140px);
+  width: 560px;
+  min-width: 560px;
+  flex-shrink: 0;
   overflow-y: auto;
-  padding-right: var(--spacing-sm);
+  padding: var(--spacing-xl);
+}
+
+.epub-preview-pane > .epub-spread-preview {
+  flex: 1;
+  min-height: 0;
+}
+
+.epub-preview-pane > .epub-thumbnail-bar {
+  flex-shrink: 0;
+}
+
+.epub-preview-pane > .spread-viewer-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-md);
+  color: var(--color-text-muted);
+}
+
+/* 狭画面では縦並びにフォールバック */
+@media (max-width: 1100px) {
+  .epub-modal-split {
+    flex-direction: column;
+  }
+  .epub-preview-pane {
+    width: auto;
+    min-width: 0;
+    height: 360px;
+    border-right: none;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .epub-modal-body {
+    width: auto;
+    min-width: 0;
+  }
 }
 
 .epub-modal .form-section {
@@ -4253,6 +4382,39 @@ body.light-mode .save-menu-dropdown kbd {
   margin-bottom: var(--spacing-md);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+/* 出版社トグル（CLLENN / その他） */
+.publisher-toggle {
+  display: inline-flex;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+  width: fit-content;
+}
+.publisher-toggle-btn {
+  padding: 6px var(--spacing-md);
+  border-radius: 999px;
+  background: transparent;
+  border: none;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+  min-width: 80px;
+}
+.publisher-toggle-btn:hover:not(.active) {
+  color: var(--color-text-primary);
+}
+.publisher-toggle-btn.active {
+  background: var(--color-accent);
+  color: #ffffff;
+}
+.publisher-custom-input {
+  margin-top: var(--spacing-sm);
 }
 
 .epub-modal .form-row {
@@ -4355,6 +4517,83 @@ body.light-mode .save-menu-dropdown kbd {
   font-weight: var(--font-weight-semibold);
   color: var(--color-accent);
 }
+
+/* ツールバー右側の余白スペーサー（左側のボタン群と右寄せボタン群の間） */
+.toolbar-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ツールバーアクションボタン: エクスポート / EPUB生成（ピル形状） */
+.preview-fab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  padding: 0 var(--spacing-lg);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, filter 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+  white-space: nowrap;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+
+/* ツールバー内バリアント */
+.preview-fab-toolbar {
+  height: 36px;
+  min-width: 132px;
+  padding: 0 var(--spacing-md);
+}
+
+.preview-fab:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.preview-fab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.preview-fab .preview-fab-label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+}
+
+/* 主要アクション: エクスポート */
+.preview-fab-primary {
+  color: #ffffff;
+  background: linear-gradient(135deg, #31a8ff 0%, #0066cc 100%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.preview-fab-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+/* セカンダリアクション: EPUB生成 */
+.preview-fab-secondary {
+  color: var(--color-accent);
+  background: var(--color-bg-secondary);
+  border: 2px solid var(--color-accent);
+}
+
+.preview-fab-secondary:hover:not(:disabled) {
+  background: var(--color-bg-elevated);
+}
+
+/* ライトモード調整 */
+body.light-mode .preview-fab-secondary {
+  background: #ffffff;
+}
+
+body.light-mode .preview-fab-secondary:hover:not(:disabled) {
+  background: var(--color-bg-secondary);
+}
+
 
 /* EPUBボタン */
 .btn-epub {
@@ -4988,6 +5227,115 @@ body.light-mode .css-editor-textarea {
   cursor: not-allowed;
 }
 
+/* 複数フォルダ → 本文チャプター分割ダイアログ */
+.split-folders-modal {
+  max-width: 600px;
+}
+.split-folders-description {
+  margin: 0 0 var(--spacing-md) 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+.split-folders-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  max-height: 420px;
+  overflow-y: auto;
+}
+.split-folders-row {
+  display: grid;
+  grid-template-columns: auto 1fr 180px;
+  align-items: center;
+  gap: var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius);
+  transition: background var(--transition-fast), border-color var(--transition-fast), opacity var(--transition-fast);
+}
+.split-folders-row:hover {
+  border-color: var(--color-border-light);
+}
+.split-folders-row.disabled {
+  opacity: 0.5;
+}
+.split-folders-checkbox-label {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+.split-folders-checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+.split-folders-folder {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.split-folders-folder-name {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.split-folders-folder-meta {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+.split-folders-annotation {
+  margin-left: var(--spacing-xs);
+  padding: 1px 6px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-accent);
+  background: var(--color-accent-subtle);
+  border: 1px solid var(--color-accent);
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.split-folders-name-input {
+  width: 100%;
+  padding: 6px var(--spacing-sm);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  transition: border-color var(--transition-fast);
+}
+.split-folders-name-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+.split-folders-name-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.split-folders-summary {
+  margin-right: auto;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+/* 分割ダイアログのボディ下端に余白を追加（フッター無背景化に合わせて） */
+.split-folders-modal .modal-body {
+  padding-bottom: var(--spacing-lg);
+}
+
 /* アップデートモーダル */
 .update-modal {
   max-width: 480px;
@@ -5131,4 +5479,20 @@ body.light-mode .hamburger-update-btn {
 }
 body.light-mode .update-toast {
   background: #ffffff;
+}
+
+/* ============================================================ */
+/* モーダルのセクション見出しのみ拡大 (.section-heading クラス) */
+/* ExportModal: 出力先フォルダ・出力方法・リネーム設定 */
+/* EpubMetadataModal: 出力設定・書籍情報 */
+/* ============================================================ */
+label.section-heading,
+h3.section-heading {
+  font-size: 18px !important;
+  font-weight: 700 !important;
+  color: var(--color-text-primary) !important;
+  margin-bottom: var(--spacing-md) !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+  display: block !important;
 }

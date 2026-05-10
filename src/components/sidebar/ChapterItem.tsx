@@ -26,6 +26,7 @@ export function ChapterItem({
   onSelectFile,
   onRefreshFile,
   dropTarget,
+  isFileDropTarget = false,
 }: {
   chapter: Chapter;
   isSelected: boolean;
@@ -48,6 +49,7 @@ export function ChapterItem({
     chapterId: string;
     pageId?: string;
   } | null;
+  isFileDropTarget?: boolean;
 }) {
   const {
     attributes,
@@ -77,10 +79,13 @@ export function ChapterItem({
     setIsEditing(false);
   };
 
-  // チャプターへの挿入ライン表示判定（上部に表示）
-  const showChapterInsertionLine = dropTarget?.type === 'chapter-before' && dropTarget.chapterId === chapter.id;
+  // チャプター並べ替え時のドロップ先プレースホルダー表示判定（点線枠）
+  const showDropPlaceholderBefore = dropTarget?.type === 'chapter-before' && dropTarget.chapterId === chapter.id;
+  const showDropPlaceholderAfter = dropTarget?.type === 'chapter-after' && dropTarget.chapterId === chapter.id;
 
   return (
+    <>
+      {showDropPlaceholderBefore && <div className="chapter-drop-placeholder" />}
     <div
       ref={setNodeRef}
       style={{
@@ -88,7 +93,8 @@ export function ChapterItem({
         backgroundColor: chapter.type !== 'chapter' ? `${CHAPTER_TYPE_COLORS[chapter.type]}15` : undefined,
         borderColor: chapter.type !== 'chapter' ? `${CHAPTER_TYPE_COLORS[chapter.type]}40` : undefined,
       }}
-      className={`chapter-item ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''}`}
+      className={`chapter-item ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${isFileDropTarget ? 'file-drop-target' : ''}`}
+      data-chapter-id={chapter.id}
       onClick={onSelect}
     >
       <div
@@ -96,7 +102,6 @@ export function ChapterItem({
         {...attributes}
         {...listeners}
       >
-        {showChapterInsertionLine && <div className="chapter-header-insertion-line" />}
         <button
           className="chapter-collapse-btn"
           onClick={(e) => {
@@ -281,5 +286,7 @@ export function ChapterItem({
         </div>
       </div>
     </div>
+      {showDropPlaceholderAfter && <div className="chapter-drop-placeholder" />}
+    </>
   );
 }

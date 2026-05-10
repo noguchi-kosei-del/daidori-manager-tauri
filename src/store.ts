@@ -82,6 +82,11 @@ interface AppState {
   addPagesToChapter: (chapterId: string, files: FileInfo[]) => void;
   addPagesToChapterAt: (chapterId: string, files: FileInfo[], atIndex: number) => void;
   replacePagesInChapter: (chapterId: string, files: FileInfo[]) => void;
+  insertChaptersFromFolders: (
+    insertAt: number,
+    type: ChapterType,
+    folders: { name: string; files: FileInfo[] }[]
+  ) => string[];
   addSpecialPage: (chapterId: string, pageType: PageType, afterPageId?: string) => void;
   setPageFile: (pageId: string, file: FileInfo | null) => void;
   removePage: (chapterId: string, pageId: string) => void;
@@ -158,7 +163,7 @@ const getDefaultChapterName = (type: ChapterType, chapters: Chapter[]): string =
   switch (type) {
     case 'chapter': {
       const chapterCount = chapters.filter((c) => c.type === 'chapter').length;
-      return `第${chapterCount + 1}話`;
+      return `本文${chapterCount + 1}`;
     }
     case 'cover':
       return '表紙';
@@ -489,6 +494,41 @@ export const useStore = create<AppState>((set, get) => {
           : c
       ),
     }));
+  },
+
+  // 複数フォルダを各々別チャプターとして指定位置に一括挿入（type を指定）
+  insertChaptersFromFolders: (insertAt, type, folders) => {
+    if (folders.length === 0) return [];
+    // 表紙チャプターは1ファイルのみ許可
+    const isCover = type === 'cover';
+    const newChapters: Chapter[] = folders.map((folder) => {
+      const useFiles = isCover ? folder.files.slice(0, 1) : folder.files;
+      const pages: Page[] = useFiles.map((file) => ({
+        id: uuidv4(),
+        pageType: 'file' as PageType,
+        filePath: file.path,
+        fileName: file.name,
+        fileType: file.file_type as Page['fileType'],
+        fileSize: file.size,
+        modifiedTime: file.modified_time,
+        thumbnailStatus: 'pending',
+      }));
+      return {
+        id: uuidv4(),
+        name: folder.name,
+        type,
+        pages,
+        collapsed: false,
+        folderPath: useFiles[0]?.path.replace(/[^\\\/]+$/, ''),
+      };
+    });
+    set((state) => {
+      const list = [...state.chapters];
+      const idx = Math.max(0, Math.min(insertAt, list.length));
+      list.splice(idx, 0, ...newChapters);
+      return { ...saveHistory(), chapters: list };
+    });
+    return newChapters.map((c) => c.id);
   },
 
   // ページ一括差し替え（チャプター内の既存ページを全置換）
