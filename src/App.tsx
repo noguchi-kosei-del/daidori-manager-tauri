@@ -1,5 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+import { emit } from '@tauri-apps/api/event';
+import { desktopDir, join } from '@tauri-apps/api/path';
 import { open, ask } from '@tauri-apps/plugin-dialog';
 import { useTauriFileDrop } from './hooks/useTauriFileDrop';
 import {
@@ -92,6 +94,7 @@ function App() {
     renameChapter,
     toggleChapterCollapsed,
     reorderChapters,
+    duplicateChapter,
     addPagesToChapter,
     replacePagesInChapter,
     addPagesToChapterAt,
@@ -460,10 +463,10 @@ function App() {
         className="preview-fab preview-fab-primary preview-fab-toolbar"
         onClick={() => { if (!blockIfCmyk('export')) openExportModal(); }}
         disabled={allPages.length === 0}
-        title="エクスポート"
+        title="JPEG/TIF生成"
       >
         <ExportIcon size={16} />
-        <span className="preview-fab-label">エクスポート</span>
+        <span className="preview-fab-label">JPEG/TIF生成</span>
       </button>
     </>
   );
@@ -648,6 +651,15 @@ function App() {
     }
     removeChapter(chapterId);
   }, [chapters, removeChapter]);
+
+  // チャプター複製（読み込み済みファイルごと）
+  const handleDuplicateChapter = useCallback((chapterId: string) => {
+    const newId = duplicateChapter(chapterId);
+    if (newId) {
+      selectChapter(newId);
+      selectPage(null);
+    }
+  }, [duplicateChapter, selectChapter, selectPage]);
 
   // EPUBモード中にchaptersが変更されたら自動同期
   useEffect(() => {
@@ -939,6 +951,95 @@ function App() {
         allowMissingColophon: isLegacyHybrid ? true : metadata.allowMissingColophon,
       };
 
+      // === PSDが含まれていれば自動的にJPEG化（Photoshop経由） ===
+      const psdToJpegMap = new Map<string, string>();
+      const psdSourcePaths: string[] = [];
+      for (const chapter of chapters) {
+        for (const page of chapter.pages) {
+          if (page.fileType === 'psd' && page.filePath) {
+            // 同一PSDが複数ページから参照される可能性もあるので、ユニーク化
+            if (!psdSourcePaths.includes(page.filePath)) {
+              psdSourcePaths.push(page.filePath);
+            }
+          }
+        }
+      }
+
+      if (psdSourcePaths.length > 0) {
+        // Photoshopのインストールチェック
+        const psInstalled = await invoke<boolean>('check_photoshop_installed');
+        if (!psInstalled) {
+          setExportResultDialog({
+            show: true,
+            title: 'EPUB生成失敗',
+            message: 'PSDファイルが含まれていますが、Photoshopが見つかりません。\nPSDをJPEGに変換するためにPhotoshopが必要です。',
+            isError: true,
+          });
+          return;
+        }
+
+        // モーダルへPSD変換フェーズを通知（タイマー込みで listener 起動を待つ）
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        await emit('epub-progress', { phase: 'psd-to-jpeg', current: 0, total: psdSourcePaths.length });
+
+        // Script_Output 配下にJPEG変換出力（同名フォルダが既にあれば Rust 側で連番付与）
+        const desktop = await desktopDir();
+        const epubJpegDir = await join(desktop, 'Script_Output', `EPUB用JPEG_${projectName || '台割'}`);
+
+        const config = {
+          globalSettings: { jpgQuality: 12 },
+          files: psdSourcePaths.map((path, i) => ({
+            path,
+            outputPath: epubJpegDir,
+            outputName: `psd_${String(i).padStart(4, '0')}.jpg`,
+          })),
+        };
+
+        let convertResponse: {
+          results: { fileName: string; success: boolean; outputPath?: string; error?: string }[];
+          outputDir: string;
+        };
+        try {
+          convertResponse = await invoke('run_photoshop_jpeg_convert', {
+            config,
+            outputDir: epubJpegDir,
+          });
+        } catch (e) {
+          setExportResultDialog({
+            show: true,
+            title: 'PSD→JPEG変換失敗',
+            message: `PSDのJPEG変換中にエラーが発生しました: ${e}`,
+            isError: true,
+          });
+          return;
+        }
+
+        const failedResults = convertResponse.results.filter((r) => !r.success);
+        if (failedResults.length > 0) {
+          const errMsg = failedResults.map((r) => `${r.fileName}: ${r.error ?? '不明なエラー'}`).join('\n');
+          setExportResultDialog({
+            show: true,
+            title: 'PSD→JPEG変換失敗',
+            message: `${failedResults.length}件のPSDをJPEGに変換できませんでした`,
+            details: errMsg,
+            isError: true,
+          });
+          return;
+        }
+
+        // マップ構築（PSD元パス → 生成されたJPEGパス）
+        psdSourcePaths.forEach((srcPath, i) => {
+          const result = convertResponse.results[i];
+          if (result?.success) {
+            const jpegPath = result.outputPath ?? `${convertResponse.outputDir}\\psd_${String(i).padStart(4, '0')}.jpg`;
+            psdToJpegMap.set(srcPath, jpegPath);
+          }
+        });
+
+        // フェーズをEPUB側に戻す
+        await emit('epub-progress', { phase: 'images', current: 0, total: 0 });
+      }
+
       // ページ情報を構築
       const epubPages: EpubPage[] = [];
       let pageNumber = 1;
@@ -972,18 +1073,24 @@ function App() {
             colophonAssignedFromChapter = true;
           }
 
+          // PSDが含まれていればJPEG変換後のパスに置き換える
+          const isPsdConverted = !!(page.filePath && psdToJpegMap.has(page.filePath));
+          const resolvedFilePath = isPsdConverted
+            ? psdToJpegMap.get(page.filePath!)!
+            : page.filePath;
+
           // 画像サイズを取得（白紙はバックエンドで多数派サイズに置換される）
           let width = 0;
           let height = 0;
-          if (!isBlankPage && page.filePath) {
+          if (!isBlankPage && resolvedFilePath) {
             try {
               const dimensions = await invoke<[number, number]>('get_image_dimensions', {
-                path: page.filePath,
+                path: resolvedFilePath,
               });
               width = dimensions[0];
               height = dimensions[1];
             } catch {
-              console.warn(`画像サイズ取得失敗: ${page.filePath}`);
+              console.warn(`画像サイズ取得失敗: ${resolvedFilePath}`);
               width = generateMetadata.viewportWidth;
               height = generateMetadata.viewportHeight;
             }
@@ -997,10 +1104,10 @@ function App() {
             ? 'p-colophon'
             : `p-${String(pageNumber).padStart(3, '0')}`;
 
-          // ファイル名を生成（白紙は .jpg 固定）
-          const ext = isBlankPage
+          // ファイル名を生成（白紙・PSD変換後は .jpg 固定）
+          const ext = isBlankPage || isPsdConverted
             ? 'jpg'
-            : page.filePath?.split('.').pop()?.toLowerCase() || 'jpg';
+            : resolvedFilePath?.split('.').pop()?.toLowerCase() || 'jpg';
           const filename = isCover
             ? `cover.${ext}`
             : isColophon
@@ -1010,7 +1117,7 @@ function App() {
           epubPages.push({
             id: pageId,
             filename,
-            sourcePath: isBlankPage ? '' : page.filePath || '',
+            sourcePath: isBlankPage ? '' : resolvedFilePath || '',
             width,
             height,
             isCover,
@@ -1730,6 +1837,7 @@ function App() {
                         onToggle={() => toggleChapterCollapsed(chapter.id)}
                         onRename={(name) => renameChapter(chapter.id, name)}
                         onDelete={() => handleDeleteChapter(chapter.id)}
+                        onDuplicate={() => handleDuplicateChapter(chapter.id)}
                         onDeletePage={(pageId) => removePage(chapter.id, pageId)}
                         onAddFiles={() => handleAddPages(chapter.id)}
                         onAddFolder={() => handleAddFolder(chapter.id)}
@@ -2233,20 +2341,32 @@ function App() {
         const targetChapter = currentChapters.find(c => c.id === splitFoldersDialog.targetChapterId);
         const targetType = targetChapter?.type ?? 'chapter';
         const typeLabel = CHAPTER_TYPE_LABELS[targetType];
-        // 「本文」は連番付き、それ以外のタイプも統一で連番付きで命名
-        const existingTypeCount = currentChapters.filter(c => c.type === targetType).length;
-        const defaultNames = splitFoldersDialog.folders.map((_, i) =>
-          i === 0
-            ? (targetChapter?.name ?? `${typeLabel}${existingTypeCount + i}`)
-            : `${typeLabel}${existingTypeCount + i}`
+
+        // 番号の若い順に並べ替え（自然順 / 全角数字も考慮）
+        const collator = new Intl.Collator('ja', { numeric: true, sensitivity: 'base' });
+        const sortedFolders = [...splitFoldersDialog.folders].sort((a, b) =>
+          collator.compare(a.folderName, b.folderName)
         );
-        const rowAnnotations = splitFoldersDialog.folders.map((_, i) =>
+
+        // フォルダ名から番号を抽出して「N話」形式で命名（番号がなければ通し番号）
+        const extractFolderNumber = (name: string): number | null => {
+          const normalized = name.replace(/[０-９]/g, (c) =>
+            String.fromCharCode(c.charCodeAt(0) - 0xFEE0)
+          );
+          const m = normalized.match(/(\d+)/);
+          return m ? parseInt(m[1], 10) : null;
+        };
+        const defaultNames = sortedFolders.map((folder, i) => {
+          const num = extractFolderNumber(folder.folderName);
+          return num !== null ? `${num}話` : `${i + 1}話`;
+        });
+        const rowAnnotations = sortedFolders.map((_, i) =>
           i === 0 ? '（ドロップ先）' : null
         );
         return (
           <SplitFoldersDialog
             isOpen={splitFoldersDialog.open}
-            folders={splitFoldersDialog.folders}
+            folders={sortedFolders}
             defaultNames={defaultNames}
             rowAnnotations={rowAnnotations}
             chapterTypeLabel={typeLabel}
@@ -2258,11 +2378,11 @@ function App() {
               const targetId = splitFoldersDialog.targetChapterId;
               const insertType = latestChapters[targetIdx]?.type ?? targetType;
 
-              // 先頭行（ドロップ先チャプター）が選択されているか
+              // 先頭行（ソート後の最初のフォルダ = ドロップ先に反映）が選択されているか
               const firstRowEnabled =
-                splitFoldersDialog.folders.length > 0 &&
+                sortedFolders.length > 0 &&
                 selected.length > 0 &&
-                selected[0].files === splitFoldersDialog.folders[0].files;
+                selected[0].files === sortedFolders[0].files;
 
               if (firstRowEnabled && targetIdx >= 0) {
                 // 1) ドロップ先チャプターをリネーム + 先頭フォルダの内容を追加

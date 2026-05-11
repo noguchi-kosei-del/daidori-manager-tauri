@@ -56,6 +56,14 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
         return;
       }
 
+      // Ctrl+A: 入力欄外ではブラウザ既定のページ全選択を抑止
+      // （ページ全体が選択されてメッセージ等にフォーカスが移る事故を防止）
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+
       // F1: 閲覧モード切替（見開き・EPUB表示時）
       if (e.key === 'F1') {
         e.preventDefault();

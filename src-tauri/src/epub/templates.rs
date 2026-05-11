@@ -39,14 +39,7 @@ pub fn opf_filename(metadata: &EpubMetadata) -> String {
 }
 
 pub fn unique_id(metadata: &EpubMetadata) -> String {
-    match metadata
-        .isbn
-        .as_deref()
-        .filter(|isbn| !isbn.trim().is_empty())
-    {
-        Some(isbn) => format!("urn:isbn:{}", isbn.trim()),
-        None => format!("urn:uuid:{}", metadata.book_uuid),
-    }
+    format!("urn:uuid:{}", metadata.book_uuid)
 }
 
 pub fn root_folder(format: &EpubFormat) -> &'static str {

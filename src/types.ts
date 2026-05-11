@@ -304,7 +304,6 @@ export interface EpubMetadata {
   authors: AuthorInfo[];
   publisher: string;
   publisherFileAs?: string;
-  isbn?: string;
   language: string;
   pageDirection: PageDirection;
   viewportWidth: number;
@@ -313,7 +312,6 @@ export interface EpubMetadata {
   orientation: Orientation;
   bookUuid: string;
   outputFormat: EpubFormat;
-  description?: string;
   allowMissingColophon?: boolean;
   hybridCssProfile?: HybridCssProfile;
 }

@@ -87,7 +87,10 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
   const [exportResultDialog, setExportResultDialog] = useState<ExportResultDialog>({ show: false, title: '', message: '' });
 
   const handleExport = useCallback(async (options: ExportOptions) => {
-    const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, convertToJpgPhotoshop, renameMode, startNumber, digits, prefix, perChapterSettings, bleedSettings } = options;
+    const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameMode, startNumber, digits, prefix, perChapterSettings, bleedSettings } = options;
+    // JPEG指定でPSDが含まれる場合はPhotoshop経由で変換（旧 convertToJpgPhotoshop 相当）
+    const hasPsdFiles = chapters.some(c => c.pages.some(p => p.fileType === 'psd'));
+    const convertToJpgPhotoshop = convertToJpg && hasPsdFiles;
 
     // TIFF変換モードの場合
     if (convertToTiff) {
@@ -369,12 +372,14 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
 
         if (nonPsdPages.length > 0) {
           try {
+            // JPEGモード: PSDはPhotoshop経由、それ以外もRustでJPEG再エンコード
+            // outputPath は Photoshopが書き出した response.outputDir と同一 → 全ファイルが同じフォルダに集約される
             await invoke<number>('export_pages', {
               outputPath: response.outputDir,
               pages: nonPsdPages,
               moveFiles: exportMode === 'move',
-              convertToJpg: false,
-              jpgQuality: 100,
+              convertToJpg: true,
+              jpgQuality: jpgQuality ?? 100,
               blankFormat: 'jpg',
             });
           } catch (e) {
@@ -498,10 +503,13 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
 
   // エクスポート前に断ち切り確認が必要か判定し、必要ならエディタを表示
   const handlePreExport = useCallback(async (options: ExportOptions) => {
-    const { convertToTiff, convertToJpgPhotoshop, bleedMode } = options;
+    const { convertToTiff, convertToJpg, bleedMode } = options;
+    // JPEG選択 + PSD含む = Photoshop経由のJPEG変換が走るので断ち切り設定が必要
+    const hasPsdFiles = chapters.some(c => c.pages.some(p => p.fileType === 'psd'));
+    const needsPhotoshop = convertToTiff || (convertToJpg && hasPsdFiles);
 
-    // Photoshop変換モード以外はそのままエクスポート
-    if (!convertToTiff && !convertToJpgPhotoshop) {
+    // Photoshop変換が不要ならそのままエクスポート
+    if (!needsPhotoshop) {
       handleExport(options);
       return;
     }

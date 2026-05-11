@@ -77,6 +77,7 @@ interface AppState {
   renameChapter: (id: string, name: string) => void;
   toggleChapterCollapsed: (id: string) => void;
   reorderChapters: (fromIndex: number, toIndex: number) => void;
+  duplicateChapter: (id: string) => string | null;
 
   // アクション: ページ管理
   addPagesToChapter: (chapterId: string, files: FileInfo[]) => void;
@@ -464,6 +465,31 @@ export const useStore = create<AppState>((set, get) => {
       chapters.splice(toIndex, 0, removed);
       return { ...historyUpdate, chapters };
     });
+  },
+
+  // チャプターを読み込み済みファイルごと複製（直後に挿入）
+  duplicateChapter: (id) => {
+    const state = get();
+    const idx = state.chapters.findIndex((c) => c.id === id);
+    if (idx === -1) return null;
+    const source = state.chapters[idx];
+    const newId = uuidv4();
+    const cloned: Chapter = {
+      ...source,
+      id: newId,
+      name: `${source.name} (コピー)`,
+      // ページごとに新しい ID を振る（サムネイルキャッシュは同一ファイルなので共有）
+      pages: source.pages.map((page) => ({
+        ...page,
+        id: uuidv4(),
+      })),
+    };
+    set((s) => {
+      const list = [...s.chapters];
+      list.splice(idx + 1, 0, cloned);
+      return { ...saveHistory(), chapters: list };
+    });
+    return newId;
   },
 
   // ファイルページ追加（末尾に追加）

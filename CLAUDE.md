@@ -1637,3 +1637,135 @@ pub struct PsdGuide {
 - `.modal-overlay.closing` / `.modal-content.closing`
 - `@keyframes fadeOut` / `@keyframes slideDown`
 
+---
+
+## v1.2.0: EPUB自動JPEG化・チャプター操作強化・エクスポートUI簡素化
+
+### A. EPUBメタデータからISBN/説明を撤去
+
+A1. **`EpubMetadata` から `isbn` / `description` を削除** ([src/types.ts](src/types.ts), [src-tauri/src/types/epub.rs](src-tauri/src/types/epub.rs)): TS interface + Rust struct 両方からフィールドを削除。`EpubMetadata::new()` の初期化からも除外。
+
+A2. **UI入力欄を撤去** ([src/components/modals/EpubMetadataModal.tsx](src/components/modals/EpubMetadataModal.tsx), [src/components/epub/EpubMetadataPanel.tsx](src/components/epub/EpubMetadataPanel.tsx)): モーダル・パネル両方の ISBN / 説明入力欄を削除。useState、メタデータ構築、UI 表示全てから除外。
+
+A3. **`unique_id` を UUID 専用に** ([src-tauri/src/epub/templates.rs](src-tauri/src/epub/templates.rs)): 旧 `metadata.isbn` フォールバック分岐を撤去し、常に `urn:uuid:{book_uuid}` を返す形式に簡素化。
+
+### B. 複数フォルダ取り込みの自然順ソート + 「N話」命名
+
+B1. **`SplitFoldersDialog` 描画ブロックで折を並べ替え** ([src/App.tsx](src/App.tsx)): `setSplitFoldersDialog` 時点ではなく、ダイアログ表示用の中間レイヤで `Intl.Collator('ja', { numeric: true })` による自然順ソートを実施。`第1話 < 第2話 < 第10話` を正しく並べる。
+
+B2. **デフォルト命名を「N話」形式に**: フォルダ名から最初の連続数字を抽出（半角・全角どちらも対応）して `${num}話` を生成。番号なしのフォルダはソート後の通し番号で `${i + 1}話` にフォールバック。
+
+B3. **`onConfirm` の firstRowEnabled 判定もソート後配列を参照**: `splitFoldersDialog.folders[0]` → `sortedFolders[0]` に切り替えてドロップ先吸収ロジックを保持。
+
+### C. チャプター名のリネーム機能（ボタン＋ダブルクリック両対応）
+
+C1. **明示的なリネームボタン追加** ([src/components/sidebar/ChapterItem.tsx](src/components/sidebar/ChapterItem.tsx)): 鉛筆アイコン（`PencilIcon`）の「リネーム」項目をチャプター操作メニュー（後述「…」メニュー）内に配置。
+
+C2. **ダブルクリック経路の修正**: 旧仕様では `useSortable` の pointerdown リスナーが span のクリックを横取りしてダブルクリックが届かなかった。span に `onPointerDown={e => e.stopPropagation()}` と `onClick={e => e.stopPropagation()}` を追加してドラッグ検出を抑止。tooltip 「ダブルクリックでリネーム」も追加。
+
+C3. **`PencilIcon` 追加** ([src/icons.tsx](src/icons.tsx)): lucide スタイルの鉛筆 SVG を新規定義。
+
+### D. チャプターのファイルごと複製機能
+
+D1. **`duplicateChapter` アクション** ([src/store.ts](src/store.ts)): チャプター + 全ページを deep copy し、チャプター ID + 各ページ ID を新規 UUID に置換、名前末尾に「 (コピー)」を付与、ソースチャプターの**直後**に挿入。`saveHistory()` 経由で Undo 対応。サムネイルキャッシュ (`thumbnailCacheKey` / `thumbnailCachePath`) は同一ファイル参照なので共有（再生成不要）。戻り値で新チャプター ID を返す。
+
+D2. **UI 配線** ([src/App.tsx](src/App.tsx), [src/components/sidebar/ChapterItem.tsx](src/components/sidebar/ChapterItem.tsx)): `handleDuplicateChapter` で複製後に新チャプターを選択。「…」メニュー内に `CopyIcon`（2枚の矩形が重なった lucide SVG）の「チャプターを複製」項目として配置。
+
+D3. **`CopyIcon` 追加** ([src/icons.tsx](src/icons.tsx)): lucide スタイルの複製 SVG を新規定義。
+
+### E. チャプター操作を「…」メニューに集約
+
+E1. **`MoreIcon` 追加** ([src/icons.tsx](src/icons.tsx)): 横三点（lucide）SVG を新規定義。
+
+E2. **4つのインライン操作ボタンを撤去** ([src/components/sidebar/ChapterItem.tsx](src/components/sidebar/ChapterItem.tsx)): 旧チャプターヘッダ右端の「リネーム / 差し替え / 複製 / 削除」4 個並びを「…」トリガーボタン 1 個に集約。
+- **ホバーで開閉**: `onMouseEnter` で即時オープン、`onMouseLeave` で 200ms 遅延クローズ。メニュー側にも同様の入退場ハンドラを設定し、トリガーとメニュー間の移動でメニュー継続表示
+- **クリックでも開閉**: タッチ/キーボード操作の保険
+- **`createPortal` で `document.body` に描画**: 親 `overflow: hidden` の影響を受けない
+- **位置計算**: 画面下端付近では上開き、それ以外は下開き
+- **backdrop は使用しない**: 当初は `.menu-backdrop-fixed` を使ったが全画面オーバーレイがトリガーボタンの mouseLeave を即発火させてフラッシュループになる現象を修正。`document.mousedown` listener で外側クリック検知し、Esc でも閉じる
+- **メニューとトリガー間のギャップを 0 に**: `top: rect.bottom + 4` → `rect.bottom` でホバー継続性を確保
+
+E3. **CSS** ([src/styles.css](src/styles.css)):
+- `.chapter-actions-trigger` を常時 `opacity: 0.6`、hover / selected / 展開中で `1.0` に
+- `.chapter-actions-menu` を新設（既存の `.chapter-add-menu` と同じガラス調 + `menuAppearDown` アニメーション）
+- 削除項目は `.menu-item-danger` で `var(--danger)` の赤色強調 + hover 時に半透明赤背景
+
+E4. **チャプター名のレイアウト崩れ対策** ([src/styles.css](src/styles.css)): 4ボタン時代に発生していた「チャプター名が縦書きに改行される」「省略されすぎる」問題を `.chapter-name { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }` + `.chapter-actions { flex-shrink: 0 }` で整備。「…」メニュー化後は単一ボタンなので名前領域が広く取れる。
+
+### F. Ctrl+A の暴発抑止
+
+F1. **入力欄外で Ctrl+A をブロック** ([src/hooks/useKeyboardShortcuts.ts](src/hooks/useKeyboardShortcuts.ts)): 入力欄ガードの直後に `if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) { preventDefault + stopPropagation }` を追加。ブラウザ既定の「ページ全選択」が走ってメッセージ要素にフォーカスが移る事故を防止。input/textarea 内では既存の早期 return により通常の全選択が機能する。
+
+### G. 基本フォントを Noto Sans JP（MojiQ 互換）に統一
+
+G1. **Google Fonts 読込追加** ([index.html](index.html)): `preconnect` + `Noto Sans JP` (wght 300/400/500/700) を head に追加。
+
+G2. **CSS フォントスタック更新** ([src/styles.css](src/styles.css), [src/App.css](src/App.css)):
+- `--font-family`: `'Segoe UI', 'Yu Gothic UI', 'Meiryo', sans-serif` → `"Noto Sans JP", "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif`（MojiQ ver_2.26 `css/base.css` と一致）
+- `App.css :root` の Tauri 既定 `Inter` スタックも同一に置換
+
+### H. JPEG/TIF生成のエクスポートフロー再設計
+
+このバージョンの中心的な変更。
+
+H1. **ヘッダーボタン文言の遷移**: 「エクスポート」→「JPEG/TIFF生成」→「生成」→「エクスポート」→ **「JPEG/TIF生成」**（試行錯誤の末確定。ダイアログ内のボタンは **「生成」** に変更）。
+
+H2. **モーダルのチェックボックスを 3 → 2 に統合** ([src/components/modals/ExportModal.tsx](src/components/modals/ExportModal.tsx)):
+
+| 旧 | 新 |
+|---|---|
+| ☐ 高画質JPGに変換して出力 (`convertToJpg`) | ☐ **JPEGに変換** (PSDがあれば自動でPhotoshop) |
+| ☐ PhotoshopでJPEGに変換 (`convertToJpgPhotoshop`) | （削除・JPEGに統合） |
+| ☐ PhotoshopでTIFFに変換 (`convertToTiff`) | ☐ **TIFFに変換** (Photoshopが必要) |
+
+- `ExportOptions` 型から `convertToJpgPhotoshop` フィールド削除
+- `convertToJpg` の意味を「JPEGにする（PSDが含まれる場合は自動でPhotoshop経由）」に拡張
+- 「PhotoshopでJPEGに変換」チェックボックスを完全削除
+- JPEG/TIFF のラベルから「Photoshopで」プレフィックスを撤去（実装詳細をUIから隠蔽）
+- 断ち切り設定セクションの表示条件を `(convertToTiff || (convertToJpg && hasPsdFiles))` に変更
+- JPEG チェックボックスは PSD ありかつ Photoshop 未インストール時に disabled。`hasPsdFiles && !photoshopInstalled` で disabled、PSD ありなら注釈「PSDはPhotoshop経由で変換」を表示
+
+H3. **振り分けロジックの統合** ([src/hooks/useExport.ts](src/hooks/useExport.ts)):
+- `handleExport` 冒頭で `hasPsdFiles = chapters.some(c => c.pages.some(p => p.fileType === 'psd'))` を判定
+- `convertToJpgPhotoshop = convertToJpg && hasPsdFiles` をローカル変数として derive — 既存の `if (convertToJpgPhotoshop)` ブロックはそのまま動作（PSD は Photoshop、非PSDは export_pages フォールバック）
+- `handlePreExport` の bleed editor 表示条件を `convertToTiff || (convertToJpg && hasPsdFiles)` に変更。PSD なし時の JPEG エクスポートは bleed editor を経由せず直接 `export_pages` パスへ流れる
+
+H4. **JPEG混在時の出力先・拡張子統一**: PSD と非PSD（JPG等）が混在するチャプターで JPEG エクスポートした際、非PSDも JPEG再エンコードして同一フォルダに出力するよう変更。
+- 非PSD用の `export_pages` 呼び出しを `convertToJpg: false` → **`convertToJpg: true`** に変更
+- `jpgQuality` をハードコード `100` から **ユーザーのモーダル設定値 `jpgQuality ?? 100`**（PSD あり時はスライダー非表示で 100 固定、PSD なし時はユーザー設定値）に変更
+- `outputPath: response.outputDir` は変更なし（Photoshop が書き出したフォルダと同一）→ 全ファイルが同じフォルダに `.jpg` 統一で集約
+
+### I. EPUB生成時の PSD 自動 JPEG 化
+
+I1. **PSD検出と自動変換** ([src/App.tsx](src/App.tsx) `handleEpubGenerate`): ユーザーが EPUB を生成しようとしたとき、チャプターに PSD が含まれていれば EPUB 生成前に自動で Photoshop 経由で JPEG に変換する。
+- 全チャプターを走査して PSD ファイルパスを収集（重複は排除）
+- Photoshop の存在確認 (`check_photoshop_installed`) — 無ければエラーダイアログで中止
+- 進捗UIへ `epub-progress` イベント (`phase: 'psd-to-jpeg'`) を emit
+- **出力先**: `<desktop>/Script_Output/EPUB用JPEG_<projectName>` 配下に JPEG 出力（同名フォルダ既存時は Rust 側 `create_unique_output_dir` が `(1)` 等を付与）
+- `run_photoshop_jpeg_convert` で全 PSD を JPEG（最高画質 12）に変換（断ち切りなし）
+- 元 PSD パス → 変換後 JPEG パスの `Map` を構築
+- フェーズを `images` に戻して EPUB 生成本体へ進行
+
+I2. **EPUB ページ構築ループに変換マップを適用**:
+- `isPsdConverted` 判定で各 page の `filePath` を JPEG パスへ置換
+- `get_image_dimensions` は変換後 JPEG に対して実行
+- ファイル拡張子も `'jpg'` に強制（旧 PSD 由来でも EPUB の sourcePath は .jpg）
+
+I3. **進捗ラベル追加** ([src/components/modals/EpubMetadataModal.tsx](src/components/modals/EpubMetadataModal.tsx)): `phase === 'psd-to-jpeg'` 時のラベル「**PSDをJPEGに変換しています…**」を追加。既存の `images` / `packaging` フェーズと並列で表示。
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.2.0`** に揃え。Cargo.lock は `cargo check` 経由で自動追従。
+
+> **このバージョンの構造変更まとめ**:
+> - 旧: チャプター操作 = ヘッダ右端に 4 ボタン並列、リネームはダブルクリック専用（ドラッグリスナーに阻まれて発動しない事故あり） → 新: 「…」アイコン 1 つ + ホバードロップダウンに集約（リネーム / 差し替え / 複製 / 削除）、ダブルクリックも修正
+> - 旧: チャプターのファイルごと複製機能なし → 新: store.ts `duplicateChapter` で全ページに新 UUID を発行して直下に挿入、Undo 対応
+> - 旧: 複数フォルダ取り込み = OS 字句順で挿入、命名は「本文1」固定 → 新: 自然順ソート + フォルダ名から数字抽出して「N話」命名（半角/全角どちらも対応）
+> - 旧: エクスポートモーダル = 3 チェックボックス（JPG / PhotoshopJPEG / PhotoshopTIFF）でユーザーが Photoshop の有無を選ぶ → 新: 2 チェックボックス（JPEG / TIFF）+ PSD 有無で自動振り分け
+> - 旧: JPEG 混在時、非PSDは元拡張子コピー（JPG → JPG、PNG → PNG）→ 新: 全部 .jpg に統一して同一フォルダに集約
+> - 旧: EPUB 生成時に PSD が含まれているとそのまま PSD を sourcePath として渡し、EPUB ビューアで表示不可 → 新: PSD を Script_Output 配下の `EPUB用JPEG_*` フォルダへ自動変換し、変換後 JPEG を sourcePath に置換
+> - 旧: ヘッダーボタン文言「エクスポート」 → 新: 「JPEG/TIF生成」(ダイアログ内ボタンは「生成」に統一)
+> - 旧: EPUB メタデータに ISBN / 説明欄あり → 新: 撤去（unique_id は UUID 専用）
+> - 旧: 基本フォントは Segoe UI / Yu Gothic UI → 新: Google Fonts の Noto Sans JP（MojiQ 互換）
+> - 旧: 入力欄外で Ctrl+A → ブラウザ既定のページ全選択でメッセージ要素にフォーカス移動 → 新: 入力欄外では Ctrl+A を抑止
+

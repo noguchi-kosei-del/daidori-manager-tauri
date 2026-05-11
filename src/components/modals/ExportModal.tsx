@@ -40,10 +40,9 @@ export type BleedMode = 'bulk' | 'per-chapter';
 export interface ExportOptions {
   outputPath: string;
   exportMode: 'copy' | 'move';  // コピーか移動か
-  convertToJpg: boolean;  // JPGに変換するか
-  jpgQuality: number;  // JPG品質（1-100）
+  convertToJpg: boolean;  // JPEGに変換するか（PSDが含まれる場合は自動でPhotoshopを使用）
+  jpgQuality: number;  // JPG品質（1-100、PSD以外のRust変換用。PSDはPhotoshop側の最高品質固定）
   convertToTiff: boolean;  // PhotoshopでTIFFに変換するか
-  convertToJpgPhotoshop: boolean;  // PhotoshopでJPEGに変換するか
   renameMode: 'unified' | 'perChapter';
   // 一括設定
   startNumber: number;
@@ -74,7 +73,6 @@ export function ExportModal({
   const [convertToJpg, setConvertToJpg] = useState(false);
   const [jpgQuality, setJpgQuality] = useState(100);
   const [convertToTiff, setConvertToTiff] = useState(false);
-  const [convertToJpgPhotoshop, setConvertToJpgPhotoshop] = useState(false);
   const [photoshopInstalled, setPhotoshopInstalled] = useState<boolean | null>(null);
   const [renameMode, setRenameMode] = useState<'unified' | 'perChapter'>('unified');
   const [startNumber, setStartNumber] = useState(1);
@@ -161,7 +159,7 @@ export function ExportModal({
   const handleExport = async () => {
     if (!outputPath) return;
     setIsExporting(true);
-    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, convertToJpgPhotoshop, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode });
+    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode });
     setIsExporting(false);
     onClose();
   };
@@ -233,21 +231,27 @@ export function ExportModal({
           </div>
 
           <div className="form-group">
-            <label className="checkbox-label">
+            <label className={`checkbox-label ${hasPsdFiles && !photoshopInstalled ? 'disabled' : ''}`}>
               <input
                 type="checkbox"
                 checked={convertToJpg}
+                disabled={hasPsdFiles && !photoshopInstalled}
                 onChange={(e) => {
                   setConvertToJpg(e.target.checked);
                   if (e.target.checked) {
                     setConvertToTiff(false);
-                    setConvertToJpgPhotoshop(false);
                   }
                 }}
               />
-              高画質JPGに変換して出力（対応ファイル：PSD）
+              JPEGに変換
+              {hasPsdFiles && (
+                <span className="option-note">
+                  {' '}- PSDはPhotoshop経由で変換
+                  {!photoshopInstalled && photoshopInstalled !== null && '（未インストール）'}
+                </span>
+              )}
             </label>
-            {convertToJpg && (
+            {convertToJpg && !hasPsdFiles && (
               <div className="quality-slider">
                 <label>品質: {jpgQuality}%</label>
                 <input
@@ -263,6 +267,13 @@ export function ExportModal({
                 </div>
               </div>
             )}
+            {convertToJpg && hasPsdFiles && (
+              <div className="tiff-options">
+                <div className="tiff-note">
+                  ※ PSDは最高画質（品質12）でPhotoshop経由で変換、その他ファイルは直接変換
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="form-group">
@@ -275,11 +286,10 @@ export function ExportModal({
                   setConvertToTiff(e.target.checked);
                   if (e.target.checked) {
                     setConvertToJpg(false);
-                    setConvertToJpgPhotoshop(false);
                   }
                 }}
               />
-              PhotoshopでTIFFに変換（対応ファイル：PSD・JPEG）
+              TIFFに変換（対応ファイル：PSD・JPEG）
               {!photoshopInstalled && photoshopInstalled !== null && (
                 <span className="option-note"> - Photoshopが見つかりません</span>
               )}
@@ -296,38 +306,7 @@ export function ExportModal({
             )}
           </div>
 
-          <div className="form-group">
-            <label className={`checkbox-label ${!hasPsdFiles || !photoshopInstalled ? 'disabled' : ''}`}>
-              <input
-                type="checkbox"
-                checked={convertToJpgPhotoshop}
-                disabled={!hasPsdFiles || !photoshopInstalled}
-                onChange={(e) => {
-                  setConvertToJpgPhotoshop(e.target.checked);
-                  if (e.target.checked) {
-                    setConvertToJpg(false);
-                    setConvertToTiff(false);
-                  }
-                }}
-              />
-              PhotoshopでJPEGに変換（対応ファイル：PSD）
-              {!photoshopInstalled && photoshopInstalled !== null && (
-                <span className="option-note"> - Photoshopが見つかりません</span>
-              )}
-              {photoshopInstalled && !hasPsdFiles && (
-                <span className="option-note"> - PSDファイルがありません</span>
-              )}
-            </label>
-            {convertToJpgPhotoshop && (
-              <div className="tiff-options">
-                <div className="tiff-note">
-                  ※ 最高画質（品質12）、レイヤー統合で出力
-                </div>
-              </div>
-            )}
-          </div>
-
-          {(convertToTiff || convertToJpgPhotoshop) && hasPsdFiles && (
+          {(convertToTiff || (convertToJpg && hasPsdFiles)) && (
             <div className="form-group">
               <label>断ち切り設定</label>
               <div className="radio-group">
@@ -558,7 +537,7 @@ export function ExportModal({
             onClick={handleExport}
             disabled={!outputPath || isExporting}
           >
-            {isExporting ? 'エクスポート中...' : 'エクスポート'}
+            {isExporting ? '生成中...' : '生成'}
           </button>
         </div>
       </div>

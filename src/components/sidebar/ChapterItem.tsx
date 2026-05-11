@@ -1,9 +1,9 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Chapter, PageType, CHAPTER_TYPE_LABELS, CHAPTER_TYPE_COLORS } from '../../types';
-import { FileIcon, FolderIcon, TrashIcon, PlusCircleIcon, ReplaceIcon } from '../../icons';
+import { FileIcon, FolderIcon, TrashIcon, PlusCircleIcon, ReplaceIcon, CopyIcon, PencilIcon, MoreIcon } from '../../icons';
 import { SIDEBAR_PREFIX } from '../../constants/dnd';
 import { SortablePageItem } from './SortablePageItem';
 
@@ -17,6 +17,7 @@ export function ChapterItem({
   onToggle,
   onRename,
   onDelete,
+  onDuplicate,
   onDeletePage,
   onAddFiles,
   onAddFolder,
@@ -36,6 +37,7 @@ export function ChapterItem({
   onToggle: () => void;
   onRename: (name: string) => void;
   onDelete: () => void;
+  onDuplicate: () => void;
   onDeletePage: (pageId: string) => void;
   onAddFiles: () => void;
   onAddFolder: () => void;
@@ -65,6 +67,77 @@ export function ChapterItem({
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
   const addBtnRef = useRef<HTMLButtonElement>(null);
+
+  // チャプター操作メニュー（…）の状態
+  const [showActionsMenu, setShowActionsMenu] = useState(false);
+  const [actionsMenuPosition, setActionsMenuPosition] = useState<{ top?: number; bottom?: number; right: number } | null>(null);
+  const actionsBtnRef = useRef<HTMLButtonElement>(null);
+  const actionsMenuRef = useRef<HTMLDivElement>(null);
+  const closeTimerRef = useRef<number | null>(null);
+
+  const cancelClose = () => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  };
+  const scheduleClose = () => {
+    cancelClose();
+    closeTimerRef.current = window.setTimeout(() => {
+      setShowActionsMenu(false);
+      closeTimerRef.current = null;
+    }, 200);
+  };
+  const openActionsMenu = () => {
+    cancelClose();
+    if (actionsBtnRef.current) {
+      const rect = actionsBtnRef.current.getBoundingClientRect();
+      const menuHeight = 160; // 4項目分のおよその高さ
+      const windowHeight = window.innerHeight;
+      const right = Math.max(0, window.innerWidth - rect.right);
+      // ギャップを設けず、ボタンの直下に密着配置（ホバー追従中の途切れを防ぐ）
+      if (rect.bottom + menuHeight > windowHeight) {
+        setActionsMenuPosition({ bottom: windowHeight - rect.top, right });
+      } else {
+        setActionsMenuPosition({ top: rect.bottom, right });
+      }
+    }
+    setShowActionsMenu(true);
+  };
+
+  // アンマウント時にタイマー解除
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current !== null) {
+        window.clearTimeout(closeTimerRef.current);
+      }
+    };
+  }, []);
+
+  // メニュー開時の外側クリック検知（backdropは使わない: ボタンの mouseLeave を誘発してフラッシュする）
+  useEffect(() => {
+    if (!showActionsMenu) return;
+    const handleDocMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (actionsBtnRef.current?.contains(target)) return;
+      if (actionsMenuRef.current?.contains(target)) return;
+      cancelClose();
+      setShowActionsMenu(false);
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        cancelClose();
+        setShowActionsMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleDocMouseDown);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleDocMouseDown);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [showActionsMenu]);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -136,41 +209,106 @@ export function ChapterItem({
         ) : (
           <span
             className="chapter-name"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
             onDoubleClick={(e) => {
               e.stopPropagation();
               setIsEditing(true);
               setEditName(chapter.name);
             }}
+            title="ダブルクリックでリネーム"
           >
             {chapter.name}
           </span>
         )}
         <span className="chapter-page-count">({chapter.pages.length})</span>
         <div className="chapter-actions">
-          {(chapter.type === 'cover' || chapter.type === 'chapter' || chapter.type === 'intermission' || chapter.type === 'ad' || chapter.type === 'title' || chapter.type === 'toc') && (
-            <button
-              className="btn-icon"
-              onClick={(e) => {
-                e.stopPropagation();
-                onReplacePages();
-              }}
-              onPointerDown={(e) => e.stopPropagation()}
-              title="フォルダから差し替え"
-            >
-              <ReplaceIcon size={14} />
-            </button>
-          )}
           <button
-            className="btn-icon btn-delete"
+            ref={actionsBtnRef}
+            className="btn-icon chapter-actions-trigger"
             onClick={(e) => {
               e.stopPropagation();
-              onDelete();
+              if (showActionsMenu) {
+                cancelClose();
+                setShowActionsMenu(false);
+              } else {
+                openActionsMenu();
+              }
             }}
             onPointerDown={(e) => e.stopPropagation()}
-            title="削除"
+            onMouseEnter={openActionsMenu}
+            onMouseLeave={scheduleClose}
+            title="その他の操作"
+            aria-haspopup="menu"
+            aria-expanded={showActionsMenu}
           >
-            <TrashIcon size={14} />
+            <MoreIcon size={14} />
           </button>
+          {showActionsMenu && actionsMenuPosition && createPortal(
+            <div
+              ref={actionsMenuRef}
+              className="chapter-actions-menu menu-fixed"
+              style={{
+                top: actionsMenuPosition.top,
+                bottom: actionsMenuPosition.bottom,
+                right: actionsMenuPosition.right,
+              }}
+              role="menu"
+              onMouseEnter={cancelClose}
+              onMouseLeave={scheduleClose}
+              onClick={(e) => e.stopPropagation()}
+            >
+                <button
+                  role="menuitem"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsEditing(true);
+                    setEditName(chapter.name);
+                    cancelClose();
+                    setShowActionsMenu(false);
+                  }}
+                >
+                  <PencilIcon size={14} /> リネーム
+                </button>
+                {(chapter.type === 'cover' || chapter.type === 'chapter' || chapter.type === 'intermission' || chapter.type === 'ad' || chapter.type === 'title' || chapter.type === 'toc') && (
+                  <button
+                    role="menuitem"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onReplacePages();
+                      cancelClose();
+                      setShowActionsMenu(false);
+                    }}
+                  >
+                    <ReplaceIcon size={14} /> フォルダから差し替え
+                  </button>
+                )}
+                <button
+                  role="menuitem"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDuplicate();
+                    cancelClose();
+                    setShowActionsMenu(false);
+                  }}
+                >
+                  <CopyIcon size={14} /> チャプターを複製
+                </button>
+                <button
+                  role="menuitem"
+                  className="menu-item-danger"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete();
+                    cancelClose();
+                    setShowActionsMenu(false);
+                  }}
+                >
+                  <TrashIcon size={14} /> 削除
+                </button>
+            </div>,
+            document.body
+          )}
         </div>
       </div>
       <div className={`chapter-pages-outer ${chapter.collapsed ? 'collapsed' : ''}`}>

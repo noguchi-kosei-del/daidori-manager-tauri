@@ -158,9 +158,6 @@ pub struct EpubMetadata {
     /// 出版社読み仮名
     #[serde(default)]
     pub publisher_file_as: Option<String>,
-    /// ISBN（オプション）
-    #[serde(default)]
-    pub isbn: Option<String>,
     /// 言語コード（デフォルト: ja）
     #[serde(default = "default_language")]
     pub language: String,
@@ -182,9 +179,6 @@ pub struct EpubMetadata {
     /// 出力形式
     #[serde(default)]
     pub output_format: EpubFormat,
-    /// 説明文（オプション）
-    #[serde(default)]
-    pub description: Option<String>,
     /// Hybrid形式で奥付なし構成を許可する
     #[serde(default)]
     pub allow_missing_colophon: bool,
@@ -208,7 +202,6 @@ impl EpubMetadata {
             authors: Vec::new(),
             publisher,
             publisher_file_as: None,
-            isbn: None,
             language: "ja".to_string(),
             page_direction: PageDirection::default(),
             viewport_width: width,
@@ -217,7 +210,6 @@ impl EpubMetadata {
             orientation: Orientation::default(),
             book_uuid: uuid::Uuid::new_v4().to_string(),
             output_format: format,
-            description: None,
             allow_missing_colophon: false,
             hybrid_css_profile: HybridCssProfile::Current,
         }

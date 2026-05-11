@@ -46,8 +46,6 @@ export function EpubMetadataModal({
   const [publisher, setPublisher] = useState('CLLENN');
   const [publisherMode, setPublisherMode] = useState<'preset' | 'custom'>('preset');
   const [publisherFileAs, setPublisherFileAs] = useState('シレン');
-  const [isbn, setIsbn] = useState('');
-  const [description, setDescription] = useState('');
   const [language] = useState('ja');
 
   // 著者情報
@@ -240,7 +238,6 @@ export function EpubMetadataModal({
         })),
       publisher: publisher.trim(),
       publisherFileAs: publisherFileAs.trim() || undefined,
-      isbn: isbn.trim() || undefined,
       language,
       pageDirection,
       viewportWidth,
@@ -249,7 +246,6 @@ export function EpubMetadataModal({
       orientation,
       bookUuid,
       outputFormat,
-      description: description.trim() || undefined,
       allowMissingColophon: outputFormat === 'hybrid' ? (allowMissingColophon || hybridCssProfile === 'legacy') : undefined,
       hybridCssProfile: outputFormat === 'hybrid' ? hybridCssProfile : undefined,
     };
@@ -272,7 +268,10 @@ export function EpubMetadataModal({
     if (!isGenerating) return null;
     const isImagesPhase = progress?.phase === 'images' && progress.total > 0;
     const isPackagingPhase = progress?.phase === 'packaging';
-    const phaseLabel = isImagesPhase
+    const isPsdToJpegPhase = progress?.phase === 'psd-to-jpeg';
+    const phaseLabel = isPsdToJpegPhase
+      ? 'PSDをJPEGに変換しています…'
+      : isImagesPhase
       ? '画像を変換しています…'
       : isPackagingPhase
       ? 'EPUBファイルを梱包しています…'
@@ -481,24 +480,6 @@ export function EpubMetadataModal({
                   placeholder="シュッパンシャメイ"
                 />
               </div>
-            </div>
-            <div className="form-group">
-              <label>ISBN</label>
-              <input
-                type="text"
-                value={isbn}
-                onChange={(e) => setIsbn(e.target.value)}
-                placeholder="978-4-XXXX-XXXX-X"
-              />
-            </div>
-            <div className="form-group">
-              <label>説明</label>
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="作品の説明（オプション）"
-                rows={2}
-              />
             </div>
           </div>
 

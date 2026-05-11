@@ -182,24 +182,6 @@ export function EpubMetadataPanel() {
               placeholder="シュッパンシャメイ"
             />
           </div>
-          <div className="form-group">
-            <label>ISBN</label>
-            <input
-              type="text"
-              value={epubMetadata.isbn || ''}
-              onChange={(e) => updateEpubMetadata({ isbn: e.target.value })}
-              placeholder="978-4-XXXX-XXXX-X"
-            />
-          </div>
-          <div className="form-group">
-            <label>説明</label>
-            <textarea
-              value={epubMetadata.description || ''}
-              onChange={(e) => updateEpubMetadata({ description: e.target.value })}
-              placeholder="作品の説明（オプション）"
-              rows={2}
-            />
-          </div>
         </div>
 
         {/* 著者情報 */}

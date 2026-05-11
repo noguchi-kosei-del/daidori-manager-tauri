@@ -47,7 +47,7 @@
   --sidebar-width: 280px;
 
   /* Typography */
-  --font-family: 'Segoe UI', 'Yu Gothic UI', 'Meiryo', sans-serif;
+  --font-family: "Noto Sans JP", "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif;
   --font-family-mono: 'Consolas', 'Menlo', monospace;
   --font-size-xs: 11px;
   --font-size-sm: 12px;
@@ -632,8 +632,8 @@ body.viewer-mode .hamburger-overlay {
   flex-shrink: 0;
 }
 .chapter-type-badge { padding: var(--spacing-2xs) var(--spacing-sm); border-radius: var(--border-radius-full); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); margin-right: var(--spacing-sm); box-shadow: var(--shadow-sm); }
-.chapter-name { flex: 1; font-weight: var(--font-weight-medium); color: var(--color-text-primary); }
-.chapter-page-count { font-size: var(--font-size-sm); color: var(--color-text-secondary); margin-right: var(--spacing-sm); font-family: var(--font-family-mono); }
+.chapter-name { flex: 1 1 0; min-width: 0; font-weight: var(--font-weight-medium); color: var(--color-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chapter-page-count { flex-shrink: 0; font-size: var(--font-size-sm); color: var(--color-text-secondary); margin-right: var(--spacing-sm); font-family: var(--font-family-mono); }
 .chapter-pages-outer { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 0.25s ease; }
 .chapter-pages-outer.collapsed { grid-template-rows: 0fr; }
 .chapter-pages { background: rgba(0, 0, 0, 0.15); display: flex; flex-direction: column; gap: 2px; overflow: hidden; min-height: 0; }
@@ -1457,7 +1457,50 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
 
 .chapter-name-input { flex: 1; padding: var(--spacing-xs) var(--spacing-sm); background: var(--color-bg-primary); border: 1px solid var(--color-accent); border-radius: var(--border-radius); color: var(--color-text-primary); font-size: var(--font-size-sm); }
 
-.chapter-actions { display: flex; align-items: center; gap: var(--spacing-2xs); margin-left: auto; }
+.chapter-actions { display: flex; align-items: center; gap: var(--spacing-2xs); margin-left: auto; flex-shrink: 0; }
+.chapter-actions-trigger { opacity: 0.6; transition: opacity 0.15s ease; }
+.chapter-item:hover .chapter-actions-trigger,
+.chapter-item.selected .chapter-actions-trigger,
+.chapter-actions-trigger:hover,
+.chapter-actions-trigger[aria-expanded="true"] { opacity: 1; }
+
+/* チャプター操作メニュー（…） */
+.chapter-actions-menu {
+  position: fixed;
+  background: var(--color-glass-bg);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius);
+  box-shadow: var(--shadow-lg);
+  z-index: 10000;
+  overflow: hidden;
+  min-width: 180px;
+  animation: menuAppearDown 150ms ease;
+}
+.chapter-actions-menu button {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  width: 100%;
+  padding: var(--spacing-sm) var(--spacing-md);
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 150ms ease;
+}
+.chapter-actions-menu button:hover {
+  background: var(--color-bg-hover);
+}
+.chapter-actions-menu button.menu-item-danger {
+  color: var(--color-danger, #d92d20);
+}
+.chapter-actions-menu button.menu-item-danger:hover {
+  background: color-mix(in srgb, var(--color-danger, #d92d20) 12%, transparent);
+}
 
 .chapter-add-wrapper { position: relative; }
 .menu-backdrop {
