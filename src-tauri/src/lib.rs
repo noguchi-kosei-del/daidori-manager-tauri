@@ -22,6 +22,7 @@ use commands::open_file::open_file_with_default_app;
 use commands::tiff::{check_photoshop_installed, run_photoshop_tiff_convert};
 use commands::jpeg::run_photoshop_jpeg_convert;
 use commands::epub::{generate_epub, generate_book_uuid, get_image_dimensions, create_epub_metadata, get_default_viewport, read_psd_guides};
+use commands::tachimi::{check_tachimi_exe, detect_tachimi_exe, launch_tachimi_with_files};
 use thumbnail::generate_thumbnail;
 
 /// スプラッシュウィンドウを一定時間表示した後、閉じてメインウィンドウを表示する
@@ -104,6 +105,9 @@ pub fn run() {
             create_epub_metadata,
             get_default_viewport,
             read_psd_guides,
+            check_tachimi_exe,
+            detect_tachimi_exe,
+            launch_tachimi_with_files,
         ])
         .run(tauri::generate_context!())
     {

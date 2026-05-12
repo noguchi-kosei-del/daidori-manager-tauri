@@ -209,7 +209,6 @@ export function ChapterItem({
         ) : (
           <span
             className="chapter-name"
-            onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
             onDoubleClick={(e) => {
               e.stopPropagation();

@@ -7,3 +7,4 @@ pub mod photoshop;
 pub mod tiff;
 pub mod jpeg;
 pub mod epub;
+pub mod tachimi;

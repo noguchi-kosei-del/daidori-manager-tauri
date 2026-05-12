@@ -55,6 +55,7 @@ import {
   NoPageIcon,
   DownloadIcon,
   InfoIcon,
+  PdfIcon,
 } from './icons';
 
 // 抽出したコンポーネント
@@ -445,9 +446,88 @@ function App() {
 
   const exportResultAnim = useModalAnimation(exportResultDialog.show);
 
-  // ツールバー右側のアクションボタン（エクスポート・EPUB生成）
+  // Tachimi 連携: 全チャプターのファイルを Tachimi に渡して PDF 化フローへ移行する
+  const TACHIMI_EXE_STORAGE_KEY = 'daidori_tachimi_exe_path';
+
+  // tachimi.exe を自動検出。前回成功パスを hint として優先し、無ければ既知の候補を探索する。
+  const detectTachimiExe = useCallback(async (): Promise<string | null> => {
+    const hint = localStorage.getItem(TACHIMI_EXE_STORAGE_KEY);
+    const found = await invoke<string | null>('detect_tachimi_exe', {
+      hint: hint ?? null,
+    }).catch(() => null);
+    if (found) {
+      localStorage.setItem(TACHIMI_EXE_STORAGE_KEY, found);
+      return found;
+    }
+    localStorage.removeItem(TACHIMI_EXE_STORAGE_KEY);
+    return null;
+  }, []);
+
+  const handleLaunchTachimi = useCallback(async () => {
+    const filePaths = allPages
+      .filter((item) => item.page.pageType === 'file')
+      .map((item) => item.page.filePath)
+      .filter((p): p is string => typeof p === 'string' && p.length > 0);
+
+    if (filePaths.length === 0) {
+      setExportResultDialog({
+        show: true,
+        title: 'ファイルがありません',
+        message: 'すべてのチャプターを通じて、ファイルが追加されたページがありません。',
+        isError: true,
+      });
+      return;
+    }
+
+    const exe = await detectTachimiExe();
+    if (!exe) {
+      setExportResultDialog({
+        show: true,
+        title: 'Tachimi が見つかりません',
+        message:
+          'tachimi.exe を自動検出できませんでした。\nTachimi をインストールするか、開発ビルド（Desktop\\Tachimi_開発\\Tachimi-_Standalone\\src-tauri\\target\\release\\tachimi.exe など）を配置してください。',
+        isError: true,
+      });
+      return;
+    }
+
+    try {
+      const accepted = await invoke<number>('launch_tachimi_with_files', {
+        exePath: exe,
+        filePaths,
+      });
+      const skipped = filePaths.length - accepted;
+      const skipNote = skipped > 0 ? `\n（参照先が見つからなかった ${skipped} 件はスキップ）` : '';
+      setExportResultDialog({
+        show: true,
+        title: 'Tachimi を起動しました',
+        message: `${accepted} 件のファイルを Tachimi に渡しました。${skipNote}\nTachimi で PDF 出力を実行してください。`,
+        isError: false,
+      });
+    } catch (e) {
+      const msg = typeof e === 'string' ? e : (e instanceof Error ? e.message : '不明なエラーが発生しました');
+      setExportResultDialog({
+        show: true,
+        title: 'Tachimi の起動に失敗',
+        message: msg,
+        isError: true,
+      });
+    }
+  }, [allPages, detectTachimiExe, setExportResultDialog]);
+
+  // ツールバー右側のアクションボタン（エクスポート・EPUB生成・Tachimi PDF）
   const toolbarActionButtons = (
     <>
+      <button
+        type="button"
+        className="preview-fab preview-fab-secondary preview-fab-toolbar"
+        onClick={handleLaunchTachimi}
+        disabled={allPages.length === 0}
+        title="Tachimiで PDF 化"
+      >
+        <PdfIcon size={16} />
+        <span className="preview-fab-label">Tachimi PDF</span>
+      </button>
       <button
         type="button"
         className="preview-fab preview-fab-secondary preview-fab-toolbar"

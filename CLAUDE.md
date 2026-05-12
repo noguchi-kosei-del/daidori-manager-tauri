@@ -1769,3 +1769,51 @@ I3. **進捗ラベル追加** ([src/components/modals/EpubMetadataModal.tsx](src
 > - 旧: 基本フォントは Segoe UI / Yu Gothic UI → 新: Google Fonts の Noto Sans JP（MojiQ 互換）
 > - 旧: 入力欄外で Ctrl+A → ブラウザ既定のページ全選択でメッセージ要素にフォーカス移動 → 新: 入力欄外では Ctrl+A を抑止
 
+---
+
+## v1.3.0: Tachimi 連携で全チャプターを 1 操作で PDF 化 + チャプタードラッグ修正
+
+### 概要
+
+別アプリ Tachimi（`C:\Users\noguchi-kosei\Desktop\Tachimi_開発` の PDF/JPEG 出力アプリ、Tauri 2 + Vanilla JS）と接続し、Daiwari Manager で組んだ台割の全チャプター・全ファイルを 1 クリックで Tachimi に渡して PDF 化できるようにした。加えて、v1.2.0 のチャプター名インライン編集で `onPointerDown` が dnd-kit のドラッグ開始イベントを食い止めていたバグも修正。
+
+### A. Tachimi 連携: 全チャプターのファイルを 1 ボタンで PDF 化
+
+**A1. ツールバーに「Tachimi PDF」ボタン追加** ([src/App.tsx](src/App.tsx) `toolbarActionButtons`): EPUB生成 / JPEG/TIF生成 の左に `preview-fab-secondary` スタイルの新ボタン。`allPages.length === 0` で disabled、クリックで `handleLaunchTachimi()` を発動。
+
+**A2. PdfIcon を追加** ([src/icons.tsx](src/icons.tsx)): 書類アイコンの中央に「PDF」テキストラベルを焼き込んだ SVG。`<text fontSize="6.5" fontWeight="700">` で sans-serif を指定。
+
+**A3. Tachimi.exe 自動検出（ファイル選択ダイアログなし）** ([src-tauri/src/commands/tachimi.rs](src-tauri/src/commands/tachimi.rs) `detect_tachimi_exe`): hint（前回成功パス、localStorage 由来）→ 開発ビルド（`%USERPROFILE%\Desktop\Tachimi_開発\Tachimi-_Standalone\src-tauri\target\{release,debug}\tachimi.exe`）→ Windows インストール想定パス（`%ProgramFiles%`, `%ProgramFiles(x86)%`, `%LOCALAPPDATA%` の `Tachimi\` / `Programs\Tachimi\`）→ デスクトップ直下、の順に探索。最初にヒットしたパスを返し、見つからなければ `None`。`localStorage.daidori_tachimi_exe_path` に成功パスをキャッシュし、次回最短経路で確定。
+
+**A4. ハードリンクステージング方式によるファイル渡し** (`launch_tachimi_with_files`): 複数チャプール（=複数フォルダ）混在で Tachimi 側がファイルを見つけられない問題（Tachimi の `handleDroppedPaths` が「最初のファイルの親フォルダをすべてのファイルの所属フォルダと仮定」する設計起因）を回避するため、**Daiwari Manager 側で `%TEMP%\daidori_tachimi_staging\` に全ファイルをハードリンク集約**してから Tachimi に渡す:
+- 4 桁ゼロ埋め連番プレフィックス（`0001_filename.psd`, `0002_...`）で**チャプター順 + ページ順を保持**。Tachimi 内部の `localeCompare(..., {numeric: true})` ソートで自然順を維持
+- **ハードリンク優先** (`fs::hard_link`): 同一ボリュームならほぼ即時 + I/O ゼロ（NTFS link 機能、元データを参照するだけ）
+- **コピーへフォールバック** (`fs::copy`): クロスドライブ / 権限制限 / 非 NTFS 等でハードリンクが失敗した場合
+- **同名ファイル衝突回避**: 複数チャプターで同じ `p001.psd` があっても連番プレフィックスで別ファイル扱いに
+- **前回ステージングは自動クリーンアップ**: 起動毎に `daidori_tachimi_staging\` を `remove_dir_all` してから作り直す（ゴミ蓄積なし）
+- **元ファイル本体は触らない**: ハードリンクは参照を作るだけ、コピーフォールバックでも書き込みは temp 配下のみ
+
+**A5. トリガー JSON 経由のファイル渡し**: ステージング後の絶対パス配列を `%TEMP%\tachimi_cli_files.json` に書き出し、`tachimi.exe` を CLI 引数なしで spawn。Tachimi 側は起動時に同 JSON を読み取り全ファイルをロード後、JSON を自動削除（既存の COMIC-Bridge 連携用パスを再利用）。CLI 引数の Windows 長さ制限（~8191 字）や、パスの quote / 空白 / 全角文字エスケープ事故とは無縁。
+
+**A6. 結果通知は既存 `setExportResultDialog` を再利用**: 成功時は「N 件のファイルを Tachimi に渡しました」、参照切れがあれば skip 件数も併記。tachimi.exe 検出失敗 / spawn 失敗 / ステージング失敗それぞれに専用エラー文言。useExport フックから返る既存ダイアログ状態を流用するので新規モーダル DOM 追加なし。
+
+**A7. `check_tachimi_exe` バリデーション関数**: パスが存在し、ファイル名末尾が `tachimi.exe` / `tachimi`（case-insensitive）であれば OK。`detect_tachimi_exe` が内部で使用し、フロント側からも検証用に呼び出せる。
+
+### B. チャプタードラッグ移動の修正
+
+**B1. `onPointerDown` の stopPropagation 削除** ([src/components/sidebar/ChapterItem.tsx](src/components/sidebar/ChapterItem.tsx) `.chapter-name` span): v1.2.0 でチャプター名ダブルクリック編集を実装した際に追加した `onPointerDown={(e) => e.stopPropagation()}` が、dnd-kit の `PointerSensor` がチャプターヘッダ全体に張っているドラッグ開始リスナーへの伝播を遮断していた。チャプター名 span がヘッダの大半を占めるため、ユーザーがチャプター名上でドラッグを開始しても dnd-kit に届かず、結果としてチャプターのドラッグ並べ替えが事実上機能しなくなっていた。`onClick` の stopPropagation はクリックでの選択誤動作防止に必要なので維持しつつ、`onPointerDown` だけ削除。`onDoubleClick` は別経路でリネームを開始するので影響なし。
+
+### C. Tachimi 側の補完的修正（参考）
+
+別リポジトリ（[Tachimi-_Standalone](https://github.com/Ina986/Tachimi-_Standalone)）の `src/js/features/file-handling.js` の `handleDroppedPaths` ファイル分岐も拡張して、複数フォルダ混在のファイルリストを**共通親 + 相対パス + subfolder 情報**に変換する処理を追加（COMIC-Bridge / Daiwari Manager 等から複数チャプターの PSD を一括受信するケースに対応）。ただし Daiwari Manager 側のステージング方式（A4）で Tachimi 側の挙動に依存しない構成にしたため、こちらは追加の堅牢化として位置づけ。
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.3.0`** に揃え。Cargo.lock は `cargo check` 経由で自動追従。
+
+> **このバージョンの構造変更まとめ**:
+> - 旧: 台割マネージャーから別アプリで PDF 化する公式手段なし、ユーザーは手動で全ファイルを開き直す必要 → 新: ツールバー「Tachimi PDF」1 クリックで Tachimi が自動起動 → 全チャプターのファイルがロード済み状態で開き、Tachimi 側で PDF 出力するだけ
+> - 旧: 別アプリ連携時のファイル渡しは未実装 → 新: `%TEMP%\daidori_tachimi_staging\` にハードリンクで連番集約 → Tachimi に絶対パス JSON を渡す。複数チャプター混在・複数ドライブ・同名ファイル衝突すべて同じ経路で解決
+> - 旧: tachimi.exe の場所をユーザーがファイル選択ダイアログで指定する必要がある設計だった → 新: 既知の候補パス（dev release/debug、Program Files、LOCALAPPDATA、デスクトップ直下）を Rust 側で順次探索し、見つかれば自動採用 + localStorage キャッシュ。ユーザー操作はゼロ
+> - 旧: v1.2.0 のチャプター名インライン編集が `onPointerDown` で dnd-kit のドラッグセンサーへの伝播を遮断 → チャプターのドラッグ並べ替えが機能しない → 新: `onPointerDown` の stopPropagation を撤去、`onClick` のみで選択誤動作を防ぐ最小限の制御に
+
