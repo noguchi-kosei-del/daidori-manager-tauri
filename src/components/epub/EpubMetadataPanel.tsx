@@ -15,6 +15,11 @@ import {
   AUTHOR_ROLE_LABELS,
 } from '../../types';
 
+const PUBLISHER_OPTIONS = [
+  { name: 'CLLENN', fileAs: 'シレン' },
+  { name: 'DEEPER-ZERO', fileAs: 'ディーパーゼロ' },
+];
+
 export function EpubMetadataPanel() {
   const {
     epubMetadata,
@@ -30,6 +35,21 @@ export function EpubMetadataPanel() {
       });
     }
   }, [epubMetadata]);
+
+  useEffect(() => {
+    if (!epubMetadata) return;
+    const currentOption = PUBLISHER_OPTIONS.find((item) => item.name === epubMetadata.publisher);
+    if (!currentOption) {
+      updateEpubMetadata({
+        publisher: PUBLISHER_OPTIONS[0].name,
+        publisherFileAs: PUBLISHER_OPTIONS[0].fileAs,
+      });
+      return;
+    }
+    if (epubMetadata.publisherFileAs !== currentOption.fileAs) {
+      updateEpubMetadata({ publisherFileAs: currentOption.fileAs });
+    }
+  }, [epubMetadata?.publisher, epubMetadata?.publisherFileAs]);
 
   if (!epubMetadata) {
     return (
@@ -57,6 +77,15 @@ export function EpubMetadataPanel() {
     updateEpubMetadata({
       hybridCssProfile: profile,
       allowMissingColophon: profile === 'legacy' ? true : epubMetadata.allowMissingColophon,
+    });
+  };
+
+  const handlePublisherChange = (publisherName: string) => {
+    const option = PUBLISHER_OPTIONS.find((item) => item.name === publisherName);
+    if (!option) return;
+    updateEpubMetadata({
+      publisher: option.name,
+      publisherFileAs: option.fileAs,
     });
   };
 
@@ -166,19 +195,24 @@ export function EpubMetadataPanel() {
           </div>
           <div className="form-group">
             <label>出版社 *</label>
-            <input
-              type="text"
+            <select
+              className="publisher-select"
               value={epubMetadata.publisher}
-              onChange={(e) => updateEpubMetadata({ publisher: e.target.value })}
-              placeholder="出版社名"
-            />
+              onChange={(e) => handlePublisherChange(e.target.value)}
+            >
+              {PUBLISHER_OPTIONS.map((option) => (
+                <option key={option.name} value={option.name}>
+                  {option.name}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="form-group">
             <label>出版社読み仮名</label>
             <input
               type="text"
               value={epubMetadata.publisherFileAs || ''}
-              onChange={(e) => updateEpubMetadata({ publisherFileAs: e.target.value })}
+              readOnly
               placeholder="シュッパンシャメイ"
             />
           </div>

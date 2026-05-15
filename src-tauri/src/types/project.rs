@@ -25,6 +25,7 @@ pub struct SavedPage {
 pub struct SavedChapter {
     pub id: String,
     pub name: String,
+    pub subtitle: Option<String>,
     #[serde(rename = "type")]
     pub chapter_type: String,
     pub pages: Vec<SavedPage>,

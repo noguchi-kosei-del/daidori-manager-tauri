@@ -1,6 +1,6 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
-import { emit } from '@tauri-apps/api/event';
+import { emit, listen } from '@tauri-apps/api/event';
 import { desktopDir, join } from '@tauri-apps/api/path';
 import { open, ask } from '@tauri-apps/plugin-dialog';
 import { useTauriFileDrop } from './hooks/useTauriFileDrop';
@@ -20,7 +20,7 @@ import { useStore, FileInfo, THUMBNAIL_SIZES } from './store';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useKeyboardShortcuts, useDragHandlers, useExport, queueThumbnail, useAutoUpdate, scheduleStartupCheck, useModalAnimation } from './hooks';
 import { getVersion } from '@tauri-apps/api/app';
-import { describePhysicalSize } from './utils/paperSize';
+import { describePhysicalSize, findPaperSize, pixelsToMm } from './utils/paperSize';
 import {
   Chapter,
   ChapterType,
@@ -78,6 +78,92 @@ import {
 
 
 
+const DRAWN_EXTRA_FOLDER_NAMES = new Set(['全書店', 'シーモア', 'Renta!', 'ebookjapan']);
+
+const getFolderName = (folderPath: string): string => {
+  const cleaned = folderPath.replace(/[\\/]+$/, '');
+  const parts = cleaned.split(/[\\/]/);
+  return parts[parts.length - 1] || folderPath;
+};
+
+const getDefaultNameForImportedFolder = (
+  folderName: string,
+  chapterType: ChapterType,
+  fallbackName?: string
+): string | undefined => {
+  if (chapterType === 'chapter' && DRAWN_EXTRA_FOLDER_NAMES.has(folderName)) {
+    return '描き下ろし';
+  }
+  return fallbackName;
+};
+
+const getSubtitleForImportedFolder = (
+  folderName: string,
+  chapterType: ChapterType
+): string | undefined => {
+  if (chapterType === 'chapter' && DRAWN_EXTRA_FOLDER_NAMES.has(folderName)) {
+    return folderName;
+  }
+  return undefined;
+};
+
+const getChapterDisplayTitle = (
+  chapter: Pick<Chapter, 'name' | 'subtitle'>
+): { name: string; subtitle?: string } => {
+  const inlineDrawnExtraMatch = chapter.name.match(/^描き下ろし（(.+)）$/);
+  const inlineDrawnExtraSubtitle = inlineDrawnExtraMatch?.[1];
+  const shouldSplitInlineDrawnExtra =
+    !!inlineDrawnExtraSubtitle && DRAWN_EXTRA_FOLDER_NAMES.has(inlineDrawnExtraSubtitle);
+
+  return {
+    name: !chapter.subtitle && shouldSplitInlineDrawnExtra ? '描き下ろし' : chapter.name,
+    subtitle: chapter.subtitle ?? (shouldSplitInlineDrawnExtra ? inlineDrawnExtraSubtitle : undefined),
+  };
+};
+
+type ImageSizeGroupInfo = {
+  key: string;
+  paperLabel: string;
+  pixelLabel: string;
+  dpiLabel: string;
+  physicalLabel: string;
+  isException: boolean;
+};
+
+const getImageSizeGroupInfo = (page: Page): ImageSizeGroupInfo | null => {
+  const width = page.imageWidth;
+  const height = page.imageHeight;
+  const dpi = page.imageDpi;
+  if (!width || !height) return null;
+
+  const pixelLabel = `${width}×${height}px`;
+  const dpiLabel = dpi && dpi > 0 ? `${dpi}dpi` : 'dpi不明';
+  let paperLabel = '例外サイズ';
+  let physicalLabel = '実寸不明';
+  let isException = true;
+
+  if (dpi && dpi > 0) {
+    const { wMm, hMm } = pixelsToMm(width, height, dpi);
+    const wMmRound = Math.round(wMm);
+    const hMmRound = Math.round(hMm);
+    const matched = findPaperSize(wMm, hMm);
+    physicalLabel = `${wMmRound}×${hMmRound}mm`;
+    if (matched) {
+      paperLabel = matched;
+      isException = false;
+    }
+  }
+
+  return {
+    key: isException ? 'exception-size' : `${paperLabel}|${pixelLabel}|${dpiLabel}`,
+    paperLabel,
+    pixelLabel,
+    dpiLabel,
+    physicalLabel,
+    isException,
+  };
+};
+
 // メインApp
 function App() {
   const {
@@ -93,6 +179,7 @@ function App() {
     removeChapter,
     clearChapters,
     renameChapter,
+    updateChapterSubtitle,
     toggleChapterCollapsed,
     reorderChapters,
     duplicateChapter,
@@ -174,6 +261,7 @@ function App() {
 
   // カラーモードサマリー: ホバー中のカラーモード（非該当ページはdim表示）
   const [hoveredColorMode, setHoveredColorMode] = useState<string | null>(null);
+  const [hoveredImageSizeKey, setHoveredImageSizeKey] = useState<string | null>(null);
   // カラーモードサマリー展開状態（localStorage永続化）
   const [isColorSummaryExpanded, setIsColorSummaryExpanded] = useState(() => {
     const saved = localStorage.getItem('daidori_color_summary_expanded');
@@ -193,12 +281,19 @@ function App() {
     cancelHoverClose();
     hoverCloseTimerRef.current = window.setTimeout(() => {
       setHoveredColorMode(null);
+      setHoveredImageSizeKey(null);
       hoverCloseTimerRef.current = null;
     }, 180);
   }, [cancelHoverClose]);
   const handleBadgeEnter = useCallback((mode: string) => {
     cancelHoverClose();
+    setHoveredImageSizeKey(null);
     setHoveredColorMode(mode);
+  }, [cancelHoverClose]);
+  const handleImageSizeBadgeEnter = useCallback((key: string) => {
+    cancelHoverClose();
+    setHoveredColorMode(null);
+    setHoveredImageSizeKey(key);
   }, [cancelHoverClose]);
 
   // プロジェクト名編集
@@ -343,6 +438,50 @@ function App() {
   }), [colorModeGroups]);
   const colorModeTotalCount =
     colorModeCounts.Bitmap + colorModeCounts.Grayscale + colorModeCounts.RGB + colorModeCounts.CMYK;
+  const imageSizeGroups = useMemo(() => {
+    const groups = new Map<string, {
+      key: string;
+      paperLabel: string;
+      pixelLabel: string;
+      dpiLabel: string;
+      physicalLabel: string;
+      isException: boolean;
+      files: {
+        name: string;
+        pixelLabel: string;
+        dpiLabel: string;
+        physicalLabel: string;
+      }[];
+    }>();
+
+    for (const { page } of allPages) {
+      if (page.pageType !== 'file') continue;
+      const info = getImageSizeGroupInfo(page);
+      if (!info) continue;
+
+      const existing = groups.get(info.key);
+      const fileInfo = {
+        name: page.fileName || '(名称未設定)',
+        pixelLabel: info.pixelLabel,
+        dpiLabel: info.dpiLabel,
+        physicalLabel: info.physicalLabel,
+      };
+      if (existing) {
+        existing.files.push(fileInfo);
+      } else {
+        groups.set(info.key, {
+          ...info,
+          files: [fileInfo],
+        });
+      }
+    }
+
+    return Array.from(groups.values()).sort((a, b) => {
+      if (a.isException !== b.isException) return a.isException ? 1 : -1;
+      return a.paperLabel.localeCompare(b.paperLabel, 'ja', { numeric: true });
+    });
+  }, [allPages]);
+  const hasSummaryItems = colorModeTotalCount > 0 || imageSizeGroups.length > 0;
 
   // CMYKチェック: エクスポート/EPUB生成前のガード。CMYKがあれば警告ダイアログを出してブロックする。
   // 戻り値: true=ブロック(中断), false=続行可
@@ -364,7 +503,7 @@ function App() {
     });
     return true;
   };
-  const colorModeSummaryBar = colorModeTotalCount > 0 ? (
+  const colorModeSummaryBar = hasSummaryItems ? (
     <div className={`color-mode-summary-container ${isColorSummaryExpanded ? 'expanded' : 'collapsed'}`}>
       <button
         type="button"
@@ -425,6 +564,41 @@ function App() {
               </div>
             );
           })}
+          {imageSizeGroups.length > 0 && (
+            <div className="image-size-summary-group" aria-label="画像サイズ">
+              {imageSizeGroups.map((group) => (
+                <div
+                  key={group.key}
+                  className={`image-size-badge ${hoveredImageSizeKey === group.key ? 'active' : ''} ${group.isException ? 'image-size-badge-exception' : ''}`}
+                  onMouseEnter={() => handleImageSizeBadgeEnter(group.key)}
+                  onMouseLeave={scheduleHoverClose}
+                >
+                  <span className="image-size-paper">
+                    {group.isException ? '例外サイズ' : group.paperLabel.replace(/（.*$/, '')}
+                  </span>
+                  <span className="color-mode-count">{group.files.length}</span>
+                  {hoveredImageSizeKey === group.key && (
+                    <div
+                      className="color-mode-badge-tooltip image-size-badge-tooltip"
+                      onMouseEnter={cancelHoverClose}
+                      onMouseLeave={scheduleHoverClose}
+                    >
+                      {group.files.map((file, i) => (
+                        <div key={i} className="color-mode-badge-tooltip-item image-size-tooltip-file" title={file.name}>
+                          <span className="image-size-tooltip-filename">{file.name}</span>
+                          {group.isException && (
+                            <span className="image-size-tooltip-filemeta">
+                              {file.pixelLabel} / {file.dpiLabel} / 実寸 {file.physicalLabel}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -445,6 +619,37 @@ function App() {
   } = useExport(chapters, allPages);
 
   const exportResultAnim = useModalAnimation(exportResultDialog.show);
+  const [tachimiPdfProgress, setTachimiPdfProgress] = useState<{
+    phase: string;
+    message: string;
+    current: number;
+    total: number;
+    indeterminate: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let mounted = true;
+    listen<{
+      phase: string;
+      message: string;
+      current: number;
+      total: number;
+      indeterminate: boolean;
+    }>('tachimi-pdf-progress', (event) => {
+      if (mounted) setTachimiPdfProgress(event.payload);
+    }).then((fn) => {
+      if (mounted) {
+        unlisten = fn;
+      } else {
+        fn();
+      }
+    }).catch((err) => console.warn('[App] Tachimi PDF progress listener failed:', err));
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, []);
 
   // Tachimi 連携: 全チャプターのファイルを Tachimi に渡して PDF 化フローへ移行する
   const TACHIMI_EXE_STORAGE_KEY = 'daidori_tachimi_exe_path';
@@ -464,16 +669,21 @@ function App() {
   }, []);
 
   const handleLaunchTachimi = useCallback(async () => {
-    const filePaths = allPages
-      .filter((item) => item.page.pageType === 'file')
-      .map((item) => item.page.filePath)
-      .filter((p): p is string => typeof p === 'string' && p.length > 0);
+    const pdfChapters = chapters
+      .map((chapter) => ({
+        name: chapter.name,
+        pages: chapter.pages.map((page) => ({
+          source_path: page.filePath ?? null,
+          page_type: page.pageType,
+        })),
+      }))
+      .filter((chapter) => chapter.pages.length > 0);
 
-    if (filePaths.length === 0) {
+    if (pdfChapters.length === 0) {
       setExportResultDialog({
         show: true,
         title: 'ファイルがありません',
-        message: 'すべてのチャプターを通じて、ファイルが追加されたページがありません。',
+        message: 'PDF化できるページが追加されたチャプターがありません。',
         isError: true,
       });
       return;
@@ -492,28 +702,66 @@ function App() {
     }
 
     try {
-      const accepted = await invoke<number>('launch_tachimi_with_files', {
-        exePath: exe,
-        filePaths,
+      const desktop = await desktopDir();
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: desktop,
+        title: 'Tachimi PDF の出力先フォルダを選択',
       });
-      const skipped = filePaths.length - accepted;
-      const skipNote = skipped > 0 ? `\n（参照先が見つからなかった ${skipped} 件はスキップ）` : '';
+      if (!selected || Array.isArray(selected)) return;
+
       setExportResultDialog({
         show: true,
-        title: 'Tachimi を起動しました',
-        message: `${accepted} 件のファイルを Tachimi に渡しました。${skipNote}\nTachimi で PDF 出力を実行してください。`,
+        title: 'Tachimi PDF生成中',
+        message: 'Tachimi でチャプターPDFを生成しています。完了まで少しお待ちください。',
         isError: false,
       });
+      setTachimiPdfProgress({
+        phase: 'prepare',
+        message: 'Tachimi PDFジョブを準備しています',
+        current: 0,
+        total: pdfChapters.length || 1,
+        indeterminate: false,
+      });
+
+      const result = await invoke<{
+        generated: number;
+        output_dir: string;
+        results: { output_path: string; success: boolean; error?: string | null }[];
+      }>('generate_tachimi_chapter_pdfs', {
+        exePath: exe,
+        outputDir: selected,
+        chapters: pdfChapters,
+        isSpread: true,
+      });
+
+      const errors = result.results.filter((r) => !r.success);
+      const details = [
+        ...result.results.filter((r) => r.success).map((r) => r.output_path),
+        ...errors.map((r) => `${r.output_path || 'PDF生成'}: ${r.error ?? '不明なエラー'}`),
+      ].join('\n');
+
+      setExportResultDialog({
+        show: true,
+        title: errors.length > 0 ? 'Tachimi PDF生成完了（一部エラー）' : 'Tachimi PDF生成完了',
+        message: `${result.generated} 件のチャプターPDFを生成しました。\n出力先: ${result.output_dir}`,
+        details: details || undefined,
+        outputDir: result.output_dir,
+        isError: errors.length > 0,
+      });
+      setTachimiPdfProgress(null);
     } catch (e) {
       const msg = typeof e === 'string' ? e : (e instanceof Error ? e.message : '不明なエラーが発生しました');
       setExportResultDialog({
         show: true,
-        title: 'Tachimi の起動に失敗',
+        title: 'Tachimi PDF生成に失敗',
         message: msg,
         isError: true,
       });
+      setTachimiPdfProgress(null);
     }
-  }, [allPages, detectTachimiExe, setExportResultDialog]);
+  }, [chapters, detectTachimiExe, setExportResultDialog]);
 
   // ツールバー右側のアクションボタン（エクスポート・EPUB生成・Tachimi PDF）
   const toolbarActionButtons = (
@@ -869,11 +1117,6 @@ function App() {
 
       // フォルダごとに内容を取得
       const folderEntries: SplitFolderEntry[] = [];
-      const getFolderName = (folderPath: string): string => {
-        const cleaned = folderPath.replace(/[\\/]+$/, '');
-        const parts = cleaned.split(/[\\/]/);
-        return parts[parts.length - 1] || folderPath;
-      };
       for (const folderPath of folderPaths) {
         try {
           const files: FileInfo[] = await invoke('get_folder_contents', { folderPath });
@@ -905,6 +1148,16 @@ function App() {
       // 単一フォルダまたは白紙チャプターは従来通り全ファイル追加
       const allFiles = folderEntries.flatMap(e => e.files);
       if (allFiles.length > 0) {
+        if (targetChapter?.type === 'chapter' && folderEntries.length === 1) {
+          const importedName = getDefaultNameForImportedFolder(folderEntries[0].folderName, targetChapter.type);
+          const importedSubtitle = getSubtitleForImportedFolder(folderEntries[0].folderName, targetChapter.type);
+          if (importedName && importedName !== targetChapter.name) {
+            renameChapter(chapterId, importedName);
+          }
+          if (importedSubtitle && importedSubtitle !== targetChapter.subtitle) {
+            updateChapterSubtitle(chapterId, importedSubtitle);
+          }
+        }
         addPagesToChapter(chapterId, allFiles);
       }
     } catch (error) {
@@ -1530,12 +1783,6 @@ function App() {
 
       // フォルダ単位で取り込み内容をまとめる（後で分割ダイアログ判定にも利用）
       const folderEntries: SplitFolderEntry[] = [];
-      const getFolderName = (folderPath: string): string => {
-        const cleaned = folderPath.replace(/[\\/]+$/, '');
-        const parts = cleaned.split(/[\\/]/);
-        return parts[parts.length - 1] || folderPath;
-      };
-
       // 個別ファイル: 親フォルダ単位でグルーピング
       const parentFolderSet = new Set<string>();
       for (const p of imagePaths) {
@@ -1602,16 +1849,45 @@ function App() {
       // モードに応じて処理
       if (mode === 'new-chapter-start') {
         // 先頭に新しいチャプターを作成してそこに追加
-        const newChapterId = addChapter('chapter', undefined, false, 0);
+        const folderName = folderEntries.length === 1 ? folderEntries[0].folderName : '';
+        const chapterSubtitle = getSubtitleForImportedFolder(folderName, 'chapter');
+        const newChapterId = addChapter(
+          'chapter',
+          getDefaultNameForImportedFolder(folderName, 'chapter'),
+          false,
+          0
+        );
+        if (chapterSubtitle) {
+          updateChapterSubtitle(newChapterId, chapterSubtitle);
+        }
         selectChapter(newChapterId);
         addPagesToChapter(newChapterId, droppedFiles);
       } else if (mode === 'new-chapter') {
         // 末尾に新しいチャプターを作成してそこに追加
-        const newChapterId = addChapter('chapter');
+        const folderName = folderEntries.length === 1 ? folderEntries[0].folderName : '';
+        const chapterSubtitle = getSubtitleForImportedFolder(folderName, 'chapter');
+        const newChapterId = addChapter(
+          'chapter',
+          getDefaultNameForImportedFolder(folderName, 'chapter')
+        );
+        if (chapterSubtitle) {
+          updateChapterSubtitle(newChapterId, chapterSubtitle);
+        }
         selectChapter(newChapterId);
         addPagesToChapter(newChapterId, droppedFiles);
       } else if (mode === 'append-chapter' && targetChapterId) {
         // 指定チャプターの末尾に追加
+        const targetChapter = currentChapters.find(c => c.id === targetChapterId);
+        if (targetChapter?.type === 'chapter' && folderEntries.length === 1) {
+          const importedName = getDefaultNameForImportedFolder(folderEntries[0].folderName, targetChapter.type);
+          const importedSubtitle = getSubtitleForImportedFolder(folderEntries[0].folderName, targetChapter.type);
+          if (importedName && importedName !== targetChapter.name) {
+            renameChapter(targetChapterId, importedName);
+          }
+          if (importedSubtitle && importedSubtitle !== targetChapter.subtitle) {
+            updateChapterSubtitle(targetChapterId, importedSubtitle);
+          }
+        }
         addPagesToChapter(targetChapterId, droppedFiles);
         selectChapter(targetChapterId);
       } else if (mode === 'insert' && targetPageId) {
@@ -1630,8 +1906,28 @@ function App() {
         // デフォルト：選択中のチャプターに追加、なければ新規作成
         let chapterId = currentSelectedChapterId;
         if (!chapterId) {
-          chapterId = addChapter('chapter');
+          const folderName = folderEntries.length === 1 ? folderEntries[0].folderName : '';
+          const chapterSubtitle = getSubtitleForImportedFolder(folderName, 'chapter');
+          chapterId = addChapter(
+            'chapter',
+            getDefaultNameForImportedFolder(folderName, 'chapter')
+          );
+          if (chapterSubtitle) {
+            updateChapterSubtitle(chapterId, chapterSubtitle);
+          }
           selectChapter(chapterId);
+        } else {
+          const targetChapter = currentChapters.find(c => c.id === chapterId);
+          if (targetChapter?.type === 'chapter' && folderEntries.length === 1) {
+            const importedName = getDefaultNameForImportedFolder(folderEntries[0].folderName, targetChapter.type);
+            const importedSubtitle = getSubtitleForImportedFolder(folderEntries[0].folderName, targetChapter.type);
+            if (importedName && importedName !== targetChapter.name) {
+              renameChapter(chapterId, importedName);
+            }
+            if (importedSubtitle && importedSubtitle !== targetChapter.subtitle) {
+              updateChapterSubtitle(chapterId, importedSubtitle);
+            }
+          }
         }
         addPagesToChapter(chapterId, droppedFiles);
       }
@@ -2121,6 +2417,7 @@ function App() {
                                 {chapterGroups.map((group) => {
                                   const isCollapsed = previewCollapsedChapters.has(group.chapter.id);
                                   const firstPage = group.pages[0];
+                                  const chapterDisplayTitle = getChapterDisplayTitle(group.chapter);
 
                                   // ページ一覧を作成（折りたたみ時は先頭のみ、展開時は全て）
                                   const pagesToShow = isCollapsed ? (firstPage ? [firstPage] : []) : group.pages;
@@ -2141,7 +2438,12 @@ function App() {
                                             >
                                               {CHAPTER_TYPE_LABELS[group.chapter.type]}
                                             </span>
-                                            <span className="chapter-block-name">{group.chapter.name}</span>
+                                            <span className="chapter-block-title-stack">
+                                              <span className="chapter-block-name">{chapterDisplayTitle.name}</span>
+                                              {chapterDisplayTitle.subtitle && (
+                                                <span className="chapter-block-subtitle">{chapterDisplayTitle.subtitle}</span>
+                                              )}
+                                            </span>
                                           </div>
                                           {/* 空のページ */}
                                           <div
@@ -2198,7 +2500,12 @@ function App() {
                                                 >
                                                   {CHAPTER_TYPE_LABELS[group.chapter.type]}
                                                 </span>
-                                                <span className="chapter-block-name">{group.chapter.name}</span>
+                                                <span className="chapter-block-title-stack">
+                                                  <span className="chapter-block-name">{chapterDisplayTitle.name}</span>
+                                                  {chapterDisplayTitle.subtitle && (
+                                                    <span className="chapter-block-subtitle">{chapterDisplayTitle.subtitle}</span>
+                                                  )}
+                                                </span>
                                               </div>
                                             )}
                                             {/* ページ */}
@@ -2229,9 +2536,11 @@ function App() {
                                                 isSelected={item.page.id === selectedPageId}
                                                 isMultiSelected={selectedPageIds.includes(item.page.id)}
                                                 isDimmed={
-                                                  hoveredColorMode !== null &&
                                                   item.page.pageType === 'file' &&
-                                                  item.page.imageColorMode !== hoveredColorMode
+                                                  (
+                                                    (hoveredColorMode !== null && item.page.imageColorMode !== hoveredColorMode) ||
+                                                    (hoveredImageSizeKey !== null && getImageSizeGroupInfo(item.page)?.key !== hoveredImageSizeKey)
+                                                  )
                                                 }
                                                 chapterType={item.chapter.type}
                                                 onSelect={() => {
@@ -2438,8 +2747,12 @@ function App() {
         };
         const defaultNames = sortedFolders.map((folder, i) => {
           const num = extractFolderNumber(folder.folderName);
-          return num !== null ? `${num}話` : `${i + 1}話`;
+          const fallbackName = num !== null ? `${num}話` : `${i + 1}話`;
+          return getDefaultNameForImportedFolder(folder.folderName, targetType, fallbackName) ?? fallbackName;
         });
+        const defaultSubtitles = sortedFolders.map((folder) =>
+          getSubtitleForImportedFolder(folder.folderName, targetType)
+        );
         const rowAnnotations = sortedFolders.map((_, i) =>
           i === 0 ? '（ドロップ先）' : null
         );
@@ -2448,6 +2761,7 @@ function App() {
             isOpen={splitFoldersDialog.open}
             folders={sortedFolders}
             defaultNames={defaultNames}
+            defaultSubtitles={defaultSubtitles}
             rowAnnotations={rowAnnotations}
             chapterTypeLabel={typeLabel}
             onCancel={closeSplitFoldersDialog}
@@ -2469,6 +2783,9 @@ function App() {
                 const first = selected[0];
                 if (first.name !== latestChapters[targetIdx].name) {
                   renameChapter(targetId, first.name);
+                }
+                if (first.subtitle && first.subtitle !== latestChapters[targetIdx].subtitle) {
+                  updateChapterSubtitle(targetId, first.subtitle);
                 }
                 addPagesToChapter(targetId, first.files);
 
@@ -2533,6 +2850,34 @@ function App() {
           <div className={`modal-content export-result-dialog ${exportResultDialog.isError ? 'has-error' : ''} ${exportResultAnim.isClosing ? 'closing' : ''}`}>
             <h2>{exportResultDialog.title}</h2>
             <p className="export-result-message">{exportResultDialog.message}</p>
+            {tachimiPdfProgress && exportResultDialog.title === 'Tachimi PDF生成中' && (() => {
+              const percent = tachimiPdfProgress.indeterminate || tachimiPdfProgress.total <= 0
+                ? 100
+                : Math.min(100, Math.round((tachimiPdfProgress.current / tachimiPdfProgress.total) * 100));
+              const phaseLabel =
+                tachimiPdfProgress.phase === 'prepare' ? '準備中'
+                : tachimiPdfProgress.phase === 'stage' ? 'ページ整理中'
+                : tachimiPdfProgress.phase === 'generate' ? 'PDF生成中'
+                : tachimiPdfProgress.phase === 'finalize' ? '確認中'
+                : '完了';
+              return (
+                <div className="tachimi-progress">
+                  <div className="tachimi-progress-meta">
+                    <span>{phaseLabel}</span>
+                    {!tachimiPdfProgress.indeterminate && (
+                      <span>{tachimiPdfProgress.current} / {tachimiPdfProgress.total}</span>
+                    )}
+                  </div>
+                  <div className="tachimi-progress-bar">
+                    <div
+                      className={`tachimi-progress-fill ${tachimiPdfProgress.indeterminate ? 'indeterminate' : ''}`}
+                      style={{ width: `${percent}%` }}
+                    />
+                  </div>
+                  <div className="tachimi-progress-message">{tachimiPdfProgress.message}</div>
+                </div>
+              );
+            })()}
             {exportResultDialog.details && (
               <div className="export-result-details">
                 <pre>{exportResultDialog.details}</pre>

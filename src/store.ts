@@ -75,6 +75,7 @@ interface AppState {
   removeChapter: (id: string) => void;
   clearChapters: () => void;
   renameChapter: (id: string, name: string) => void;
+  updateChapterSubtitle: (id: string, subtitle?: string) => void;
   toggleChapterCollapsed: (id: string) => void;
   reorderChapters: (fromIndex: number, toIndex: number) => void;
   duplicateChapter: (id: string) => string | null;
@@ -86,7 +87,7 @@ interface AppState {
   insertChaptersFromFolders: (
     insertAt: number,
     type: ChapterType,
-    folders: { name: string; files: FileInfo[] }[]
+    folders: { name: string; subtitle?: string; files: FileInfo[] }[]
   ) => string[];
   addSpecialPage: (chapterId: string, pageType: PageType, afterPageId?: string) => void;
   setPageFile: (pageId: string, file: FileInfo | null) => void;
@@ -447,6 +448,13 @@ export const useStore = create<AppState>((set, get) => {
     }));
   },
 
+  updateChapterSubtitle: (id, subtitle) => {
+    set((state) => ({
+      ...saveHistory(),
+      chapters: state.chapters.map((c) => (c.id === id ? { ...c, subtitle } : c)),
+    }));
+  },
+
   // チャプター折りたたみ切り替え
   toggleChapterCollapsed: (id) => {
     set((state) => ({
@@ -542,6 +550,7 @@ export const useStore = create<AppState>((set, get) => {
       return {
         id: uuidv4(),
         name: folder.name,
+        subtitle: folder.subtitle,
         type,
         pages,
         collapsed: false,
@@ -1258,7 +1267,8 @@ export const useStore = create<AppState>((set, get) => {
     const metadata: EpubMetadata = {
       title: projectName,
       authors: [{ name: '', role: 'aut' }],
-      publisher: '',
+      publisher: 'CLLENN',
+      publisherFileAs: 'シレン',
       language: 'ja',
       pageDirection: 'rtl',
       viewportWidth: defaultViewport.width,

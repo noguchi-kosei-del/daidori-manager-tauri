@@ -96,6 +96,7 @@ export interface ThumbnailResult {
 export interface Chapter {
   id: string;
   name: string;
+  subtitle?: string;
   type: ChapterType;
   pages: Page[];
   collapsed: boolean;
@@ -159,6 +160,7 @@ export interface SavedPage {
 export interface SavedChapter {
   id: string;
   name: string;
+  subtitle?: string;
   type: ChapterType;
   pages: SavedPage[];
   folderPath?: string;

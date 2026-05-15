@@ -14,6 +14,7 @@ export interface SplitFolderEntry {
 
 export interface SplitFoldersDialogResult {
   name: string;
+  subtitle?: string;
   files: FileInfo[];
 }
 
@@ -23,6 +24,7 @@ export interface SplitFoldersDialogProps {
   folders: SplitFolderEntry[];
   /** 各行のデフォルトチャプター名（folders と同じ長さ） */
   defaultNames: string[];
+  defaultSubtitles?: (string | undefined)[];
   /** 各行のラベル接尾辞（例: 先頭行に「（ドロップ先）」と表示） */
   rowAnnotations?: (string | null)[];
   /** タイトル・説明文に表示するチャプタータイプ名（例: 「本文」「幕間」） */
@@ -40,6 +42,7 @@ export function SplitFoldersDialog({
   isOpen = true,
   folders,
   defaultNames,
+  defaultSubtitles,
   rowAnnotations,
   chapterTypeLabel = 'チャプター',
   onConfirm,
@@ -86,6 +89,7 @@ export function SplitFoldersDialog({
       const trimmed = row.name.trim();
       result.push({
         name: trimmed || defaultNames[i] || `本文${i + 1}`,
+        subtitle: defaultSubtitles?.[i],
         files: folder.files,
       });
     });

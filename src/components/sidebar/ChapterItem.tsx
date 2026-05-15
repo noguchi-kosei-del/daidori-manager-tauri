@@ -7,6 +7,8 @@ import { FileIcon, FolderIcon, TrashIcon, PlusCircleIcon, ReplaceIcon, CopyIcon,
 import { SIDEBAR_PREFIX } from '../../constants/dnd';
 import { SortablePageItem } from './SortablePageItem';
 
+const DRAWN_EXTRA_FOLDER_NAMES = new Set(['全書店', 'シーモア', 'Renta!', 'ebookjapan']);
+
 // チャプターアイテム
 export function ChapterItem({
   chapter,
@@ -74,6 +76,14 @@ export function ChapterItem({
   const actionsBtnRef = useRef<HTMLButtonElement>(null);
   const actionsMenuRef = useRef<HTMLDivElement>(null);
   const closeTimerRef = useRef<number | null>(null);
+  const inlineDrawnExtraMatch = chapter.name.match(/^描き下ろし（(.+)）$/);
+  const inlineDrawnExtraSubtitle = inlineDrawnExtraMatch?.[1];
+  const shouldSplitInlineDrawnExtra =
+    !!inlineDrawnExtraSubtitle && DRAWN_EXTRA_FOLDER_NAMES.has(inlineDrawnExtraSubtitle);
+  const chapterDisplayName =
+    !chapter.subtitle && shouldSplitInlineDrawnExtra ? '描き下ろし' : chapter.name;
+  const chapterDisplaySubtitle =
+    chapter.subtitle ?? (shouldSplitInlineDrawnExtra ? inlineDrawnExtraSubtitle : undefined);
 
   const cancelClose = () => {
     if (closeTimerRef.current !== null) {
@@ -207,8 +217,8 @@ export function ChapterItem({
             autoFocus
           />
         ) : (
-          <span
-            className="chapter-name"
+          <div
+            className="chapter-title-stack"
             onClick={(e) => e.stopPropagation()}
             onDoubleClick={(e) => {
               e.stopPropagation();
@@ -217,8 +227,11 @@ export function ChapterItem({
             }}
             title="ダブルクリックでリネーム"
           >
-            {chapter.name}
-          </span>
+            <span className="chapter-name">{chapterDisplayName}</span>
+            {chapterDisplaySubtitle && (
+              <span className="chapter-subtitle">{chapterDisplaySubtitle}</span>
+            )}
+          </div>
         )}
         <span className="chapter-page-count">({chapter.pages.length})</span>
         <div className="chapter-actions">

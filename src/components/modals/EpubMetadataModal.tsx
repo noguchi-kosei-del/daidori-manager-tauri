@@ -33,6 +33,11 @@ interface EpubMetadataModalProps {
   projectName: string;
 }
 
+const PUBLISHER_OPTIONS = [
+  { name: 'CLLENN', fileAs: 'シレン' },
+  { name: 'DEEPER-ZERO', fileAs: 'ディーパーゼロ' },
+];
+
 export function EpubMetadataModal({
   isOpen,
   onClose,
@@ -44,7 +49,6 @@ export function EpubMetadataModal({
   const [title, setTitle] = useState('');
   const [titleFileAs, setTitleFileAs] = useState('');
   const [publisher, setPublisher] = useState('CLLENN');
-  const [publisherMode, setPublisherMode] = useState<'preset' | 'custom'>('preset');
   const [publisherFileAs, setPublisherFileAs] = useState('シレン');
   const [language] = useState('ja');
 
@@ -153,6 +157,13 @@ export function EpubMetadataModal({
     if (profile === 'legacy') {
       setAllowMissingColophon(true);
     }
+  };
+
+  const handlePublisherChange = (publisherName: string) => {
+    const option = PUBLISHER_OPTIONS.find((item) => item.name === publisherName);
+    if (!option) return;
+    setPublisher(option.name);
+    setPublisherFileAs(option.fileAs);
   };
 
   // 著者追加
@@ -437,46 +448,24 @@ export function EpubMetadataModal({
             <div className="form-row">
               <div className="form-group">
                 <label>出版社 *</label>
-                <div className="publisher-toggle">
-                  <button
-                    type="button"
-                    className={`publisher-toggle-btn ${publisherMode === 'preset' ? 'active' : ''}`}
-                    onClick={() => {
-                      setPublisherMode('preset');
-                      setPublisher('CLLENN');
-                      setPublisherFileAs('シレン');
-                    }}
-                  >
-                    CLLENN
-                  </button>
-                  <button
-                    type="button"
-                    className={`publisher-toggle-btn ${publisherMode === 'custom' ? 'active' : ''}`}
-                    onClick={() => {
-                      setPublisherMode('custom');
-                      if (publisher === 'CLLENN') setPublisher('');
-                      if (publisherFileAs === 'シレン') setPublisherFileAs('');
-                    }}
-                  >
-                    その他
-                  </button>
-                </div>
-                {publisherMode === 'custom' && (
-                  <input
-                    type="text"
-                    className="publisher-custom-input"
-                    value={publisher}
-                    onChange={(e) => setPublisher(e.target.value)}
-                    placeholder="出版社名"
-                  />
-                )}
+                <select
+                  className="publisher-select"
+                  value={publisher}
+                  onChange={(e) => handlePublisherChange(e.target.value)}
+                >
+                  {PUBLISHER_OPTIONS.map((option) => (
+                    <option key={option.name} value={option.name}>
+                      {option.name}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="form-group">
                 <label>出版社読み仮名</label>
                 <input
                   type="text"
                   value={publisherFileAs}
-                  onChange={(e) => setPublisherFileAs(e.target.value)}
+                  readOnly
                   placeholder="シュッパンシャメイ"
                 />
               </div>

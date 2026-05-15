@@ -1817,3 +1817,51 @@ I3. **進捗ラベル追加** ([src/components/modals/EpubMetadataModal.tsx](src
 > - 旧: tachimi.exe の場所をユーザーがファイル選択ダイアログで指定する必要がある設計だった → 新: 既知の候補パス（dev release/debug、Program Files、LOCALAPPDATA、デスクトップ直下）を Rust 側で順次探索し、見つかれば自動採用 + localStorage キャッシュ。ユーザー操作はゼロ
 > - 旧: v1.2.0 のチャプター名インライン編集が `onPointerDown` で dnd-kit のドラッグセンサーへの伝播を遮断 → チャプターのドラッグ並べ替えが機能しない → 新: `onPointerDown` の stopPropagation を撤去、`onClick` のみで選択誤動作を防ぐ最小限の制御に
 
+---
+
+## v1.3.1: Tachimi PDF生成安定化・チャプター表示改善・EPUB出版社選択・画像サイズサマリー
+
+### A. Tachimi PDF生成のアプリ内完結化
+
+A1. **チャプター単位の PDF 生成コマンドを追加** ([src-tauri/src/commands/tachimi.rs](src-tauri/src/commands/tachimi.rs)): Daiwari Manager から Tachimi を起動するだけでなく、チャプターごとのページ情報を渡して PDF 生成完了まで待機する `generate_tachimi_chapter_pdfs` を実装。白紙などの特殊ページもページ種別として渡せる構造に変更。
+
+A2. **PDF生成プログレス表示** ([src/App.tsx](src/App.tsx), [src/styles.css](src/styles.css)): `tachimi-pdf-progress` イベントを購読し、準備中 / ページ整理中 / PDF生成中 / 確認中の進捗バーを結果ダイアログ内に表示。生成完了後は出力先と成功/失敗の詳細を表示。
+
+A3. **ハング対策** ([src-tauri/src/commands/tachimi.rs](src-tauri/src/commands/tachimi.rs)): Tachimi 連携中の待機処理にタイムアウト、進捗イベント、出力確認を追加し、PDF生成が終わらないケースでユーザーに状況が見えるようにした。
+
+### B. 描き下ろしチャプターのフォルダ名表示
+
+B1. **特定フォルダ名の本文チャプター表示を分離** ([src/App.tsx](src/App.tsx), [src/store.ts](src/store.ts), [src/types.ts](src/types.ts)): `全書店` / `シーモア` / `Renta!` / `ebookjapan` のフォルダを本文チャプターへ読み込んだ場合、チャプター名を `描き下ろし`、フォルダ名を `subtitle` として保持。
+
+B2. **サイドバーとプレビュー見出しで二段表示** ([src/components/sidebar/ChapterItem.tsx](src/components/sidebar/ChapterItem.tsx), [src/App.tsx](src/App.tsx), [src/styles.css](src/styles.css)): `描き下ろし` の下にフォルダ名を小さなグレー文字で表示。既存の `描き下ろし（シーモア）` 形式も表示上は二段に分離。
+
+B3. **プロジェクト保存形式を拡張** ([src-tauri/src/types/project.rs](src-tauri/src/types/project.rs)): `SavedChapter` に `subtitle` を追加し、読み込み済みのフォルダ名表示を保存/復元できるようにした。
+
+### C. EPUB書籍情報の出版社選択をドロップダウン化
+
+C1. **出版社トグルを撤去** ([src/components/modals/EpubMetadataModal.tsx](src/components/modals/EpubMetadataModal.tsx)): `CLLENN` / `その他` のトグルを廃止し、出版社ドロップダウンへ変更。
+
+C2. **出版社候補を固定化**: 選択肢を `CLLENN`（読み仮名: `シレン`）と `DEEPER-ZERO`（読み仮名: `ディーパーゼロ`）に限定。出版社選択時に読み仮名を自動反映し、読み仮名欄は read-only に変更。
+
+C3. **EPUB編集パネル側も同仕様に統一** ([src/components/epub/EpubMetadataPanel.tsx](src/components/epub/EpubMetadataPanel.tsx)): モーダルだけでなく EPUB 編集パネルでも同じ出版社ドロップダウンと読み仮名自動反映を使用。
+
+### D. カラーモードサマリーに画像サイズ判定を追加
+
+D1. **ピクセル数 + DPI から用紙サイズを判定** ([src/App.tsx](src/App.tsx), [src/utils/paperSize.ts](src/utils/paperSize.ts)): 画像の `imageWidth` / `imageHeight` / `imageDpi` から A4 / B4 などの規格サイズを判定し、カラーモードサマリー展開時にサイズバッジとして表示。
+
+D2. **バッジ表面は用紙サイズ名のみ**: 通常サイズは `A4` / `B4` のような短い表示にし、ピクセル数・DPI・実寸・該当ファイルはホバー時のツールチップへ集約。
+
+D3. **例外サイズを 1 バッジに集約**: 規格サイズに当てはまらない画像は赤い `例外サイズ` バッジ 1 つにまとめて表示。ホバー時に例外サイズの全ファイルを一覧化し、各行に `ピクセル数 / DPI / 実寸` を表示。
+
+D4. **ホバー連動のサムネイル絞り込み**: サイズバッジにホバーすると、該当しないサムネイルを dim 表示。例外サイズバッジは例外ファイル全体をまとめて対象にする。
+
+### E. 貼り付けタブ・校正結果UI調整
+
+E1. **貼り付けタブの展開/格納アニメーションを滑らかに調整** ([src/styles.css](src/styles.css)): 展開状態の高さ変化と表示切替を調整し、開閉時の引っかかりを軽減。
+
+E2. **校正結果トグルをテキストエディタタブと同系統に統一** ([src/styles.css](src/styles.css)): 正誤 / 提案 / 並列表示の切替ボタンを `cp-result-panel-tabs` と同じ見た目へ寄せた。
+
+### バージョン同期
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.3.1`** に揃え。
+
