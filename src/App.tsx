@@ -672,12 +672,13 @@ function App() {
     const pdfChapters = chapters
       .map((chapter) => ({
         name: chapter.name,
+        chapter_type: chapter.type,
         pages: chapter.pages.map((page) => ({
           source_path: page.filePath ?? null,
           page_type: page.pageType,
         })),
       }))
-      .filter((chapter) => chapter.pages.length > 0);
+      .filter((chapter) => chapter.pages.length > 0 || chapter.chapter_type === 'blank');
 
     if (pdfChapters.length === 0) {
       setExportResultDialog({
@@ -707,14 +708,14 @@ function App() {
         directory: true,
         multiple: false,
         defaultPath: desktop,
-        title: 'Tachimi PDF の出力先フォルダを選択',
+        title: 'チャプターPDFの出力先フォルダを選択',
       });
       if (!selected || Array.isArray(selected)) return;
 
       setExportResultDialog({
         show: true,
-        title: 'Tachimi PDF生成中',
-        message: 'Tachimi でチャプターPDFを生成しています。完了まで少しお待ちください。',
+        title: 'チャプターPDF生成中',
+        message: 'Tachimi で全チャプターを1つのPDFにまとめています。完了まで少しお待ちください。',
         isError: false,
       });
       setTachimiPdfProgress({
@@ -732,8 +733,9 @@ function App() {
       }>('generate_tachimi_chapter_pdfs', {
         exePath: exe,
         outputDir: selected,
+        outputName: projectName || '台割PDF',
         chapters: pdfChapters,
-        isSpread: true,
+        isSpread: false,
       });
 
       const errors = result.results.filter((r) => !r.success);
@@ -744,8 +746,8 @@ function App() {
 
       setExportResultDialog({
         show: true,
-        title: errors.length > 0 ? 'Tachimi PDF生成完了（一部エラー）' : 'Tachimi PDF生成完了',
-        message: `${result.generated} 件のチャプターPDFを生成しました。\n出力先: ${result.output_dir}`,
+        title: errors.length > 0 ? 'チャプターPDF生成完了（一部エラー）' : 'チャプターPDF生成完了',
+        message: `全チャプターを1つのPDFにまとめました。\n出力先: ${result.output_dir}`,
         details: details || undefined,
         outputDir: result.output_dir,
         isError: errors.length > 0,
@@ -755,15 +757,15 @@ function App() {
       const msg = typeof e === 'string' ? e : (e instanceof Error ? e.message : '不明なエラーが発生しました');
       setExportResultDialog({
         show: true,
-        title: 'Tachimi PDF生成に失敗',
+        title: 'チャプターPDF生成に失敗',
         message: msg,
         isError: true,
       });
       setTachimiPdfProgress(null);
     }
-  }, [chapters, detectTachimiExe, setExportResultDialog]);
+  }, [chapters, detectTachimiExe, projectName, setExportResultDialog]);
 
-  // ツールバー右側のアクションボタン（エクスポート・EPUB生成・Tachimi PDF）
+  // ツールバー右側のアクションボタン（エクスポート・EPUB生成・チャプターPDF）
   const toolbarActionButtons = (
     <>
       <button
@@ -771,10 +773,10 @@ function App() {
         className="preview-fab preview-fab-secondary preview-fab-toolbar"
         onClick={handleLaunchTachimi}
         disabled={allPages.length === 0}
-        title="Tachimiで PDF 化"
+        title="TachimiでチャプターPDF化"
       >
         <PdfIcon size={16} />
-        <span className="preview-fab-label">Tachimi PDF</span>
+        <span className="preview-fab-label">チャプターPDF</span>
       </button>
       <button
         type="button"
@@ -2850,7 +2852,7 @@ function App() {
           <div className={`modal-content export-result-dialog ${exportResultDialog.isError ? 'has-error' : ''} ${exportResultAnim.isClosing ? 'closing' : ''}`}>
             <h2>{exportResultDialog.title}</h2>
             <p className="export-result-message">{exportResultDialog.message}</p>
-            {tachimiPdfProgress && exportResultDialog.title === 'Tachimi PDF生成中' && (() => {
+            {tachimiPdfProgress && exportResultDialog.title === 'チャプターPDF生成中' && (() => {
               const percent = tachimiPdfProgress.indeterminate || tachimiPdfProgress.total <= 0
                 ? 100
                 : Math.min(100, Math.round((tachimiPdfProgress.current / tachimiPdfProgress.total) * 100));

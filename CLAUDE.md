@@ -1865,3 +1865,31 @@ E2. **校正結果トグルをテキストエディタタブと同系統に統�
 
 `package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.3.1`** に揃え。
 
+
+---
+
+## v1.3.2: チャプターPDF生成の統合出力・白紙対応・Tachimi連携安定化
+
+### A. チャプターPDFを1ファイルへ統合
+
+A1. **全チャプターを1つのPDFとして出力** ([src/App.tsx](src/App.tsx), [src-tauri/src/commands/tachimi.rs](src-tauri/src/commands/tachimi.rs)): 以前のチャプター別PDF生成ではなく、チャプター順・ページ順を保持した連番ステージングを作成し、TachimiのPDFジョブへ1件の統合ジョブとして渡すように変更。出力名はプロジェクト名をもとにした単一PDF名になる。
+
+A2. **複数チャプター/複数フォルダ混在時のページ順を固定**: 一時フォルダ `merged_pdf` に `0001_c001_p0001.ext` 形式で集約し、同名ファイルや別フォルダ由来のファイルでも順序が崩れないようにした。
+
+A3. **白紙チャプターもPDF化対象に含める**: フロントエンドから `chapter_type` を渡し、ページが空の `blank` チャプターもバックエンドで白紙1ページとして生成する。既存の白紙ページや特殊ページも、周辺ページサイズを参照した白JPEGとしてPDF入力へ含める。
+
+### B. PDF生成の破損・ハング対策
+
+B1. **Tachimi側のPDFジョブ実行を使用**: Daiwari側では画像を無理に再エンコードせず、PSDのみPDF用JPEGに変換し、それ以外はハードリンク/コピーでTachimiへ渡す。これにより画像データ不足やAcrobatでの破損表示を避ける。
+
+B2. **進捗表示とタイムアウトを整理**: `tachimi-pdf-progress` による準備中/ページ整理中/PDF生成中/完了の表示を整え、PDF生成中にユーザーが状態を把握できるようにした。
+
+### C. 不要コード削除
+
+C1. **旧Tachimi起動ルートを削除**: `check_tachimi_exe`, `launch_tachimi_with_files`, `stage_filename`, 旧分割PDF生成ルートを削除し、現在のPDFジョブ方式に一本化。
+
+C2. **Tauriコマンド登録を整理**: `detect_tachimi_exe` と `generate_tachimi_chapter_pdfs` のみを公開し、未使用コマンドをinvoke handlerから除外。
+
+### バージョン同期
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を **`1.3.2`** に更新。

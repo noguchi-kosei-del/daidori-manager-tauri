@@ -1,15 +1,15 @@
-use std::fs;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
-use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
+use super::jpeg::run_photoshop_jpeg_convert;
 use crate::image_utils::validate_dimensions;
 use crate::types::{JpegConvertConfig, JpegFileConfig, JpegGlobalSettings};
-use super::jpeg::run_photoshop_jpeg_convert;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TachimiPdfPage {
@@ -20,6 +20,7 @@ pub struct TachimiPdfPage {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TachimiPdfChapter {
     pub name: String,
+    pub chapter_type: Option<String>,
     pub pages: Vec<TachimiPdfPage>,
 }
 
@@ -174,14 +175,6 @@ fn tachimi_supports_pdf_job(p: &Path) -> bool {
 }
 
 #[tauri::command]
-pub async fn check_tachimi_exe(path: String) -> Result<bool, String> {
-    Ok(is_tachimi_exe(Path::new(&path)))
-}
-
-/// 既知の候補から tachimi.exe を自動検出する。
-/// hint（前回成功パス）→ 開発ビルド（Desktop\Tachimi_開発\...）→ インストール想定パスの順。
-/// 見つかれば絶対パスを返し、見つからなければ None を返す。
-#[tauri::command]
 pub async fn detect_tachimi_exe(hint: Option<String>) -> Option<String> {
     // 1. hint（localStorage 等から渡された前回パス）
     if let Some(h) = hint.as_deref() {
@@ -234,16 +227,6 @@ pub async fn detect_tachimi_exe(hint: Option<String>) -> Option<String> {
 }
 
 /// 連番プレフィックスを安全な文字列で組み立てる（4桁ゼロ埋め）。
-fn stage_filename(idx: usize, src: &Path) -> String {
-    let basename = src
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| format!("file_{:04}", idx + 1));
-    format!("{:04}_{}", idx + 1, basename)
-}
-
-/// 古いステージングフォルダを掃除する（前回実行の残骸を消す）。
-/// 失敗は無視（次のステップで新しいフォルダを作るので致命的ではない）。
 fn cleanup_old_staging(staging_dir: &Path) {
     if staging_dir.exists() {
         if let Err(e) = fs::remove_dir_all(staging_dir) {
@@ -307,7 +290,9 @@ fn create_blank_jpeg(width: u32, height: u32, dest: &Path) -> Result<(), String>
     let dynamic_img = image::DynamicImage::ImageRgb8(img);
     let mut file = fs::File::create(dest).map_err(|e| e.to_string())?;
     let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 95);
-    dynamic_img.write_with_encoder(encoder).map_err(|e| e.to_string())
+    dynamic_img
+        .write_with_encoder(encoder)
+        .map_err(|e| e.to_string())
 }
 
 fn link_or_copy_file(src: &Path, dest: &Path) -> Result<(), String> {
@@ -337,148 +322,25 @@ fn build_tachimi_pdf_options(is_spread: bool) -> TachimiPdfOptions {
         nombre_size: "medium".to_string(),
     }
 }
-
-/// すべてのチャプターから集めたファイルパス群を Tachimi に渡して起動する。
-///
-/// 設計: 複数チャプター（=複数フォルダ）混在の場合でも Tachimi がファイルを
-/// 見つけられるよう、`%TEMP%\daidori_tachimi_staging\` に**ハードリンク**で
-/// 全ファイルを集約してから渡す。
-/// - ハードリンクは同一ボリュームならほぼ即時で I/O ゼロ（NTFS の link 機能）
-/// - 跨ボリューム時はファイルコピーへフォールバック
-/// - 連番プレフィックス (`0001_`, `0002_`, ...) でチャプター順 + ページ順を保持
-/// - ファイル名重複（複数チャプターで同名ファイル）も自動回避
-///
-/// Tachimi 側は起動時に `%TEMP%\tachimi_cli_files.json` の JSON 配列を読み取り、
-/// 読み込み後に同ファイルを削除する設計（COMIC-Bridge 連携用に既存実装あり）。
-///
-/// 戻り値: 実際にステージングに成功したファイル数。
-#[tauri::command]
-pub async fn launch_tachimi_with_files(
-    exe_path: String,
-    file_paths: Vec<String>,
-) -> Result<usize, String> {
-    let exe = Path::new(&exe_path);
-    if !exe.exists() || !exe.is_file() {
-        return Err(format!(
-            "Tachimi の実行ファイルが見つかりません: {}",
-            exe_path
-        ));
-    }
-
-    if file_paths.is_empty() {
-        return Err("渡すファイルがありません。".to_string());
-    }
-
-    // 存在するファイルだけを抽出（壊れた参照は無視して残りで起動する）
-    let valid: Vec<String> = file_paths
-        .into_iter()
-        .filter(|p| Path::new(p).exists())
-        .collect();
-
-    if valid.is_empty() {
-        return Err(
-            "渡せるファイルが見つかりませんでした（参照先がすべて存在しないか移動されています）。"
-                .to_string(),
-        );
-    }
-
-    // ステージングフォルダ: 前回分を掃除してから新規作成
-    let staging_dir = std::env::temp_dir().join("daidori_tachimi_staging");
-    cleanup_old_staging(&staging_dir);
-    fs::create_dir_all(&staging_dir).map_err(|e| {
-        format!(
-            "ステージングフォルダの作成に失敗 ({}): {}",
-            staging_dir.display(),
-            e
-        )
-    })?;
-
-    // 全ファイルをハードリンク（失敗時はコピー）でステージングへ集約
-    let mut staged_paths: Vec<String> = Vec::with_capacity(valid.len());
-    let mut link_errors: Vec<String> = Vec::new();
-    for (idx, src) in valid.iter().enumerate() {
-        let src_path = Path::new(src);
-        let staged_name = stage_filename(idx, src_path);
-        let dest = staging_dir.join(&staged_name);
-
-        // 同名既存（前回掃除に失敗した場合などのフェイルセーフ）を除去
-        if dest.exists() {
-            let _ = fs::remove_file(&dest);
-        }
-
-        // 1) ハードリンク: 同一ボリューム内で最速、I/O ほぼゼロ
-        let linked = fs::hard_link(src_path, &dest).is_ok();
-        // 2) 失敗時はファイルコピー（クロスボリューム / 権限 / FS 非対応など）
-        if !linked {
-            match fs::copy(src_path, &dest) {
-                Ok(_) => {}
-                Err(e) => {
-                    link_errors.push(format!("{}: {}", src, e));
-                    continue;
-                }
-            }
-        }
-        staged_paths.push(dest.to_string_lossy().to_string());
-    }
-
-    if staged_paths.is_empty() {
-        return Err(format!(
-            "ステージングに失敗しました ({} 件)。最初の失敗: {}",
-            link_errors.len(),
-            link_errors.first().cloned().unwrap_or_default()
-        ));
-    }
-
-    if !link_errors.is_empty() {
-        eprintln!(
-            "Tachimi staging - {} files staged, {} failed (例: {})",
-            staged_paths.len(),
-            link_errors.len(),
-            link_errors.first().cloned().unwrap_or_default()
-        );
-    }
-
-    // トリガー JSON を %TEMP%\tachimi_cli_files.json に書き出し
-    let trigger_path = std::env::temp_dir().join("tachimi_cli_files.json");
-    let json = serde_json::to_string(&staged_paths)
-        .map_err(|e| format!("トリガー JSON のシリアライズに失敗: {}", e))?;
-    fs::write(&trigger_path, json).map_err(|e| {
-        format!(
-            "トリガー JSON の書き出しに失敗 ({}): {}",
-            trigger_path.display(),
-            e
-        )
-    })?;
-
-    eprintln!(
-        "Tachimi launch - staging: {} ({} files), trigger: {}",
-        staging_dir.display(),
-        staged_paths.len(),
-        trigger_path.display()
-    );
-
-    // tachimi.exe を spawn（CLI 引数なし、トリガーファイル経由）
-    Command::new(&exe_path).spawn().map_err(|e| {
-        // spawn 失敗時はトリガーファイルが残ると次回他経路から誤読されるため削除
-        let _ = fs::remove_file(&trigger_path);
-        format!("Tachimi の起動に失敗: {}", e)
-    })?;
-
-    eprintln!("Tachimi launch - spawned: {}", exe_path);
-    Ok(staged_paths.len())
-}
-
 #[tauri::command]
 pub async fn generate_tachimi_chapter_pdfs(
     app_handle: tauri::AppHandle,
     exe_path: String,
     output_dir: String,
+    output_name: Option<String>,
     mut chapters: Vec<TachimiPdfChapter>,
     is_spread: Option<bool>,
 ) -> Result<TachimiPdfBatchResult, String> {
     chapters = convert_psd_pages_for_pdf(app_handle.clone(), chapters).await?;
     tokio::task::spawn_blocking(move || {
-        generate_tachimi_chapter_pdfs_sync(app_handle, exe_path, output_dir, chapters, is_spread.unwrap_or(true))
+        generate_tachimi_chapter_pdfs_sync(
+            app_handle,
+            exe_path,
+            output_dir,
+            output_name.unwrap_or_else(|| "台割PDF".to_string()),
+            chapters,
+            is_spread.unwrap_or(false),
+        )
     })
     .await
     .map_err(|e| format!("Tachimi PDFジョブの実行に失敗: {}", e))?
@@ -550,22 +412,22 @@ async fn convert_psd_pages_for_pdf(
         if !result.success {
             return Err(format!(
                 "PDF用JPEG変換に失敗しました: {}",
-                result.error.clone().unwrap_or_else(|| result.file_name.clone())
+                result
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| result.file_name.clone())
             ));
         }
 
         let Some((_, _, source_path, requested_name)) = psd_files.get(idx) else {
             continue;
         };
-        let converted = result
-            .output_path
-            .clone()
-            .unwrap_or_else(|| {
-                Path::new(&response.output_dir)
-                    .join(requested_name)
-                    .to_string_lossy()
-                    .to_string()
-            });
+        let converted = result.output_path.clone().unwrap_or_else(|| {
+            Path::new(&response.output_dir)
+                .join(requested_name)
+                .to_string_lossy()
+                .to_string()
+        });
         converted_paths.insert(source_path.clone(), converted);
     }
 
@@ -595,20 +457,44 @@ fn generate_tachimi_chapter_pdfs_sync(
     app_handle: tauri::AppHandle,
     exe_path: String,
     output_dir: String,
+    output_name: String,
     chapters: Vec<TachimiPdfChapter>,
     is_spread: bool,
 ) -> Result<TachimiPdfBatchResult, String> {
     let exe = Path::new(&exe_path);
     if !exe.exists() || !exe.is_file() {
-        return Err(format!("Tachimi の実行ファイルが見つかりません: {}", exe_path));
+        return Err(format!(
+            "Tachimi の実行ファイルが見つかりません: {}",
+            exe_path
+        ));
     }
 
     let output_root = PathBuf::from(&output_dir);
     fs::create_dir_all(&output_root)
         .map_err(|e| format!("PDF出力フォルダを作成できません: {}", e))?;
 
-    emit_tachimi_pdf_progress(
+    generate_tachimi_merged_pdf_job(
         &app_handle,
+        exe_path,
+        output_root,
+        output_dir,
+        output_name,
+        chapters,
+        is_spread,
+    )
+}
+
+fn generate_tachimi_merged_pdf_job(
+    app_handle: &tauri::AppHandle,
+    exe_path: String,
+    output_root: PathBuf,
+    output_dir: String,
+    output_name: String,
+    chapters: Vec<TachimiPdfChapter>,
+    is_spread: bool,
+) -> Result<TachimiPdfBatchResult, String> {
+    emit_tachimi_pdf_progress(
+        app_handle,
         "prepare",
         "Tachimi PDFジョブを準備しています".to_string(),
         0,
@@ -620,132 +506,192 @@ fn generate_tachimi_chapter_pdfs_sync(
     cleanup_old_staging(&staging_root);
     fs::create_dir_all(&staging_root)
         .map_err(|e| format!("PDFジョブ用一時フォルダを作成できません: {}", e))?;
+    let merged_dir = staging_root.join("merged_pdf");
+    fs::create_dir_all(&merged_dir)
+        .map_err(|e| format!("PDF一時フォルダを作成できません: {}", e))?;
 
-    let mut jobs = Vec::new();
-    let mut skipped: Vec<TachimiPdfJobItemResult> = Vec::new();
+    let output_path = output_root
+        .join(format!("{}.pdf", sanitize_filename(&output_name)))
+        .to_string_lossy()
+        .to_string();
 
-    let total_chapters = chapters.len().max(1);
+    let mut staged_pages: Vec<(usize, usize, TachimiPdfChapter, TachimiPdfPage)> = Vec::new();
     for (chapter_index, chapter) in chapters.iter().enumerate() {
         emit_tachimi_pdf_progress(
-            &app_handle,
+            app_handle,
             "stage",
-            format!("「{}」をPDFジョブに追加しています", chapter.name),
+            format!("「{}」をPDFに追加しています", chapter.name),
             chapter_index,
-            total_chapters,
+            chapters.len().max(1),
             false,
         );
+        if chapter.pages.is_empty() && chapter.chapter_type.as_deref() == Some("blank") {
+            staged_pages.push((
+                chapter_index,
+                0,
+                chapter.clone(),
+                TachimiPdfPage {
+                    source_path: None,
+                    page_type: "blank".to_string(),
+                },
+            ));
+        } else {
+            for (page_index, page) in chapter.pages.iter().enumerate() {
+                staged_pages.push((chapter_index, page_index, chapter.clone(), page.clone()));
+            }
+        }
+    }
 
-        if chapter.pages.is_empty() {
+    if staged_pages.is_empty() {
+        return Err("PDF化できるページがありません。".to_string());
+    }
+
+    let mut source_dimensions: Vec<Option<(u32, u32)>> = Vec::with_capacity(staged_pages.len());
+    for (_, _, _, page) in &staged_pages {
+        let dims = page.source_path.as_deref().and_then(|p| {
+            let path = Path::new(p);
+            if path.exists() {
+                get_source_dimensions(path).ok()
+            } else {
+                None
+            }
+        });
+        source_dimensions.push(dims);
+    }
+
+    let default_size = source_dimensions
+        .iter()
+        .flatten()
+        .next()
+        .copied()
+        .unwrap_or((1654, 2339));
+
+    let mut files = Vec::new();
+    let mut results: Vec<TachimiPdfJobItemResult> = Vec::new();
+    for (global_index, (chapter_index, page_index, chapter, page)) in staged_pages.iter().enumerate()
+    {
+        let page_no = global_index + 1;
+
+        if let Some(source_path) = page.source_path.as_deref() {
+            let src = Path::new(source_path);
+            if src.exists() {
+                let ext = src
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("jpg")
+                    .to_lowercase();
+                let file_name = format!(
+                    "{:04}_c{:03}_p{:04}.{}",
+                    page_no,
+                    chapter_index + 1,
+                    page_index + 1,
+                    ext
+                );
+                let dest = merged_dir.join(&file_name);
+                link_or_copy_file(src, &dest)?;
+                files.push(file_name);
+                continue;
+            }
+        }
+
+        if page.page_type == "file" {
+            results.push(TachimiPdfJobItemResult {
+                output_path: output_path.clone(),
+                success: false,
+                error: Some(format!(
+                    "{} の {} ページ目の参照ファイルが見つかりません",
+                    chapter.name,
+                    page_index + 1
+                )),
+            });
             continue;
         }
 
-        let safe_chapter_name = sanitize_filename(&chapter.name);
-        let chapter_dir = staging_root.join(format!("{:03}_{}", chapter_index + 1, safe_chapter_name));
-        fs::create_dir_all(&chapter_dir)
-            .map_err(|e| format!("チャプター一時フォルダを作成できません: {}", e))?;
-
-        let mut source_dimensions: Vec<Option<(u32, u32)>> = Vec::with_capacity(chapter.pages.len());
-        for page in &chapter.pages {
-            let dims = page
-                .source_path
-                .as_deref()
-                .and_then(|p| {
-                    let path = Path::new(p);
-                    if path.exists() {
-                        get_source_dimensions(path).ok()
-                    } else {
-                        None
-                    }
-                });
-            source_dimensions.push(dims);
-        }
-
-        let default_size = source_dimensions
+        let size = source_dimensions[..global_index]
             .iter()
+            .rev()
             .flatten()
             .next()
             .copied()
-            .unwrap_or((1654, 2339));
-
-        let mut files = Vec::new();
-        for (page_index, page) in chapter.pages.iter().enumerate() {
-            let page_no = page_index + 1;
-
-            if let Some(source_path) = page.source_path.as_deref() {
-                let src = Path::new(source_path);
-                if src.exists() {
-                    let ext = src
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("jpg")
-                        .to_lowercase();
-                    let file_name = format!("{:04}.{}", page_no, ext);
-                    let dest = chapter_dir.join(&file_name);
-                    link_or_copy_file(src, &dest)?;
-                    files.push(file_name);
-                    continue;
-                }
-            }
-
-            if page.page_type == "file" {
-                skipped.push(TachimiPdfJobItemResult {
-                    output_path: output_root
-                        .join(format!("{}.pdf", safe_chapter_name))
-                        .to_string_lossy()
-                        .to_string(),
-                    success: false,
-                    error: Some(format!(
-                        "{} の {} ページ目の参照ファイルが見つかりません",
-                        chapter.name, page_no
-                    )),
-                });
-                continue;
-            }
-
-            let size = source_dimensions[..page_index]
-                .iter()
-                .rev()
-                .flatten()
-                .next()
-                .copied()
-                .or_else(|| source_dimensions[page_index + 1..].iter().flatten().next().copied())
-                .unwrap_or(default_size);
-            let file_name = format!("{:04}.jpg", page_no);
-            let dest = chapter_dir.join(&file_name);
-            create_blank_jpeg(size.0, size.1, &dest)?;
-            files.push(file_name);
-        }
-
-        if files.is_empty() {
-            continue;
-        }
-
-        let output_path = output_root
-            .join(format!("{}.pdf", safe_chapter_name))
-            .to_string_lossy()
-            .to_string();
-
-        jobs.push(TachimiPdfJobItem {
-            input_folder: chapter_dir.to_string_lossy().to_string(),
-            output_path,
-            files,
-            options: build_tachimi_pdf_options(is_spread),
-        });
+            .or_else(|| {
+                source_dimensions[global_index + 1..]
+                    .iter()
+                    .flatten()
+                    .next()
+                    .copied()
+            })
+            .unwrap_or(default_size);
+        let file_name = format!(
+            "{:04}_c{:03}_p{:04}.jpg",
+            page_no,
+            chapter_index + 1,
+            page_index + 1
+        );
+        let dest = merged_dir.join(&file_name);
+        create_blank_jpeg(size.0, size.1, &dest)?;
+        files.push(file_name);
     }
 
-    if jobs.is_empty() {
-        return Err("PDF化できるチャプターがありません。".to_string());
+    if files.is_empty() {
+        let first_error = results
+            .iter()
+            .find_map(|r| r.error.clone())
+            .unwrap_or_else(|| "PDF化できるページがありません。".to_string());
+        return Err(first_error);
     }
 
     emit_tachimi_pdf_progress(
-        &app_handle,
-        "stage",
-        "Tachimi に渡すPDFジョブを書き出しています".to_string(),
-        total_chapters,
-        total_chapters,
+        app_handle,
+        "generate",
+        "TachimiでPDFを生成しています".to_string(),
+        0,
+        files.len(),
+        true,
+    );
+
+    let mut tachimi_results = run_tachimi_pdf_job_batch(
+        &exe_path,
+        &staging_root,
+        vec![TachimiPdfJobItem {
+            input_folder: merged_dir.to_string_lossy().to_string(),
+            output_path: output_path.clone(),
+            files,
+            options: build_tachimi_pdf_options(is_spread),
+        }],
+    )?;
+    tachimi_results.append(&mut results);
+    let results = tachimi_results;
+    let generated = results.iter().filter(|r| r.success).count();
+
+    if generated == 0 {
+        let first_error = results
+            .iter()
+            .find_map(|r| r.error.clone())
+            .unwrap_or_else(|| "Tachimi PDF生成に失敗しました。".to_string());
+        return Err(first_error);
+    }
+
+    emit_tachimi_pdf_progress(
+        app_handle,
+        "complete",
+        "1つのPDFを生成しました".to_string(),
+        1,
+        1,
         false,
     );
 
+    Ok(TachimiPdfBatchResult {
+        generated,
+        output_dir,
+        results,
+    })
+}
+
+fn run_tachimi_pdf_job_batch(
+    exe_path: &str,
+    staging_root: &Path,
+    jobs: Vec<TachimiPdfJobItem>,
+) -> Result<Vec<TachimiPdfJobItemResult>, String> {
     let job_path = staging_root.join("tachimi_pdf_job.json");
     let result_path = staging_root.join("tachimi_pdf_result.json");
     let batch = TachimiPdfJobBatch {
@@ -755,19 +701,9 @@ fn generate_tachimi_chapter_pdfs_sync(
 
     let job_json = serde_json::to_string_pretty(&batch)
         .map_err(|e| format!("PDFジョブJSONを作成できません: {}", e))?;
-    fs::write(&job_path, job_json)
-        .map_err(|e| format!("PDFジョブJSONを書き込めません: {}", e))?;
+    fs::write(&job_path, job_json).map_err(|e| format!("PDFジョブJSONを書き込めません: {}", e))?;
 
-    emit_tachimi_pdf_progress(
-        &app_handle,
-        "generate",
-        "Tachimi でPDFを生成しています".to_string(),
-        0,
-        batch.jobs.len().max(1),
-        true,
-    );
-
-    let mut child = Command::new(&exe_path)
+    let mut child = Command::new(exe_path)
         .arg("--pdf-job")
         .arg(&job_path)
         .spawn()
@@ -792,10 +728,7 @@ fn generate_tachimi_chapter_pdfs_sync(
         if started.elapsed() >= timeout {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(
-                "Tachimi PDF生成がタイムアウトしました。古い Tachimi 実行ファイルが起動している可能性があります。Tachimi_開発\\Tachimi-_Standalone\\src-tauri\\target\\debug\\tachimi.exe をビルド済みか確認してください。"
-                    .to_string(),
-            );
+            return Err("Tachimi PDF生成がタイムアウトしました。".to_string());
         }
 
         std::thread::sleep(Duration::from_millis(500));
@@ -813,43 +746,8 @@ fn generate_tachimi_chapter_pdfs_sync(
 
     let result_json = fs::read_to_string(&result_path)
         .map_err(|e| format!("Tachimi PDFジョブ結果を読み込めません: {}", e))?;
-
-    emit_tachimi_pdf_progress(
-        &app_handle,
-        "finalize",
-        "PDF生成結果を確認しています".to_string(),
-        1,
-        1,
-        false,
-    );
-
     let result_file: TachimiPdfJobResultFile = serde_json::from_str(&result_json)
         .map_err(|e| format!("Tachimi PDFジョブ結果を解析できません: {}", e))?;
 
-    let mut results = result_file.results;
-    results.extend(skipped);
-    let generated = results.iter().filter(|r| r.success).count();
-
-    if generated == 0 {
-        let first_error = results
-            .iter()
-            .find_map(|r| r.error.clone())
-            .unwrap_or_else(|| "Tachimi PDF生成に失敗しました。".to_string());
-        return Err(first_error);
-    }
-
-    emit_tachimi_pdf_progress(
-        &app_handle,
-        "complete",
-        format!("{} 件のチャプターPDFを生成しました", generated),
-        1,
-        1,
-        false,
-    );
-
-    Ok(TachimiPdfBatchResult {
-        generated,
-        output_dir,
-        results,
-    })
+    Ok(result_file.results)
 }
