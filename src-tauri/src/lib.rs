@@ -6,6 +6,7 @@ mod image_utils;
 mod thumbnail;
 mod commands;
 mod epub;
+mod native_jpeg;
 
 use std::sync::Mutex;
 use cache::{ThumbnailCache, ThumbnailMemoryCache};
@@ -20,7 +21,7 @@ use commands::project::{save_project, load_project, validate_project_files, vali
 use commands::recent::{get_recent_files, add_recent_file};
 use commands::open_file::open_file_with_default_app;
 use commands::tiff::{check_photoshop_installed, run_photoshop_tiff_convert};
-use commands::jpeg::run_photoshop_jpeg_convert;
+use commands::jpeg_native::run_native_jpeg_convert;
 use commands::epub::{generate_epub, generate_book_uuid, get_image_dimensions, create_epub_metadata, get_default_viewport, read_psd_guides};
 use commands::tachimi::{detect_tachimi_exe, generate_tachimi_chapter_pdfs};
 use thumbnail::generate_thumbnail;
@@ -98,7 +99,7 @@ pub fn run() {
             open_file_with_default_app,
             check_photoshop_installed,
             run_photoshop_tiff_convert,
-            run_photoshop_jpeg_convert,
+            run_native_jpeg_convert,
             generate_epub,
             generate_book_uuid,
             get_image_dimensions,

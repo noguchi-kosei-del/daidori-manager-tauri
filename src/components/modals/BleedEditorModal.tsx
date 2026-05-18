@@ -1,9 +1,26 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { invoke } from '@tauri-apps/api/core';
-import { BleedMargins } from './ExportModal';
+import { BleedRegion, TachikiriType, BleedColor, BLEED_COLOR_MAP } from './ExportModal';
 import { LockIcon, UnlockIcon, ResetIcon } from '../../icons';
 import { useModalAnimation } from '../../hooks';
+
+// 6モードカード定義（Tachimi準拠）
+const TACHIKIRI_CARDS: { value: TachikiriType; label: string }[] = [
+  { value: 'none', label: 'なし' },
+  { value: 'crop_only', label: '切抜' },
+  { value: 'crop_and_stroke', label: '切+線' },
+  { value: 'stroke_only', label: '線のみ' },
+  { value: 'fill_white', label: '塗る' },
+  { value: 'fill_and_stroke', label: '塗+線' },
+];
+const STROKE_TYPES: TachikiriType[] = ['crop_and_stroke', 'stroke_only', 'fill_and_stroke'];
+const FILL_TYPES: TachikiriType[] = ['fill_white', 'fill_and_stroke'];
+const COLOR_OPTIONS: { value: BleedColor; label: string }[] = [
+  { value: 'black', label: '黒' },
+  { value: 'white', label: '白' },
+  { value: 'cyan', label: '水色' },
+];
 
 interface Guide {
   type: 'h' | 'v';
@@ -15,7 +32,7 @@ interface BleedEditorModalProps {
   label: string;
   thumbnailPath: string;
   originalFilePath: string;
-  onApply: (margins: BleedMargins) => void;
+  onApply: (region: BleedRegion) => void;
   onSkip: () => void;
   onCancel: () => void;
 }
@@ -51,6 +68,12 @@ export function BleedEditorModal({
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [autoDetected, setAutoDetected] = useState(false);
 
+  // 断ち切りモード設定（Tachimi準拠）
+  const [tachikiriType, setTachikiriType] = useState<TachikiriType>('crop_only');
+  const [strokeColor, setStrokeColor] = useState<BleedColor>('black');
+  const [fillColor, setFillColor] = useState<BleedColor>('white');
+  const [fillOpacity, setFillOpacity] = useState(50);
+
   // リセット
   useEffect(() => {
     if (isOpen) {
@@ -62,6 +85,10 @@ export function BleedEditorModal({
       isDragging.current = false;
       setShowCancelConfirm(false);
       setAutoDetected(false);
+      setTachikiriType('crop_only');
+      setStrokeColor('black');
+      setFillColor('white');
+      setFillOpacity(50);
     }
   }, [isOpen, originalFilePath]);
 
@@ -116,7 +143,9 @@ export function BleedEditorModal({
   // ヒント更新
   useEffect(() => {
     if (!isOpen) return;
-    if (selection && autoDetected) {
+    if (tachikiriType === 'none') {
+      setHint('断ち切りなし — 原寸（またはリサイズのみ）でJPEG出力します');
+    } else if (selection && autoDetected) {
       setHint('ガイドから自動検出しました — 画像上をドラッグして調整も可能です');
     } else if (selection) {
       setHint('範囲OK — エクスポート可能です');
@@ -127,7 +156,7 @@ export function BleedEditorModal({
     } else {
       setHint('ガイドを配置したら「ガイドを確定」ボタンを押してください');
     }
-  }, [isOpen, guides.length, guidesLocked, selection, autoDetected]);
+  }, [isOpen, guides.length, guidesLocked, selection, autoDetected, tachikiriType]);
 
   // マウス座標 → 元画像ピクセル座標
   const clientToImageCoord = useCallback((clientX: number, clientY: number): { ix: number; iy: number } | null => {
@@ -302,18 +331,34 @@ export function BleedEditorModal({
     }
   }, [guidesLocked, guides]);
 
-  // マージン計算
-  const margins: BleedMargins | null = (() => {
-    if (!originalSize || !selection) return null;
+  const hasValidSelection = selection != null && selection.right > selection.left && selection.bottom > selection.top;
+
+  // BleedRegion 計算（選択範囲は元画像ピクセル絶対座標）
+  const region: BleedRegion | null = (() => {
+    if (!originalSize) return null;
+    const base = {
+      refWidth: originalSize.width,
+      refHeight: originalSize.height,
+      tachikiriType,
+      strokeColor,
+      fillColor,
+      fillOpacity,
+    };
+    if (tachikiriType === 'none') {
+      return { left: 0, top: 0, right: 0, bottom: 0, ...base };
+    }
+    if (!hasValidSelection || !selection) return null;
     return {
       left: Math.max(0, selection.left),
       top: Math.max(0, selection.top),
-      right: Math.max(0, originalSize.width - selection.right),
-      bottom: Math.max(0, originalSize.height - selection.bottom),
+      right: selection.right,
+      bottom: selection.bottom,
+      ...base,
     };
   })();
 
-  const hasValidSelection = selection != null && selection.right > selection.left && selection.bottom > selection.top;
+  // エクスポート可否: 'none' は選択不要、それ以外は有効な選択が必要
+  const canApply = tachikiriType === 'none' || hasValidSelection;
 
   // 選択範囲の表示座標
   const selectionDisplay = (() => {
@@ -456,6 +501,58 @@ export function BleedEditorModal({
                 ガイドをリセット
               </button>
             )}
+
+            <div className="bleed-mode-section">
+              <div className="bleed-mode-title">処理タイプ</div>
+              <div className="bleed-mode-grid">
+                {TACHIKIRI_CARDS.map((c) => (
+                  <button
+                    key={c.value}
+                    type="button"
+                    className={`bleed-mode-card ${tachikiriType === c.value ? 'selected' : ''}`}
+                    onClick={() => setTachikiriType(c.value)}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+
+              {STROKE_TYPES.includes(tachikiriType) && (
+                <div className="bleed-color-row">
+                  <label>線の色</label>
+                  <select value={strokeColor} onChange={(e) => setStrokeColor(e.target.value as BleedColor)}>
+                    {COLOR_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                  <span className="bleed-color-swatch" style={{ background: BLEED_COLOR_MAP[strokeColor] }} />
+                </div>
+              )}
+
+              {FILL_TYPES.includes(tachikiriType) && (
+                <>
+                  <div className="bleed-color-row">
+                    <label>塗りの色</label>
+                    <select value={fillColor} onChange={(e) => setFillColor(e.target.value as BleedColor)}>
+                      {COLOR_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                    <span className="bleed-color-swatch" style={{ background: BLEED_COLOR_MAP[fillColor] }} />
+                  </div>
+                  <div className="bleed-opacity-row">
+                    <label>不透明度: {fillOpacity}%</label>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={fillOpacity}
+                      onChange={(e) => setFillOpacity(parseInt(e.target.value, 10))}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
 
@@ -465,7 +562,7 @@ export function BleedEditorModal({
           <button className="btn-primary btn-small" onClick={onSkip} disabled={!!hasValidSelection}>
             スキップしてエクスポート
           </button>
-          <button className="btn-primary btn-small" onClick={() => margins && onApply(margins)} disabled={!hasValidSelection}>
+          <button className="btn-primary btn-small" onClick={() => region && onApply(region)} disabled={!canApply}>
             エクスポート
           </button>
         </div>

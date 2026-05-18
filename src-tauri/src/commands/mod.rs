@@ -5,6 +5,6 @@ pub mod recent;
 pub mod open_file;
 pub mod photoshop;
 pub mod tiff;
-pub mod jpeg;
+pub mod jpeg_native;
 pub mod epub;
 pub mod tachimi;

@@ -16,7 +16,7 @@ export interface ChapterRenameSettings {
   prefix: string;
 }
 
-// 断ち切りマージン
+// 断ち切りマージン（TIFF=Photoshop経路用に残す）
 export interface BleedMargins {
   top: number;
   bottom: number;
@@ -24,25 +24,74 @@ export interface BleedMargins {
   right: number;
 }
 
+// 断ち切り処理タイプ（Tachimi準拠の6モード）
+export type TachikiriType =
+  | 'none'
+  | 'crop_only'
+  | 'crop_and_stroke'
+  | 'stroke_only'
+  | 'fill_white'
+  | 'fill_and_stroke';
+
+// 線色・塗り色
+export type BleedColor = 'black' | 'white' | 'cyan';
+
+// 色名 → CSS色（Tachimi COLOR_MAP 準拠）
+export const BLEED_COLOR_MAP: Record<BleedColor, string> = {
+  black: '#000000',
+  white: '#ffffff',
+  cyan: '#00bfff',
+};
+
+// 断ち切り領域＋モード設定（Tachimi ProcessOptions 相当）
+// 座標は設定時の元画像ピクセル座標（絶対座標）
+export interface BleedRegion {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  refWidth: number;  // 設定時の元画像サイズ（スケール基準）
+  refHeight: number;
+  tachikiriType: TachikiriType;
+  strokeColor: BleedColor;
+  fillColor: BleedColor;
+  fillOpacity: number; // 0-100
+}
+
+// BleedRegion → BleedMargins 変換（TIFF=Photoshopはクロップのみ対応）
+export function regionToMargins(r: BleedRegion): BleedMargins {
+  return {
+    left: Math.max(0, r.left),
+    top: Math.max(0, r.top),
+    right: Math.max(0, r.refWidth - r.right),
+    bottom: Math.max(0, r.refHeight - r.bottom),
+  };
+}
+
 // 断ち切り設定
 export interface BleedSettings {
   enabled: boolean;
   mode: 'bulk' | 'per-chapter';
-  cover: BleedMargins;
-  body: BleedMargins;
-  perChapter?: Record<string, BleedMargins>;
+  cover: BleedRegion;
+  body: BleedRegion;
+  perChapter?: Record<string, BleedRegion>;
 }
 
 // 断ち切りモード（UIで選択するモード）
 export type BleedMode = 'bulk' | 'per-chapter';
 
+// リサイズモード（Tachimi準拠）
+export type ResizeMode = 'none' | 'percent' | 'fixed';
+
 // エクスポート設定
 export interface ExportOptions {
   outputPath: string;
   exportMode: 'copy' | 'move';  // コピーか移動か
-  convertToJpg: boolean;  // JPEGに変換するか（PSDが含まれる場合は自動でPhotoshopを使用）
-  jpgQuality: number;  // JPG品質（1-100、PSD以外のRust変換用。PSDはPhotoshop側の最高品質固定）
+  convertToJpg: boolean;  // JPEGに変換するか（Photoshop不要・Rust/MozJPEG）
+  jpgQuality: number;  // MozJPEG品質（70-100）
   convertToTiff: boolean;  // PhotoshopでTIFFに変換するか
+  resizeMode: ResizeMode;  // リサイズモード（none/percent/fixed）
+  resizePercent: number;   // %指定時の倍率（1-100）
   renameMode: 'unified' | 'perChapter';
   // 一括設定
   startNumber: number;
@@ -71,8 +120,10 @@ export function ExportModal({
   const [outputPath, setOutputPath] = useState('');
   const [exportMode, setExportMode] = useState<'copy' | 'move'>('copy');
   const [convertToJpg, setConvertToJpg] = useState(false);
-  const [jpgQuality, setJpgQuality] = useState(100);
+  const [jpgQuality, setJpgQuality] = useState(95);
   const [convertToTiff, setConvertToTiff] = useState(false);
+  const [resizeMode, setResizeMode] = useState<ResizeMode>('none');
+  const [resizePercent, setResizePercent] = useState(50);
   const [photoshopInstalled, setPhotoshopInstalled] = useState<boolean | null>(null);
   const [renameMode, setRenameMode] = useState<'unified' | 'perChapter'>('unified');
   const [startNumber, setStartNumber] = useState(1);
@@ -121,9 +172,9 @@ export function ExportModal({
     chapter.pages.some(page => page.fileType === 'psd' || page.fileType === 'jpg')
   );
 
-  // PSDファイルがあるかチェック（JPEG変換対象）
-  const hasPsdFiles = chapters.some(chapter =>
-    chapter.pages.some(page => page.fileType === 'psd')
+  // 画像ファイルページがあるか（JPEG変換対象。Photoshop不要）
+  const hasFilePages = chapters.some(chapter =>
+    chapter.pages.some(page => !!page.filePath && !!page.fileType)
   );
 
   // チャプターごとの設定を初期化
@@ -159,7 +210,7 @@ export function ExportModal({
   const handleExport = async () => {
     if (!outputPath) return;
     setIsExporting(true);
-    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode });
+    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, resizeMode, resizePercent, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode });
     setIsExporting(false);
     onClose();
   };
@@ -231,11 +282,11 @@ export function ExportModal({
           </div>
 
           <div className="form-group">
-            <label className={`checkbox-label ${hasPsdFiles && !photoshopInstalled ? 'disabled' : ''}`}>
+            <label className={`checkbox-label ${!hasFilePages ? 'disabled' : ''}`}>
               <input
                 type="checkbox"
                 checked={convertToJpg}
-                disabled={hasPsdFiles && !photoshopInstalled}
+                disabled={!hasFilePages}
                 onChange={(e) => {
                   setConvertToJpg(e.target.checked);
                   if (e.target.checked) {
@@ -243,15 +294,12 @@ export function ExportModal({
                   }
                 }}
               />
-              JPEGに変換
-              {hasPsdFiles && (
-                <span className="option-note">
-                  {' '}- PSDはPhotoshop経由で変換
-                  {!photoshopInstalled && photoshopInstalled !== null && '（未インストール）'}
-                </span>
-              )}
+              JPEGに変換（Photoshop不要）
+              <span className="option-note">
+                {' '}- PSD/JPEG/PNG/TIFF をMozJPEGで変換
+              </span>
             </label>
-            {convertToJpg && !hasPsdFiles && (
+            {convertToJpg && (
               <div className="quality-slider">
                 <label>品質: {jpgQuality}%</label>
                 <input
@@ -267,11 +315,33 @@ export function ExportModal({
                 </div>
               </div>
             )}
-            {convertToJpg && hasPsdFiles && (
-              <div className="tiff-options">
-                <div className="tiff-note">
-                  ※ PSDは最高画質（品質12）でPhotoshop経由で変換、その他ファイルは直接変換
-                </div>
+            {convertToJpg && (
+              <div className="resize-settings">
+                <label className="resize-label">リサイズ</label>
+                <select
+                  className="select-full"
+                  value={resizeMode}
+                  onChange={(e) => setResizeMode(e.target.value as ResizeMode)}
+                >
+                  <option value="none">なし（原寸）</option>
+                  <option value="percent">%指定</option>
+                  <option value="fixed">デフォルト（2250×3000）</option>
+                </select>
+                {resizeMode === 'percent' && (
+                  <div className="resize-percent-row">
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={resizePercent}
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value, 10);
+                        setResizePercent(Number.isNaN(v) ? 1 : Math.min(100, Math.max(1, v)));
+                      }}
+                    />
+                    <span>%</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -306,7 +376,7 @@ export function ExportModal({
             )}
           </div>
 
-          {(convertToTiff || (convertToJpg && hasPsdFiles)) && (
+          {(convertToTiff || convertToJpg) && (
             <div className="form-group">
               <label>断ち切り設定</label>
               <div className="radio-group">

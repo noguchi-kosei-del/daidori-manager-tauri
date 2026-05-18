@@ -1893,3 +1893,60 @@ C2. **Tauriコマンド登録を整理**: `detect_tachimi_exe` と `generate_tac
 ### バージョン同期
 
 `package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を **`1.3.2`** に更新。
+
+---
+
+## v1.4.0: Tachimi由来のネイティブJPEG化・6モード断ち切り移植 / チャプターPDFフロー刷新
+
+別アプリ Tachimi（`Tachimi-_Standalone`）の **Photoshop不要なJPEG化処理（MozJPEG）** と
+**6モード断ち切り（タチキリ）+ リサイズ** を Daiwari Manager に移植し、エクスポートと
+チャプターPDF生成の両方をその新パイプラインに統一した。
+
+### A. native_jpeg モジュール新設（Tachimi processor 移植）
+
+A1. **新規 `src-tauri/src/native_jpeg/`** ([types.rs](src-tauri/src/native_jpeg/types.rs) / [jpeg.rs](src-tauri/src/native_jpeg/jpeg.rs) / [image_loader.rs](src-tauri/src/native_jpeg/image_loader.rs) / [image_processing.rs](src-tauri/src/native_jpeg/image_processing.rs) / [mod.rs](src-tauri/src/native_jpeg/mod.rs)): Tachimi `processor` から **ノンブル/PDF を除外**して移植。
+- `image_loader`: PSDヘッダ直読＋RLE/PackBitsデコードの高速合成読込、失敗時 `psd` crate フォールバック
+- `image_processing`: クロップ・線描画・塗りつぶし・リサイズ（`process_single_image`、ノンブル分岐削除）
+- `jpeg`: MozJPEG エンコード（`encode_jpeg_mozjpeg` / `write_jpeg_mozjpeg_to_file`）
+- `types`: `ProcessOptions`（crop_*/tachikiri_type/stroke_color/fill_color/fill_opacity/reference_*/resize_*/jpeg_quality）+ `color_to_rgb(a)` + `Default` 実装
+
+A2. **断ち切り6モード**: `none` / `crop_only` / `crop_and_stroke` / `stroke_only` / `fill_white` / `fill_and_stroke`。線色・塗り色（黒/白/水色）、塗り不透明度、`reference_*` による基準サイズスケーリングに対応。
+
+A3. **新規コマンド [commands/jpeg_native.rs](src-tauri/src/commands/jpeg_native.rs) `run_native_jpeg_convert`**: ファイル別 `ProcessOptions` を受け取り、`create_unique_output_dir` で出力先重複回避、rayon 並列 + `tokio::task::spawn_blocking`、`jpeg-convert-progress` イベントで進捗送出。レスポンスは旧 `JpegConvertResponse` と同形。
+
+A4. **依存追加**: `Cargo.toml` に `mozjpeg = "0.10"` + `[profile.dev.package.mozjpeg] opt-level = 3`。
+
+### B. 旧Photoshop JPEG経路の完全廃止
+
+B1. **削除**: `src-tauri/src/commands/jpeg.rs` / `src-tauri/src/types/jpeg.rs` / `src-tauri/scripts/jpeg_convert.jsx`。`lib.rs`・`commands/mod.rs`・`types/mod.rs` の登録/再エクスポートを差し替え（`run_photoshop_jpeg_convert` → `run_native_jpeg_convert`）。
+
+B2. **連携箇所も native へ移行**: `commands/tachimi.rs`（PDF用PSD変換）と `App.tsx` の EPUB生成時PSD→JPEG自動変換を `run_native_jpeg_convert` に置換。EPUB生成の Photoshop インストールチェックを撤去（Photoshop不要に）。
+
+B3. **TIFFは無改修**: `run_photoshop_tiff_convert` / `tiff_convert.jsx` / `check_photoshop_installed` は従来どおり Photoshop 経路で残置。
+
+### C. 断ち切りエディタ・型・エクスポートフロー
+
+C1. **型拡張** ([ExportModal.tsx](src/components/modals/ExportModal.tsx)): `TachikiriType` / `BleedColor` / `BLEED_COLOR_MAP` / `BleedRegion`（選択範囲＋モード＋色＋基準サイズ）/ `ResizeMode` を追加。`BleedSettings` を `BleedRegion` 保持に変更。TIFF用に `BleedMargins` と `regionToMargins()` を残置。`ExportOptions` に `resizeMode` / `resizePercent` 追加。
+
+C2. **BleedEditorModal 拡張** ([BleedEditorModal.tsx](src/components/modals/BleedEditorModal.tsx)): サイドパネルに **6モードカード + 線色/塗り色 select + 不透明度スライダー** を追加（ガイド/選択ロジックは維持）。`onApply` は `BleedRegion` を返す。`none` は選択不要でエクスポート可。
+
+C3. **ExportModal UI** ([ExportModal.tsx](src/components/modals/ExportModal.tsx)): JPEGチェックを Photoshop非依存表記に変更し常時有効化、品質スライダー常時表示（既定95）、**リサイズ section（なし/%/2250×3000）追加**、断ち切り設定の表示条件を `convertToTiff || convertToJpg` に拡張。
+
+C4. **useExport 改修** ([useExport.ts](src/hooks/useExport.ts)): JPEG分岐を全置換し全画像ファイルページを `run_native_jpeg_convert` で処理（PSD/非PSD区別撤廃、非ファイルページは従来 `export_pages`）。`resolveBleedRegion` / `buildProcessOptions` を新設・エクスポート。`handlePreExport` を全画像ファイル対象に拡張。
+
+### D. チャプターPDFフロー刷新（JPEG化 → サイズ統一 → 断ち切り → PDF）
+
+D1. **断ち切りキューの汎用化** ([useExport.ts](src/hooks/useExport.ts)): `buildBleedQueue` を抽出、`BleedEditorState.purpose: 'export' | 'tachimi'` を追加。完了時に purpose で分岐。新規 `startTachimiBleed(bleedMode, onComplete)` を公開。`hooks/index.ts` で `resolveBleedRegion` / `buildProcessOptions` を再エクスポート。
+
+D2. **handleLaunchTachimi 改修** ([App.tsx](src/App.tsx)): 実行ファイル検出 → 出力先決定 → **断ち切りエディタ（表紙・本文）経由** → 各ページに `ProcessOptions` を付与して `generate_tachimi_chapter_pdfs` を呼ぶ流れに変更。**PDF出力先をフォルダ選択ダイアログ廃止 → `<デスクトップ>/Script_Output/チャプターPDF` に固定**。
+
+D3. **`prepare_pages_for_pdf`** ([commands/tachimi.rs](src-tauri/src/commands/tachimi.rs)): 旧 `convert_psd_pages_for_pdf`（PSDのみ）を刷新。`TachimiPdfPage.options: Option<ProcessOptions>` を追加し、3段階処理:
+1. **JPEG化**: PSD/JPEG/PNG/TIFF 区別なく全画像ページを native_jpeg で断ち切り適用しつつ変換
+2. **サイズ一律統一**: 変換結果の最頻サイズへ exact リサイズ（同サイズはスキップ、rayon並列・MozJPEG再エンコード）
+3. 統一済みJPEGに `source_path` 差し替え → 既存の統合PDFジョブへ（白紙も統一サイズで生成）
+
+これにより Tachimi の単一DPI計算が全ページで一致し、混在サイズによるPDFの崩れを解消。
+
+### バージョン同期
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を **`1.4.0`** に更新。

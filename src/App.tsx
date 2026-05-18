@@ -18,7 +18,7 @@ import type { SortingStrategy } from '@dnd-kit/sortable';
 const noShiftStrategy: SortingStrategy = () => null;
 import { useStore, FileInfo, THUMBNAIL_SIZES } from './store';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useKeyboardShortcuts, useDragHandlers, useExport, queueThumbnail, useAutoUpdate, scheduleStartupCheck, useModalAnimation } from './hooks';
+import { useKeyboardShortcuts, useDragHandlers, useExport, resolveBleedRegion, buildProcessOptions, queueThumbnail, useAutoUpdate, scheduleStartupCheck, useModalAnimation } from './hooks';
 import { getVersion } from '@tauri-apps/api/app';
 import { describePhysicalSize, findPaperSize, pixelsToMm } from './utils/paperSize';
 import {
@@ -611,6 +611,7 @@ function App() {
     openExportModal,
     closeExportModal,
     handlePreExport,
+    startTachimiBleed,
     handleBleedApply,
     handleBleedSkip,
     handleBleedCancel,
@@ -669,18 +670,10 @@ function App() {
   }, []);
 
   const handleLaunchTachimi = useCallback(async () => {
-    const pdfChapters = chapters
-      .map((chapter) => ({
-        name: chapter.name,
-        chapter_type: chapter.type,
-        pages: chapter.pages.map((page) => ({
-          source_path: page.filePath ?? null,
-          page_type: page.pageType,
-        })),
-      }))
-      .filter((chapter) => chapter.pages.length > 0 || chapter.chapter_type === 'blank');
-
-    if (pdfChapters.length === 0) {
+    const hasPdfPages = chapters.some(
+      (chapter) => chapter.pages.length > 0 || chapter.type === 'blank'
+    );
+    if (!hasPdfPages) {
       setExportResultDialog({
         show: true,
         title: 'ファイルがありません',
@@ -702,68 +695,89 @@ function App() {
       return;
     }
 
-    try {
-      const desktop = await desktopDir();
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        defaultPath: desktop,
-        title: 'チャプターPDFの出力先フォルダを選択',
-      });
-      if (!selected || Array.isArray(selected)) return;
+    // 出力先はデスクトップの Script_Output/チャプターPDF に固定（フォルダ選択なし）
+    const desktop = await desktopDir();
+    const pdfOutputDir = await join(desktop, 'Script_Output', 'チャプターPDF');
 
-      setExportResultDialog({
-        show: true,
-        title: 'チャプターPDF生成中',
-        message: 'Tachimi で全チャプターを1つのPDFにまとめています。完了まで少しお待ちください。',
-        isError: false,
-      });
-      setTachimiPdfProgress({
-        phase: 'prepare',
-        message: 'Tachimi PDFジョブを準備しています',
-        current: 0,
-        total: pdfChapters.length || 1,
-        indeterminate: false,
-      });
+    // 断ち切りエディタ（表紙・本文）を経由してから PDF 生成
+    // jpeg化 → 一律サイズ統一(バックエンド) → 断ち切り → PDF化
+    await startTachimiBleed('bulk', async (bleedSettings) => {
+      try {
+        // 各ページに ProcessOptions（断ち切り）を付与。サイズ統一はバックエンドが担当
+        const pdfChapters = chapters
+          .map((chapter) => {
+            const region = resolveBleedRegion(bleedSettings, chapter.type, chapter.id);
+            const options = buildProcessOptions(region, {
+              resizeMode: 'none',
+              resizePercent: 50,
+              jpgQuality: 100,
+            });
+            return {
+              name: chapter.name,
+              chapter_type: chapter.type,
+              pages: chapter.pages.map((page) => ({
+                source_path: page.filePath ?? null,
+                page_type: page.pageType,
+                options: page.filePath ? options : null,
+              })),
+            };
+          })
+          .filter((chapter) => chapter.pages.length > 0 || chapter.chapter_type === 'blank');
 
-      const result = await invoke<{
-        generated: number;
-        output_dir: string;
-        results: { output_path: string; success: boolean; error?: string | null }[];
-      }>('generate_tachimi_chapter_pdfs', {
-        exePath: exe,
-        outputDir: selected,
-        outputName: projectName || '台割PDF',
-        chapters: pdfChapters,
-        isSpread: false,
-      });
+        setExportResultDialog({
+          show: true,
+          title: 'チャプターPDF生成中',
+          message:
+            'JPEG化 → サイズ統一 → 断ち切り → PDF化 の順で処理しています。完了まで少しお待ちください。',
+          isError: false,
+        });
+        setTachimiPdfProgress({
+          phase: 'prepare',
+          message: 'Tachimi PDFジョブを準備しています',
+          current: 0,
+          total: pdfChapters.length || 1,
+          indeterminate: false,
+        });
 
-      const errors = result.results.filter((r) => !r.success);
-      const details = [
-        ...result.results.filter((r) => r.success).map((r) => r.output_path),
-        ...errors.map((r) => `${r.output_path || 'PDF生成'}: ${r.error ?? '不明なエラー'}`),
-      ].join('\n');
+        const result = await invoke<{
+          generated: number;
+          output_dir: string;
+          results: { output_path: string; success: boolean; error?: string | null }[];
+        }>('generate_tachimi_chapter_pdfs', {
+          exePath: exe,
+          outputDir: pdfOutputDir,
+          outputName: projectName || '台割PDF',
+          chapters: pdfChapters,
+          isSpread: false,
+        });
 
-      setExportResultDialog({
-        show: true,
-        title: errors.length > 0 ? 'チャプターPDF生成完了（一部エラー）' : 'チャプターPDF生成完了',
-        message: `全チャプターを1つのPDFにまとめました。\n出力先: ${result.output_dir}`,
-        details: details || undefined,
-        outputDir: result.output_dir,
-        isError: errors.length > 0,
-      });
-      setTachimiPdfProgress(null);
-    } catch (e) {
-      const msg = typeof e === 'string' ? e : (e instanceof Error ? e.message : '不明なエラーが発生しました');
-      setExportResultDialog({
-        show: true,
-        title: 'チャプターPDF生成に失敗',
-        message: msg,
-        isError: true,
-      });
-      setTachimiPdfProgress(null);
-    }
-  }, [chapters, detectTachimiExe, projectName, setExportResultDialog]);
+        const errors = result.results.filter((r) => !r.success);
+        const details = [
+          ...result.results.filter((r) => r.success).map((r) => r.output_path),
+          ...errors.map((r) => `${r.output_path || 'PDF生成'}: ${r.error ?? '不明なエラー'}`),
+        ].join('\n');
+
+        setExportResultDialog({
+          show: true,
+          title: errors.length > 0 ? 'チャプターPDF生成完了（一部エラー）' : 'チャプターPDF生成完了',
+          message: `全チャプターを1つのPDFにまとめました。\n出力先: ${result.output_dir}`,
+          details: details || undefined,
+          outputDir: result.output_dir,
+          isError: errors.length > 0,
+        });
+        setTachimiPdfProgress(null);
+      } catch (e) {
+        const msg = typeof e === 'string' ? e : (e instanceof Error ? e.message : '不明なエラーが発生しました');
+        setExportResultDialog({
+          show: true,
+          title: 'チャプターPDF生成に失敗',
+          message: msg,
+          isError: true,
+        });
+        setTachimiPdfProgress(null);
+      }
+    });
+  }, [chapters, detectTachimiExe, projectName, setExportResultDialog, startTachimiBleed]);
 
   // ツールバー右側のアクションボタン（エクスポート・EPUB生成・チャプターPDF）
   const toolbarActionButtons = (
@@ -1301,18 +1315,6 @@ function App() {
       }
 
       if (psdSourcePaths.length > 0) {
-        // Photoshopのインストールチェック
-        const psInstalled = await invoke<boolean>('check_photoshop_installed');
-        if (!psInstalled) {
-          setExportResultDialog({
-            show: true,
-            title: 'EPUB生成失敗',
-            message: 'PSDファイルが含まれていますが、Photoshopが見つかりません。\nPSDをJPEGに変換するためにPhotoshopが必要です。',
-            isError: true,
-          });
-          return;
-        }
-
         // モーダルへPSD変換フェーズを通知（タイマー込みで listener 起動を待つ）
         await new Promise<void>((resolve) => setTimeout(resolve, 50));
         await emit('epub-progress', { phase: 'psd-to-jpeg', current: 0, total: psdSourcePaths.length });
@@ -1321,12 +1323,23 @@ function App() {
         const desktop = await desktopDir();
         const epubJpegDir = await join(desktop, 'Script_Output', `EPUB用JPEG_${projectName || '台割'}`);
 
+        // EPUB用ソース: 断ち切りなし・原寸・高品質（Photoshop不要のネイティブ変換）
         const config = {
-          globalSettings: { jpgQuality: 12 },
           files: psdSourcePaths.map((path, i) => ({
             path,
             outputPath: epubJpegDir,
             outputName: `psd_${String(i).padStart(4, '0')}.jpg`,
+            options: {
+              cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0,
+              tachikiriType: 'none',
+              strokeColor: 'black',
+              fillColor: 'white',
+              fillOpacity: 50,
+              referenceWidth: 0, referenceHeight: 0,
+              resizeMode: 'none',
+              resizePercent: 50,
+              jpegQuality: 95,
+            },
           })),
         };
 
@@ -1335,7 +1348,7 @@ function App() {
           outputDir: string;
         };
         try {
-          convertResponse = await invoke('run_photoshop_jpeg_convert', {
+          convertResponse = await invoke('run_native_jpeg_convert', {
             config,
             outputDir: epubJpegDir,
           });

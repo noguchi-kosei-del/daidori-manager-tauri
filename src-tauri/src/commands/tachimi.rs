@@ -7,14 +7,21 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 
-use super::jpeg::run_photoshop_jpeg_convert;
+use image::imageops::FilterType;
+use rayon::prelude::*;
+
+use super::jpeg_native::{run_native_jpeg_convert, NativeJpegConfig, NativeJpegFile};
 use crate::image_utils::validate_dimensions;
-use crate::types::{JpegConvertConfig, JpegFileConfig, JpegGlobalSettings};
+use crate::native_jpeg::jpeg::write_jpeg_mozjpeg_to_file;
+use crate::native_jpeg::ProcessOptions;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TachimiPdfPage {
     pub source_path: Option<String>,
     pub page_type: String,
+    /// 断ち切り・品質設定（画像ファイルページのみ。未指定はデフォルト=断ち切りなし）
+    #[serde(default)]
+    pub options: Option<ProcessOptions>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -331,7 +338,7 @@ pub async fn generate_tachimi_chapter_pdfs(
     mut chapters: Vec<TachimiPdfChapter>,
     is_spread: Option<bool>,
 ) -> Result<TachimiPdfBatchResult, String> {
-    chapters = convert_psd_pages_for_pdf(app_handle.clone(), chapters).await?;
+    chapters = prepare_pages_for_pdf(app_handle.clone(), chapters).await?;
     tokio::task::spawn_blocking(move || {
         generate_tachimi_chapter_pdfs_sync(
             app_handle,
@@ -346,68 +353,61 @@ pub async fn generate_tachimi_chapter_pdfs(
     .map_err(|e| format!("Tachimi PDFジョブの実行に失敗: {}", e))?
 }
 
-async fn convert_psd_pages_for_pdf(
+/// PDF化前処理: 全ページを JPEG化 → 一律サイズ統一 → 断ち切り適用
+/// （Photoshop不要・native_jpeg パイプライン使用）
+async fn prepare_pages_for_pdf(
     app_handle: tauri::AppHandle,
     mut chapters: Vec<TachimiPdfChapter>,
 ) -> Result<Vec<TachimiPdfChapter>, String> {
-    let mut psd_files: Vec<(usize, usize, String, String)> = Vec::new();
+    // 1. 画像ファイルを持つ全ページ（PSD/JPEG/PNG/TIFF 区別なし）を収集
+    let output_dir = std::env::temp_dir()
+        .join("daidori_tachimi_pdf_jpeg")
+        .to_string_lossy()
+        .to_string();
 
-    for (chapter_index, chapter) in chapters.iter().enumerate() {
-        for (page_index, page) in chapter.pages.iter().enumerate() {
+    let mut tasks: Vec<(usize, usize)> = Vec::new();
+    let mut files: Vec<NativeJpegFile> = Vec::new();
+
+    for (ci, chapter) in chapters.iter().enumerate() {
+        for (pi, page) in chapter.pages.iter().enumerate() {
             let Some(path) = page.source_path.as_deref() else {
                 continue;
             };
-            let ext = Path::new(path)
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            if ext == "psd" {
-                psd_files.push((
-                    chapter_index,
-                    page_index,
-                    path.to_string(),
-                    format!("c{:03}_p{:04}.jpg", chapter_index + 1, page_index + 1),
-                ));
+            if !Path::new(path).exists() {
+                continue;
             }
+            files.push(NativeJpegFile {
+                path: path.to_string(),
+                output_path: output_dir.clone(),
+                output_name: format!("c{:03}_p{:04}.jpg", ci + 1, pi + 1),
+                // 断ち切り設定（未指定はデフォルト=断ち切りなし）。リサイズは段階2で一律統一
+                options: page.options.clone().unwrap_or_default(),
+            });
+            tasks.push((ci, pi));
         }
     }
 
-    if psd_files.is_empty() {
+    if files.is_empty() {
         return Ok(chapters);
     }
+
+    let total = files.len();
 
     emit_tachimi_pdf_progress(
         &app_handle,
         "prepare",
-        format!("PSD {} 件をPDF用JPEGに変換しています", psd_files.len()),
+        format!("{} 件をJPEG化（断ち切り適用）しています", total),
         0,
-        psd_files.len(),
+        total,
         true,
     );
 
-    let output_dir = std::env::temp_dir()
-        .join("daidori_tachimi_pdf_psd_jpeg")
-        .to_string_lossy()
-        .to_string();
     let _ = fs::remove_dir_all(&output_dir);
 
-    let config = JpegConvertConfig {
-        global_settings: JpegGlobalSettings { jpg_quality: 12 },
-        files: psd_files
-            .iter()
-            .map(|(_, _, path, output_name)| JpegFileConfig {
-                path: path.clone(),
-                output_path: output_dir.clone(),
-                output_name: output_name.clone(),
-                crop_bounds: None,
-            })
-            .collect(),
-    };
+    let response =
+        run_native_jpeg_convert(app_handle.clone(), NativeJpegConfig { files }, output_dir).await?;
 
-    let response = run_photoshop_jpeg_convert(app_handle.clone(), config, output_dir).await?;
-    let mut converted_paths: HashMap<String, String> = HashMap::new();
-
+    let mut converted: Vec<PathBuf> = Vec::with_capacity(tasks.len());
     for (idx, result) in response.results.iter().enumerate() {
         if !result.success {
             return Err(format!(
@@ -418,35 +418,86 @@ async fn convert_psd_pages_for_pdf(
                     .unwrap_or_else(|| result.file_name.clone())
             ));
         }
-
-        let Some((_, _, source_path, requested_name)) = psd_files.get(idx) else {
-            continue;
-        };
-        let converted = result.output_path.clone().unwrap_or_else(|| {
+        let path = result.output_path.clone().unwrap_or_else(|| {
+            let (ci, pi) = tasks.get(idx).copied().unwrap_or((idx, 0));
             Path::new(&response.output_dir)
-                .join(requested_name)
+                .join(format!("c{:03}_p{:04}.jpg", ci + 1, pi + 1))
                 .to_string_lossy()
                 .to_string()
         });
-        converted_paths.insert(source_path.clone(), converted);
+        converted.push(PathBuf::from(path));
     }
 
-    for chapter in &mut chapters {
-        for page in &mut chapter.pages {
-            if let Some(path) = page.source_path.as_ref() {
-                if let Some(converted) = converted_paths.get(path) {
-                    page.source_path = Some(converted.clone());
-                }
+    // 2. サイズを一律統一（最頻サイズへ exact リサイズ）
+    emit_tachimi_pdf_progress(
+        &app_handle,
+        "prepare",
+        "ページサイズを統一しています".to_string(),
+        total,
+        total,
+        true,
+    );
+
+    let resize_targets = converted.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let mut counts: HashMap<(u32, u32), usize> = HashMap::new();
+        for p in &resize_targets {
+            if let Ok((w, h)) = image::image_dimensions(p) {
+                *counts.entry((w, h)).or_insert(0) += 1;
             }
+        }
+        let target = counts
+            .into_iter()
+            .max_by(|a, b| {
+                a.1.cmp(&b.1).then_with(|| {
+                    let area_a = (a.0).0 as u64 * (a.0).1 as u64;
+                    let area_b = (b.0).0 as u64 * (b.0).1 as u64;
+                    area_a.cmp(&area_b)
+                })
+            })
+            .map(|(size, _)| size);
+
+        let Some((tw, th)) = target else {
+            return Ok(());
+        };
+
+        resize_targets
+            .par_iter()
+            .try_for_each(|p| -> Result<(), String> {
+                match image::image_dimensions(p) {
+                    Ok((w, h)) if w == tw && h == th => Ok(()),
+                    _ => {
+                        let img = image::open(p)
+                            .map_err(|e| format!("{}: {}", p.display(), e))?;
+                        let resized = img.resize_exact(tw, th, FilterType::CatmullRom);
+                        let rgb = resized.to_rgb8();
+                        write_jpeg_mozjpeg_to_file(
+                            rgb.as_raw(),
+                            rgb.width(),
+                            rgb.height(),
+                            95.0,
+                            p,
+                        )
+                    }
+                }
+            })
+    })
+    .await
+    .map_err(|e| format!("サイズ統一タスクエラー: {}", e))??;
+
+    // 3. source_path を変換後JPEGに差し替え
+    for (idx, (ci, pi)) in tasks.iter().enumerate() {
+        if let Some(p) = converted.get(idx) {
+            chapters[*ci].pages[*pi].source_path = Some(p.to_string_lossy().to_string());
         }
     }
 
     emit_tachimi_pdf_progress(
         &app_handle,
         "prepare",
-        "PSDのPDF用JPEG変換が完了しました".to_string(),
-        psd_files.len(),
-        psd_files.len(),
+        "JPEG化・サイズ統一・断ち切りが完了しました".to_string(),
+        total,
+        total,
         false,
     );
 
@@ -533,6 +584,7 @@ fn generate_tachimi_merged_pdf_job(
                 TachimiPdfPage {
                     source_path: None,
                     page_type: "blank".to_string(),
+                    options: None,
                 },
             ));
         } else {
@@ -643,7 +695,7 @@ fn generate_tachimi_merged_pdf_job(
     emit_tachimi_pdf_progress(
         app_handle,
         "generate",
-        "TachimiでPDFを生成しています".to_string(),
+        "PDFを生成しています".to_string(),
         0,
         files.len(),
         true,
