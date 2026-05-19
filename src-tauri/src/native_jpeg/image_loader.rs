@@ -23,6 +23,35 @@ pub fn load_image(path: &Path) -> Result<DynamicImage, String> {
     }
 }
 
+/// 画像をデコードせずに寸法だけを取得する（ヘッダのみ読む）。
+/// PSD はヘッダ22バイト、その他は `image::image_dimensions`。
+/// 取得できない場合は None。
+pub fn read_image_dimensions(path: &Path) -> Option<(u32, u32)> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    if ext == "psd" {
+        // PSDヘッダ: 0-3 "8BPS", 14-17 height(BE u32), 18-21 width(BE u32)
+        let mut file = File::open(path).ok()?;
+        let mut header = [0u8; 22];
+        file.read_exact(&mut header).ok()?;
+        if &header[0..4] != b"8BPS" {
+            return None;
+        }
+        let height = u32::from_be_bytes([header[14], header[15], header[16], header[17]]);
+        let width = u32::from_be_bytes([header[18], header[19], header[20], header[21]]);
+        if width == 0 || height == 0 {
+            return None;
+        }
+        Some((width, height))
+    } else {
+        ::image::image_dimensions(path).ok()
+    }
+}
+
 /// PSDファイルを高速読み込み
 /// まずフラット化画像を試し、失敗したらレイヤー合成にフォールバック
 pub fn load_psd_fast(path: &Path) -> Result<DynamicImage, String> {

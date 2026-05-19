@@ -12,8 +12,10 @@ use rayon::prelude::*;
 
 use super::jpeg_native::{run_native_jpeg_convert, NativeJpegConfig, NativeJpegFile};
 use crate::image_utils::validate_dimensions;
-use crate::native_jpeg::jpeg::write_jpeg_mozjpeg_to_file;
-use crate::native_jpeg::ProcessOptions;
+use crate::native_jpeg::jpeg::write_jpeg_baseline_to_file;
+use crate::native_jpeg::{
+    fit_within_pdf_bbox, predict_output_dims, read_image_dimensions, ProcessOptions,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TachimiPdfPage {
@@ -367,6 +369,8 @@ async fn prepare_pages_for_pdf(
 
     let mut tasks: Vec<(usize, usize)> = Vec::new();
     let mut files: Vec<NativeJpegFile> = Vec::new();
+    let mut src_paths: Vec<String> = Vec::new();
+    let mut opts_list: Vec<ProcessOptions> = Vec::new();
 
     for (ci, chapter) in chapters.iter().enumerate() {
         for (pi, page) in chapter.pages.iter().enumerate() {
@@ -376,12 +380,15 @@ async fn prepare_pages_for_pdf(
             if !Path::new(path).exists() {
                 continue;
             }
+            let opts = page.options.clone().unwrap_or_default();
+            src_paths.push(path.to_string());
+            opts_list.push(opts.clone());
             files.push(NativeJpegFile {
                 path: path.to_string(),
                 output_path: output_dir.clone(),
                 output_name: format!("c{:03}_p{:04}.jpg", ci + 1, pi + 1),
-                // 断ち切り設定（未指定はデフォルト=断ち切りなし）。リサイズは段階2で一律統一
-                options: page.options.clone().unwrap_or_default(),
+                // 断ち切り設定（未指定はデフォルト=断ち切りなし）
+                options: opts,
             });
             tasks.push((ci, pi));
         }
@@ -401,6 +408,48 @@ async fn prepare_pages_for_pdf(
         total,
         true,
     );
+
+    // 統一目標サイズを予測（画像をデコードせずヘッダのみ読む）。
+    // 段階1の単一パス内で各ページをこのサイズへ exact リサイズし、
+    // 旧段階2の「再デコード＋再エンコード」を不要にする。
+    let predicted: Vec<(u32, u32)> = src_paths
+        .par_iter()
+        .zip(opts_list.par_iter())
+        .map(|(p, o)| match read_image_dimensions(Path::new(p)) {
+            Some((w, h)) => predict_output_dims(w, h, o),
+            None => (0, 0),
+        })
+        .collect();
+
+    let mut size_counts: HashMap<(u32, u32), usize> = HashMap::new();
+    for &(w, h) in &predicted {
+        if w > 0 && h > 0 {
+            *size_counts.entry((w, h)).or_insert(0) += 1;
+        }
+    }
+    let target_size = size_counts
+        .into_iter()
+        .max_by(|a, b| {
+            a.1.cmp(&b.1).then_with(|| {
+                let area_a = (a.0).0 as u64 * (a.0).1 as u64;
+                let area_b = (b.0).0 as u64 * (b.0).1 as u64;
+                area_a.cmp(&area_b)
+            })
+        })
+        .map(|(size, _)| size)
+        // Tachimi 標準の書き出し解像度（2250×3000枠）に収めてPDFを軽量化
+        .map(|(w, h)| fit_within_pdf_bbox(w, h));
+
+    // 各ページに「ベースライン高速JPEG」と「目標サイズへの exact リサイズ」を強制。
+    // フロント送信値は断ち切り設定のみ尊重し、リサイズ/エンコーダはサーバ側で固定する。
+    for f in &mut files {
+        f.options.fast_jpeg = true;
+        if let Some((tw, th)) = target_size {
+            f.options.resize_mode = "exact".to_string();
+            f.options.resize_target_w = tw;
+            f.options.resize_target_h = th;
+        }
+    }
 
     let _ = fs::remove_dir_all(&output_dir);
 
@@ -428,7 +477,8 @@ async fn prepare_pages_for_pdf(
         converted.push(PathBuf::from(path));
     }
 
-    // 2. サイズを一律統一（最頻サイズへ exact リサイズ）
+    // 2. サイズ統一の安全網（段階1で統一済みのため通常は再エンコードが発火しない。
+    //    予測不能だった外れ値のみベースラインJPEGで補正）
     emit_tachimi_pdf_progress(
         &app_handle,
         "prepare",
@@ -442,7 +492,7 @@ async fn prepare_pages_for_pdf(
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let mut counts: HashMap<(u32, u32), usize> = HashMap::new();
         for p in &resize_targets {
-            if let Ok((w, h)) = image::image_dimensions(p) {
+            if let Some((w, h)) = read_image_dimensions(p) {
                 *counts.entry((w, h)).or_insert(0) += 1;
             }
         }
@@ -455,7 +505,9 @@ async fn prepare_pages_for_pdf(
                     area_a.cmp(&area_b)
                 })
             })
-            .map(|(size, _)| size);
+            .map(|(size, _)| size)
+            // 段階1で予測不能だった場合のフォールバックでも 2250×3000 枠に収める
+            .map(|(w, h)| fit_within_pdf_bbox(w, h));
 
         let Some((tw, th)) = target else {
             return Ok(());
@@ -464,14 +516,14 @@ async fn prepare_pages_for_pdf(
         resize_targets
             .par_iter()
             .try_for_each(|p| -> Result<(), String> {
-                match image::image_dimensions(p) {
-                    Ok((w, h)) if w == tw && h == th => Ok(()),
+                match read_image_dimensions(p) {
+                    Some((w, h)) if w == tw && h == th => Ok(()),
                     _ => {
                         let img = image::open(p)
                             .map_err(|e| format!("{}: {}", p.display(), e))?;
-                        let resized = img.resize_exact(tw, th, FilterType::CatmullRom);
+                        let resized = img.resize_exact(tw, th, FilterType::Triangle);
                         let rgb = resized.to_rgb8();
-                        write_jpeg_mozjpeg_to_file(
+                        write_jpeg_baseline_to_file(
                             rgb.as_raw(),
                             rgb.width(),
                             rgb.height(),

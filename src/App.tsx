@@ -164,6 +164,12 @@ const getImageSizeGroupInfo = (page: Page): ImageSizeGroupInfo | null => {
   };
 };
 
+// 例外サイズのジャンル分け用カラーパレット（同じ例外サイズには同色を割り当てる）
+const EXCEPTION_SIZE_COLORS = [
+  '#ef5350', '#42a5f5', '#66bb6a', '#ffa726', '#ab47bc',
+  '#26c6da', '#ec407a', '#8d6e63', '#78909c', '#9ccc65',
+];
+
 // メインApp
 function App() {
   const {
@@ -420,12 +426,14 @@ function App() {
 
   // カラーモード集計（ファイルページのみ対象）
   const colorModeGroups = useMemo(() => {
-    const groups: Record<string, string[]> = { Bitmap: [], Grayscale: [], RGB: [], CMYK: [] };
+    const groups: Record<string, { id: string; name: string }[]> = {
+      Bitmap: [], Grayscale: [], RGB: [], CMYK: [],
+    };
     for (const { page } of allPages) {
       if (page.pageType !== 'file') continue;
       const mode = page.imageColorMode;
       if (mode === 'Bitmap' || mode === 'Grayscale' || mode === 'RGB' || mode === 'CMYK') {
-        groups[mode].push(page.fileName || '(名称未設定)');
+        groups[mode].push({ id: page.id, name: page.fileName || '(名称未設定)' });
       }
     }
     return groups;
@@ -447,10 +455,20 @@ function App() {
       physicalLabel: string;
       isException: boolean;
       files: {
+        id: string;
         name: string;
         pixelLabel: string;
         dpiLabel: string;
         physicalLabel: string;
+      }[];
+      // 例外サイズのみ: 同一サイズごとにジャンル分け（同色）したサブグループ
+      exceptionSubGroups?: {
+        sizeKey: string;
+        pixelLabel: string;
+        dpiLabel: string;
+        physicalLabel: string;
+        color: string;
+        files: { id: string; name: string }[];
       }[];
     }>();
 
@@ -461,6 +479,7 @@ function App() {
 
       const existing = groups.get(info.key);
       const fileInfo = {
+        id: page.id,
         name: page.fileName || '(名称未設定)',
         pixelLabel: info.pixelLabel,
         dpiLabel: info.dpiLabel,
@@ -476,6 +495,44 @@ function App() {
       }
     }
 
+    // 例外サイズグループを「同じ例外サイズ」ごとにサブグループ化し、
+    // サブグループごとに固定色を割り当てる（同じ例外サイズ＝同色）
+    const exceptionGroup = groups.get('exception-size');
+    if (exceptionGroup) {
+      const subMap = new Map<string, {
+        sizeKey: string;
+        pixelLabel: string;
+        dpiLabel: string;
+        physicalLabel: string;
+        color: string;
+        files: { id: string; name: string }[];
+      }>();
+      for (const file of exceptionGroup.files) {
+        const sizeKey = `${file.pixelLabel}|${file.dpiLabel}`;
+        const existing = subMap.get(sizeKey);
+        if (existing) {
+          existing.files.push({ id: file.id, name: file.name });
+        } else {
+          subMap.set(sizeKey, {
+            sizeKey,
+            pixelLabel: file.pixelLabel,
+            dpiLabel: file.dpiLabel,
+            physicalLabel: file.physicalLabel,
+            color: '',
+            files: [{ id: file.id, name: file.name }],
+          });
+        }
+      }
+      // サイズキー順（昇順・数値考慮）で安定ソートしてから色を割り当て
+      const sorted = Array.from(subMap.values()).sort((a, b) =>
+        a.sizeKey.localeCompare(b.sizeKey, 'ja', { numeric: true })
+      );
+      sorted.forEach((sg, i) => {
+        sg.color = EXCEPTION_SIZE_COLORS[i % EXCEPTION_SIZE_COLORS.length];
+      });
+      exceptionGroup.exceptionSubGroups = sorted;
+    }
+
     return Array.from(groups.values()).sort((a, b) => {
       if (a.isException !== b.isException) return a.isException ? 1 : -1;
       return a.paperLabel.localeCompare(b.paperLabel, 'ja', { numeric: true });
@@ -483,11 +540,41 @@ function App() {
   }, [allPages]);
   const hasSummaryItems = colorModeTotalCount > 0 || imageSizeGroups.length > 0;
 
+  // 例外サイズ sizeKey → グループ色 のマップ（カードのアラートアイコンと色をリンク）
+  const exceptionColorMap = useMemo(() => {
+    const map = new Map<string, string>();
+    const exc = imageSizeGroups.find((g) => g.isException);
+    exc?.exceptionSubGroups?.forEach((sg) => map.set(sg.sizeKey, sg.color));
+    return map;
+  }, [imageSizeGroups]);
+
+  // ページが例外サイズなら、その例外サイズグループの色を返す（非例外/規格内は undefined）
+  const getPageExceptionColor = useCallback(
+    (page: Page): string | undefined => {
+      const info = getImageSizeGroupInfo(page);
+      if (!info || !info.isException) return undefined;
+      return exceptionColorMap.get(`${info.pixelLabel}|${info.dpiLabel}`);
+    },
+    [exceptionColorMap]
+  );
+
+  // サマリーバーのツールチップでファイル名をクリック → 該当カードを選択しスクロール
+  const selectPageFromSummary = useCallback(
+    (pageId: string) => {
+      selectPage(pageId);
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-page-id="${pageId}"]`);
+        el?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+      });
+    },
+    [selectPage]
+  );
+
   // CMYKチェック: エクスポート/EPUB生成前のガード。CMYKがあれば警告ダイアログを出してブロックする。
   // 戻り値: true=ブロック(中断), false=続行可
   const blockIfCmyk = (action: 'export' | 'epub') => {
     if (colorModeCounts.CMYK === 0) return false;
-    const fileList = colorModeGroups.CMYK.slice(0, 20).join('\n');
+    const fileList = colorModeGroups.CMYK.slice(0, 20).map((f) => f.name).join('\n');
     const more = colorModeGroups.CMYK.length > 20
       ? `\n…他${colorModeGroups.CMYK.length - 20}件`
       : '';
@@ -554,9 +641,18 @@ function App() {
                     onMouseEnter={cancelHoverClose}
                     onMouseLeave={scheduleHoverClose}
                   >
-                    {colorModeGroups[mode].map((name, i) => (
-                      <div key={i} className="color-mode-badge-tooltip-item" title={name}>
-                        {name}
+                    {colorModeGroups[mode].map((file, i) => (
+                      <div
+                        key={i}
+                        className="color-mode-badge-tooltip-item color-mode-tooltip-clickable"
+                        title={file.name}
+                        role="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          selectPageFromSummary(file.id);
+                        }}
+                      >
+                        {file.name}
                       </div>
                     ))}
                   </div>
@@ -583,16 +679,55 @@ function App() {
                       onMouseEnter={cancelHoverClose}
                       onMouseLeave={scheduleHoverClose}
                     >
-                      {group.files.map((file, i) => (
-                        <div key={i} className="color-mode-badge-tooltip-item image-size-tooltip-file" title={file.name}>
-                          <span className="image-size-tooltip-filename">{file.name}</span>
-                          {group.isException && (
-                            <span className="image-size-tooltip-filemeta">
-                              {file.pixelLabel} / {file.dpiLabel} / 実寸 {file.physicalLabel}
-                            </span>
-                          )}
-                        </div>
-                      ))}
+                      {group.isException && group.exceptionSubGroups ? (
+                        group.exceptionSubGroups.map((sg) => (
+                          <div key={sg.sizeKey} className="image-size-exception-subgroup">
+                            <div
+                              className="image-size-exception-subhead"
+                              style={{ color: sg.color }}
+                            >
+                              <span
+                                className="image-size-exception-swatch"
+                                style={{ backgroundColor: sg.color }}
+                              />
+                              <span className="image-size-exception-sizelabel">
+                                {sg.pixelLabel} / {sg.dpiLabel} / 実寸 {sg.physicalLabel}
+                              </span>
+                              <span className="color-mode-count">{sg.files.length}</span>
+                            </div>
+                            {sg.files.map((file, i) => (
+                              <div
+                                key={i}
+                                className="color-mode-badge-tooltip-item image-size-tooltip-file image-size-exception-file color-mode-tooltip-clickable"
+                                style={{ borderLeftColor: sg.color }}
+                                title={file.name}
+                                role="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  selectPageFromSummary(file.id);
+                                }}
+                              >
+                                <span className="image-size-tooltip-filename">{file.name}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ))
+                      ) : (
+                        group.files.map((file, i) => (
+                          <div
+                            key={i}
+                            className="color-mode-badge-tooltip-item image-size-tooltip-file color-mode-tooltip-clickable"
+                            title={file.name}
+                            role="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              selectPageFromSummary(file.id);
+                            }}
+                          >
+                            <span className="image-size-tooltip-filename">{file.name}</span>
+                          </div>
+                        ))
+                      )}
                     </div>
                   )}
                 </div>
@@ -695,9 +830,9 @@ function App() {
       return;
     }
 
-    // 出力先はデスクトップの Script_Output/チャプターPDF に固定（フォルダ選択なし）
+    // 出力先はデスクトップの Script_Output/台割pdf に固定（フォルダ選択なし）
     const desktop = await desktopDir();
-    const pdfOutputDir = await join(desktop, 'Script_Output', 'チャプターPDF');
+    const pdfOutputDir = await join(desktop, 'Script_Output', '台割pdf');
 
     // 断ち切りエディタ（表紙・本文）を経由してから PDF 生成
     // jpeg化 → 一律サイズ統一(バックエンド) → 断ち切り → PDF化
@@ -787,10 +922,10 @@ function App() {
         className="preview-fab preview-fab-secondary preview-fab-toolbar"
         onClick={handleLaunchTachimi}
         disabled={allPages.length === 0}
-        title="TachimiでチャプターPDF化"
+        title="PDFを生成"
       >
         <PdfIcon size={16} />
-        <span className="preview-fab-label">チャプターPDF</span>
+        <span className="preview-fab-label">PDF生成</span>
       </button>
       <button
         type="button"
@@ -2557,6 +2692,7 @@ function App() {
                                                     (hoveredImageSizeKey !== null && getImageSizeGroupInfo(item.page)?.key !== hoveredImageSizeKey)
                                                   )
                                                 }
+                                                alertColor={getPageExceptionColor(item.page)}
                                                 chapterType={item.chapter.type}
                                                 onSelect={() => {
                                                   if (selectedPageId === item.page.id) {

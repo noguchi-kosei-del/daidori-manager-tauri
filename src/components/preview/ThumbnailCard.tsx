@@ -24,6 +24,7 @@ export function ThumbnailCard({
   onReplaceFile,
   pageCount,
   lastGlobalIndex,
+  alertColor,
 }: {
   page: Page;
   globalIndex: number;
@@ -39,6 +40,8 @@ export function ThumbnailCard({
   onReplaceFile?: () => void;
   pageCount?: number;
   lastGlobalIndex?: number;
+  /** 例外サイズページの場合、そのサイズグループ色（アラートバッジ背景に適用） */
+  alertColor?: string;
 }) {
   const validationContext = useStore((s) => s.validationContext);
   const {
@@ -190,29 +193,46 @@ export function ThumbnailCard({
     >
       <div className="thumbnail-wrapper">
         {renderThumbnail()}
-        {page.fileValidationStatus && page.fileValidationStatus !== 'ok' && (
-          <div className="thumbnail-alert-group">
-            <span
-              className="thumbnail-file-alert"
-              title={getValidationMessage(page, validationContext, chapterType)}
-            >
-              <AlertTriangleIcon size={16} />
-            </span>
-            {onReplaceFile && page.fileValidationStatus === 'modified' && (
-              <button
-                className="thumbnail-file-replace-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onReplaceFile();
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-                title="リンクを更新"
+        {(() => {
+          const hasValidationIssue =
+            !!page.fileValidationStatus && page.fileValidationStatus !== 'ok';
+          // 例外サイズページ（alertColor あり）は検証アラートが無くても色付きバッジを表示する
+          const isExceptionSize = !!alertColor;
+          if (!hasValidationIssue && !isExceptionSize) return null;
+
+          const exceptionDims =
+            page.imageWidth && page.imageHeight
+              ? `: ${page.imageWidth}×${page.imageHeight}px${page.imageDpi ? ` / ${page.imageDpi}dpi` : ''}`
+              : '';
+          const title = hasValidationIssue
+            ? getValidationMessage(page, validationContext, chapterType)
+            : `例外サイズ（規格外）${exceptionDims}`;
+
+          return (
+            <div className="thumbnail-alert-group">
+              <span
+                className="thumbnail-file-alert"
+                style={alertColor ? { background: alertColor } : undefined}
+                title={title}
               >
-                <ReplaceIcon size={14} />
-              </button>
-            )}
-          </div>
-        )}
+                <AlertTriangleIcon size={16} />
+              </span>
+              {onReplaceFile && page.fileValidationStatus === 'modified' && (
+                <button
+                  className="thumbnail-file-replace-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onReplaceFile();
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  title="リンクを更新"
+                >
+                  <ReplaceIcon size={14} />
+                </button>
+              )}
+            </div>
+          );
+        })()}
       </div>
       <div className="thumbnail-info">
         <span className="thumbnail-number" style={{ fontSize: thumbnailSize <= 100 ? 16 : thumbnailSize >= 180 ? 28 : 22 }}>

@@ -31,14 +31,23 @@ pub struct ProcessOptions {
     pub reference_width: u32,
     #[serde(default)]
     pub reference_height: u32,
-    /// リサイズ設定: "none", "percent", "fixed"
+    /// リサイズ設定: "none", "percent", "fixed", "exact"
     #[serde(default = "default_resize_mode")]
     pub resize_mode: String,
     #[serde(default = "default_resize_percent")]
     pub resize_percent: u32,
+    /// "exact" リサイズ時の目標サイズ（0 のときは無効）
+    #[serde(default)]
+    pub resize_target_w: u32,
+    #[serde(default)]
+    pub resize_target_h: u32,
     /// JPEG品質（0-100）
     #[serde(default = "default_jpeg_quality")]
     pub jpeg_quality: f32,
+    /// true のときベースラインJPEG（高速）で出力。false（既定）は MozJPEG。
+    /// チャプターPDFの中間ファイル用にサーバ側で true を強制する。
+    #[serde(default)]
+    pub fast_jpeg: bool,
 }
 
 impl Default for ProcessOptions {
@@ -56,7 +65,10 @@ impl Default for ProcessOptions {
             reference_height: 0,
             resize_mode: default_resize_mode(),
             resize_percent: default_resize_percent(),
+            resize_target_w: 0,
+            resize_target_h: 0,
             jpeg_quality: default_jpeg_quality(),
+            fast_jpeg: false,
         }
     }
 }

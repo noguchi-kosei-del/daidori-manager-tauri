@@ -7,7 +7,6 @@ import {
   PageType,
   PAGE_TYPE_LABELS,
   FileValidationStatus,
-  SavedUiState,
   ValidationContext,
   ValidationGroupContext,
 
@@ -41,10 +40,7 @@ interface AppState {
   chapters: Chapter[];
 
   // プロジェクト状態
-  currentProjectPath: string | null;
   projectName: string;
-  isModified: boolean;
-  lastSavedAt: Date | null;
 
   // 履歴管理
   history: Chapter[][];
@@ -124,16 +120,9 @@ interface AppState {
   // アクション: 履歴
   undo: () => void;
   redo: () => void;
-  canUndo: () => boolean;
-  canRedo: () => boolean;
 
   // アクション: プロジェクト管理
-  setProjectPath: (path: string | null) => void;
-  setProjectName: (name: string) => void;
-  markAsModified: () => void;
-  markAsSaved: (path: string) => void;
   resetProject: () => void;
-  loadProjectState: (chapters: Chapter[], uiState?: SavedUiState) => void;
 
   // ヘルパー
   getAllPages: () => { page: Page; chapter: Chapter; globalIndex: number }[];
@@ -344,7 +333,7 @@ function applyMismatchStatuses(chapters: Chapter[]): {
 }
 
 export const useStore = create<AppState>((set, get) => {
-  // 履歴に現在の状態を保存するヘルパー（変更フラグも設定）
+  // 履歴に現在の状態を保存するヘルパー
   const saveHistory = () => {
     const { chapters, history } = get();
     const newHistory = [...history, JSON.parse(JSON.stringify(chapters))];
@@ -352,16 +341,13 @@ export const useStore = create<AppState>((set, get) => {
     if (newHistory.length > MAX_HISTORY_SIZE) {
       newHistory.shift();
     }
-    return { history: newHistory, future: [], isModified: true };
+    return { history: newHistory, future: [] };
   };
 
   return {
   // 初期状態
   chapters: [],
-  currentProjectPath: null,
   projectName: '新規プロジェクト',
-  isModified: false,
-  lastSavedAt: null,
   history: [],
   future: [],
   selectedChapterId: null,
@@ -1000,16 +986,6 @@ export const useStore = create<AppState>((set, get) => {
     }));
   },
 
-  // 元に戻せるか
-  canUndo: () => {
-    return get().history.length > 0;
-  },
-
-  // やり直せるか
-  canRedo: () => {
-    return get().future.length > 0;
-  },
-
   // 全ページ取得（通し番号付き）
   getAllPages: () => {
     const chapters = get().chapters;
@@ -1031,61 +1007,17 @@ export const useStore = create<AppState>((set, get) => {
     return get().chapters.reduce((sum, c) => sum + c.pages.length, 0);
   },
 
-  // プロジェクトパス設定
-  setProjectPath: (path) => {
-    set({ currentProjectPath: path });
-  },
-
-  // プロジェクト名設定
-  setProjectName: (name) => {
-    set({ projectName: name, isModified: true });
-  },
-
-  // 変更フラグを設定
-  markAsModified: () => {
-    set({ isModified: true });
-  },
-
-  // 保存完了
-  markAsSaved: (path) => {
-    const name = path.split(/[\\\/]/).pop()?.replace(/\.daidori$/, '') || '新規プロジェクト';
-    set({
-      currentProjectPath: path,
-      projectName: name,
-      isModified: false,
-      lastSavedAt: new Date(),
-    });
-  },
-
   // プロジェクトをリセット（新規作成）
   resetProject: () => {
     set({
       chapters: [],
-      currentProjectPath: null,
       projectName: '新規プロジェクト',
-      isModified: false,
-      lastSavedAt: null,
       history: [],
       future: [],
       selectedChapterId: null,
       selectedPageId: null,
       selectedPageIds: [],
       viewMode: 'all',
-    });
-  },
-
-  // プロジェクト状態を読み込み
-  loadProjectState: (chapters, uiState) => {
-    set({
-      chapters,
-      history: [],
-      future: [],
-      isModified: false,
-      selectedChapterId: uiState?.selectedChapterId ?? null,
-      selectedPageId: uiState?.selectedPageId ?? null,
-      selectedPageIds: [],
-      viewMode: uiState?.viewMode ?? 'all',
-      thumbnailSize: uiState?.thumbnailSize ?? 'medium',
     });
   },
 

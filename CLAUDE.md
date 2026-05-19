@@ -1950,3 +1950,115 @@ D3. **`prepare_pages_for_pdf`** ([commands/tachimi.rs](src-tauri/src/commands/ta
 ### バージョン同期
 
 `package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を **`1.4.0`** に更新。
+
+---
+
+## v1.5.0: チャプターPDF高速化・軽量化 / 例外サイズ色分けUI / デッドコード整理
+
+v1.4.0 で導入した native_jpeg ベースのチャプターPDFフローについて、**JPEG化処理の高速化**と
+**生成PDFの軽量化**を行い、あわせて例外サイズ表示のUX改善・未使用コード削除・文言整理を実施。
+
+### A. チャプターPDFのJPEG化高速化
+
+A1. **ベースラインJPEGエンコーダ追加** ([native_jpeg/jpeg.rs](src-tauri/src/native_jpeg/jpeg.rs)):
+`write_jpeg_baseline_to_file`（`image` クレートの `JpegEncoder`）を新設。MozJPEG のトレリス量子化／
+プログレッシブ最適化を使わず、漫画サイズ（10〜50MP）で数倍高速。チャプターPDFの使い捨て中間
+ファイル用。ユーザー向け「JPEGに変換」エクスポートは MozJPEG のまま据え置き（回帰なし）。
+
+A2. **二重エンコードの解消** ([commands/tachimi.rs](src-tauri/src/commands/tachimi.rs) `prepare_pages_for_pdf`):
+旧実装は段階1で全ページMozJPEGエンコード後、段階2でサイズ不一致ページを再デコード＋再エンコード
+していた。段階1の前に**ヘッダのみ読み**（`read_image_dimensions`）で統一目標サイズを予測
+（`predict_output_dims`）し、段階1の単一パスで exact リサイズまで完了。段階2はヘッダ確認のみの
+安全網に縮小（通常は再エンコード不発火）。`fast_jpeg` フラグはサーバ側でPDFパスのみ強制。
+
+A3. **ProcessOptions 拡張** ([native_jpeg/types.rs](src-tauri/src/native_jpeg/types.rs)):
+`fast_jpeg` / `resize_target_w` / `resize_target_h` を追加（`#[serde(default)]` で後方互換、
+フロント変更不要）。`resize_mode` に `"exact"` を追加。
+
+A4. **共有ロジック抽出** ([native_jpeg/image_processing.rs](src-tauri/src/native_jpeg/image_processing.rs)):
+クロップ矩形計算を `compute_crop_rect`、リサイズ寸法計算を `resize_dims` に抽出し
+`process_single_image` と `predict_output_dims` で共有（実処理と予測の乖離防止）。
+`apply_resize` に `"exact"` 分岐（高速な Triangle フィルタ）追加。保存を `fast_jpeg` で
+MozJPEG/ベースライン分岐。寸法ヘッダ読み `read_image_dimensions` を
+[native_jpeg/image_loader.rs](src-tauri/src/native_jpeg/image_loader.rs) に追加。
+
+### B. 生成PDFの軽量化（Tachimi の "fixed" リサイズ流用）
+
+B1. **`fit_within_pdf_bbox`** ([native_jpeg/image_processing.rs](src-tauri/src/native_jpeg/image_processing.rs)):
+Tachimi 標準書き出しと同じ `TARGET_RESIZE_WIDTH×TARGET_RESIZE_HEIGHT`（2250×3000）の枠に
+アスペクト比保持で**縮小（拡大はしない）**するヘルパーを追加。
+
+B2. **統一目標サイズに適用** ([commands/tachimi.rs](src-tauri/src/commands/tachimi.rs)):
+`prepare_pages_for_pdf` の予測目標サイズと段階2安全網のターゲットを `fit_within_pdf_bbox`
+経由に変更。ネイティブ印刷解像度（例 600dpi B4 ≈ 6071×8598px）が約2118×3000px（B5で
+約300dpi相当）に抑えられ、画素数約8分の1 → PDFサイズが大幅縮小（実測 ~852MB → 100MB台）。
+PDF経路は Tachimi が画像をダウンスケールしない設計のため Daiwari 側で抑制する必要があった。
+
+### C. 例外サイズのジャンル別色分け表示
+
+C1. **ヘッダー例外サイズツールチップのサブグループ化** ([App.tsx](src/App.tsx), [styles.css](src/styles.css)):
+`EXCEPTION_SIZE_COLORS`（10色）を追加。例外サイズグループを `${pixelLabel}|${dpiLabel}` 単位で
+`exceptionSubGroups` に集約し、サイズキー昇順で安定ソートして固定色を割当（**同じ例外サイズ＝同色**）。
+ツールチップはサブグループごとに「色スウォッチ＋サイズ見出し＋件数」を表示。
+旧 `.image-size-tooltip-filemeta`（参照消滅）を削除。
+
+C2. **カードのアラートバッジを例外サイズ色とリンク** ([ThumbnailCard.tsx](src/components/preview/ThumbnailCard.tsx), [App.tsx](src/App.tsx)):
+`exceptionColorMap`（sizeKey→色）と `getPageExceptionColor(page)` を追加。グリッドの
+`<ThumbnailCard>` に `alertColor` を渡し、`.thumbnail-file-alert` の背景色をその例外サイズ色に。
+非例外/規格内は従来の赤を維持。
+
+C3. **例外サイズページはバッジを常時表示** ([ThumbnailCard.tsx](src/components/preview/ThumbnailCard.tsx)):
+バッジ描画条件を「検証アラートあり **または** 例外サイズ（`alertColor` あり）」に変更。
+検証アラートが無くても例外サイズなら色付きバッジを表示（検証アラート無し時のツールチップは
+「例外サイズ（規格外）: 幅×高px / dpi」）。
+
+C4. **ツールチップのファイル名クリックでカード選択** ([App.tsx](src/App.tsx), [styles.css](src/styles.css)):
+`colorModeGroups` / `imageSizeGroups.files` / `exceptionSubGroups.files` に page `id` を保持。
+`selectPageFromSummary(pageId)` を追加（`selectPage` ＋ `[data-page-id]` を中央へ
+`scrollIntoView`）。カラーモード／例外サイズ両ツールチップの各行を `role="button"` ＋
+`onClick`（`stopPropagation`）でクリック可能化、`.color-mode-tooltip-clickable` で
+`cursor: pointer`。`blockIfCmyk` の一覧生成を `.map(f => f.name)` に修正。
+
+### D. デッドコード削除（フロント確実デッド）
+
+横断調査（`tsc --noEmit` の `noUnusedLocals` / `cargo clippy` はクリーン済み、追加で公開
+シンボルの未参照を全文検証）で確認した未使用コードを削除:
+
+- `SaveIcon` ([icons.tsx](src/icons.tsx))
+- `EpubMetadataPanel` / `EpubCssEditorModal`（ファイル削除 + [components/epub/index.ts](src/components/epub/index.ts) の barrel 再エクスポート）
+- store 保存系クラスタ ([store.ts](src/store.ts)): 状態 `currentProjectPath` / `isModified` /
+  `lastSavedAt`、アクション `setProjectPath` / `setProjectName` / `markAsModified` /
+  `markAsSaved` / `loadProjectState` / `canUndo` / `canRedo`（保存機能撤去・Ctrl+Z/Y撤去で
+  参照消滅。CLAUDE.md 旧記載の保持理由 `handleOpenProject` は v1.0.5 で削除済み）。
+  連鎖修正: `saveHistory()` 戻り値の `isModified`、`resetProject()` の該当初期化、未使用化した
+  `SavedUiState` import を除去
+- 型 ([types.ts](src/types.ts)): `FileValidationResult` / `RecentFile` / TIFF型クラスタ
+  （`TiffFileConfig` / `TiffGlobalSettings` / `TiffConvertConfig` / `TiffConvertResult` /
+  `TiffConvertResponse`）
+
+> 保持: バックエンド孤立コマンド（`save_project` 等）と store `undo`/`redo` 本体は
+> CLAUDE.md 記載の「将来用に保持」に従い未変更（今回の削除対象外）。
+
+### E. 文言・出力先の整理
+
+E1. **ボタン文言変更** ([App.tsx](src/App.tsx)): ツールバーの「チャプターPDF」ボタンを
+**「PDF生成」**に変更（`title` も「PDFを生成」に統一）。
+
+E2. **出力フォルダ名変更** ([App.tsx](src/App.tsx)): チャプターPDFの出力先を
+`<デスクトップ>/Script_Output/チャプターPDF` → **`<デスクトップ>/Script_Output/台割pdf`** に変更。
+
+### バージョン同期
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を **`1.5.0`** に更新。
+
+> **このバージョンの構造変更まとめ**:
+> - 旧: チャプターPDFのJPEG化が MozJPEG 最大圧縮＋サイズ不一致ページの二重エンコードで低速 →
+>   新: ベースライン高速エンコーダ＋目標サイズ事前予測で単一パス化
+> - 旧: 中間JPEGがネイティブ印刷解像度のままで生成PDFが数百MB →
+>   新: Tachimi の "fixed" 相当（2250×3000枠）に縮小してPDFを大幅軽量化
+> - 旧: 例外サイズはツールチップ1リストで混在表示／カードに色目印なし →
+>   新: 同一例外サイズごとに色分け、カードのアラートバッジも同色リンク（検証アラート無しでも表示）
+> - 旧: サマリーのファイル名はクリック不可 → 新: クリックで該当カードを選択＋スクロール
+> - 旧: 保存機能撤去で残った未使用 store/型/コンポーネント/アイコンが残存 → 新: 確実デッドを削除
+> - 旧: ボタン文言「チャプターPDF」／出力先「Script_Output/チャプターPDF」 →
+>   新: 「PDF生成」／「Script_Output/台割pdf」

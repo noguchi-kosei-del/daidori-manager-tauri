@@ -7,35 +7,33 @@ use ::image::{DynamicImage, GenericImageView, RgbaImage};
 use std::path::Path;
 
 use super::image_loader::load_image;
-use super::jpeg::write_jpeg_mozjpeg_to_file;
+use super::jpeg::{write_jpeg_baseline_to_file, write_jpeg_mozjpeg_to_file};
 use super::types::{
     color_to_rgb, color_to_rgba, ProcessOptions, TARGET_RESIZE_HEIGHT, TARGET_RESIZE_WIDTH,
 };
 
-/// 単一画像を処理（読込 → 断ち切り → リサイズ → MozJPEG保存）
-pub fn process_single_image(
-    input_path: &Path,
-    output_path: &Path,
+/// JPEG保存（fast_jpeg=true ならベースライン高速エンコード、false なら MozJPEG）
+fn save_jpeg(
+    rgb: &[u8],
+    width: u32,
+    height: u32,
     options: &ProcessOptions,
+    output_path: &Path,
 ) -> Result<(), String> {
-    let img = load_image(input_path)?;
-    let (orig_width, orig_height) = img.dimensions();
-
-    // タチキリタイプが "none" なら断ち切り処理なしでリサイズ→保存
-    if options.tachikiri_type == "none" {
-        let result = img.to_rgba8();
-        let final_image = apply_resize(DynamicImage::ImageRgba8(result), options);
-        let rgb_image = final_image.to_rgb8();
-        write_jpeg_mozjpeg_to_file(
-            rgb_image.as_raw(),
-            rgb_image.width(),
-            rgb_image.height(),
-            options.jpeg_quality,
-            output_path,
-        )?;
-        return Ok(());
+    if options.fast_jpeg {
+        write_jpeg_baseline_to_file(rgb, width, height, options.jpeg_quality, output_path)
+    } else {
+        write_jpeg_mozjpeg_to_file(rgb, width, height, options.jpeg_quality, output_path)
     }
+}
 
+/// クロップ矩形を計算（基準サイズスケーリング込み）。範囲が無効なら None。
+/// `process_single_image` の実処理と `predict_output_dims` の予測で共有する。
+pub fn compute_crop_rect(
+    orig_width: u32,
+    orig_height: u32,
+    options: &ProcessOptions,
+) -> Option<(u32, u32, u32, u32)> {
     // スケーリング計算（設定時の基準サイズから実画像サイズへ）
     let (scale_x, scale_y) = if options.reference_width > 0 && options.reference_height > 0 {
         (
@@ -58,12 +56,120 @@ pub fn process_single_image(
     let crop_right = scaled_right.min(orig_width).max(crop_left);
     let crop_bottom = scaled_bottom.min(orig_height).max(crop_top);
 
+    if crop_right - crop_left == 0 || crop_bottom - crop_top == 0 {
+        return None;
+    }
+    Some((crop_left, crop_top, crop_right, crop_bottom))
+}
+
+/// リサイズ後の寸法を計算（None = リサイズなし＝元寸法維持）。
+/// `apply_resize` の実処理と `predict_output_dims` の予測で共有する。
+fn resize_dims(w: u32, h: u32, options: &ProcessOptions) -> Option<(u32, u32)> {
+    match options.resize_mode.as_str() {
+        "percent" => {
+            let scale = options.resize_percent as f32 / 100.0;
+            let nw = (w as f32 * scale).round() as u32;
+            let nh = (h as f32 * scale).round() as u32;
+            if nw == 0 || nh == 0 {
+                None
+            } else {
+                Some((nw, nh))
+            }
+        }
+        "fixed" => {
+            let scale = (TARGET_RESIZE_WIDTH as f32 / w as f32)
+                .min(TARGET_RESIZE_HEIGHT as f32 / h as f32);
+            let nw = (w as f32 * scale).round() as u32;
+            let nh = (h as f32 * scale).round() as u32;
+            if nw == 0 || nh == 0 {
+                None
+            } else {
+                Some((nw, nh))
+            }
+        }
+        "exact" => {
+            if options.resize_target_w == 0 || options.resize_target_h == 0 {
+                None
+            } else {
+                Some((options.resize_target_w, options.resize_target_h))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Tachimi の "fixed" リサイズ相当: `TARGET_RESIZE_WIDTH`×`TARGET_RESIZE_HEIGHT`
+/// (2250×3000) の枠に収まるようアスペクト比を保って縮小する（拡大はしない）。
+///
+/// チャプターPDFの埋め込み画像をネイティブ印刷解像度（例 600dpi）のまま渡すと
+/// PDFが数百MBに肥大化するため、Tachimi 標準の書き出し解像度（B5で約300dpi相当）に
+/// 抑えてPDFを軽量化する。
+pub fn fit_within_pdf_bbox(w: u32, h: u32) -> (u32, u32) {
+    if w == 0 || h == 0 {
+        return (w, h);
+    }
+    let scale =
+        (TARGET_RESIZE_WIDTH as f32 / w as f32).min(TARGET_RESIZE_HEIGHT as f32 / h as f32);
+    if scale >= 1.0 {
+        // 既に枠内なら拡大しない（解像度を上げてもファイルが大きくなるだけ）
+        return (w, h);
+    }
+    let nw = ((w as f32 * scale).round() as u32).max(1);
+    let nh = ((h as f32 * scale).round() as u32).max(1);
+    (nw, nh)
+}
+
+/// 断ち切り＋リサイズ適用後の最終出力寸法を、画像をデコードせずに予測する。
+/// `prepare_pages_for_pdf` が統一目標サイズを決めるために使用。
+pub fn predict_output_dims(src_w: u32, src_h: u32, options: &ProcessOptions) -> (u32, u32) {
+    let (bw, bh) = if options.tachikiri_type == "none" {
+        (src_w, src_h)
+    } else {
+        match options.tachikiri_type.as_str() {
+            "crop" | "crop_only" | "crop_and_stroke" => {
+                match compute_crop_rect(src_w, src_h, options) {
+                    Some((l, t, r, b)) => (r - l, b - t),
+                    None => (src_w, src_h),
+                }
+            }
+            // stroke_only / fill_white / fill_and_stroke / その他は全画像サイズ維持
+            _ => (src_w, src_h),
+        }
+    };
+    resize_dims(bw, bh, options).unwrap_or((bw, bh))
+}
+
+/// 単一画像を処理（読込 → 断ち切り → リサイズ → MozJPEG保存）
+pub fn process_single_image(
+    input_path: &Path,
+    output_path: &Path,
+    options: &ProcessOptions,
+) -> Result<(), String> {
+    let img = load_image(input_path)?;
+    let (orig_width, orig_height) = img.dimensions();
+
+    // タチキリタイプが "none" なら断ち切り処理なしでリサイズ→保存
+    if options.tachikiri_type == "none" {
+        let result = img.to_rgba8();
+        let final_image = apply_resize(DynamicImage::ImageRgba8(result), options);
+        let rgb_image = final_image.to_rgb8();
+        save_jpeg(
+            rgb_image.as_raw(),
+            rgb_image.width(),
+            rgb_image.height(),
+            options,
+            output_path,
+        )?;
+        return Ok(());
+    }
+
+    // クロップ矩形（基準サイズスケーリング込み）
+    let (crop_left, crop_top, crop_right, crop_bottom) =
+        compute_crop_rect(orig_width, orig_height, options)
+            .ok_or_else(|| "クロップ範囲が無効です".to_string())?;
+
     let crop_width = crop_right - crop_left;
     let crop_height = crop_bottom - crop_top;
-
-    if crop_width == 0 || crop_height == 0 {
-        return Err("クロップ範囲が無効です".to_string());
-    }
 
     let mut result: RgbaImage;
 
@@ -119,13 +225,13 @@ pub fn process_single_image(
     // リサイズ処理
     let final_image = apply_resize(DynamicImage::ImageRgba8(result), options);
 
-    // MozJPEGで保存
+    // JPEG保存（fast_jpeg で MozJPEG/ベースラインを選択）
     let rgb_image = final_image.to_rgb8();
-    write_jpeg_mozjpeg_to_file(
+    save_jpeg(
         rgb_image.as_raw(),
         rgb_image.width(),
         rgb_image.height(),
-        options.jpeg_quality,
+        options,
         output_path,
     )?;
 
@@ -134,29 +240,19 @@ pub fn process_single_image(
 
 /// リサイズ処理を適用
 fn apply_resize(img: DynamicImage, options: &ProcessOptions) -> DynamicImage {
-    match options.resize_mode.as_str() {
-        "percent" => {
-            let scale = options.resize_percent as f32 / 100.0;
-            let (w, h) = img.dimensions();
-            let new_width = (w as f32 * scale).round() as u32;
-            let new_height = (h as f32 * scale).round() as u32;
-            if new_width == 0 || new_height == 0 {
-                return img;
-            }
-            img.resize_exact(new_width, new_height, FilterType::CatmullRom)
+    let (w, h) = img.dimensions();
+    match resize_dims(w, h, options) {
+        Some((nw, nh)) => {
+            // exact（チャプターPDFのサイズ統一）は速度優先で Triangle、
+            // それ以外（ユーザー向けエクスポートの percent/fixed）は従来どおり CatmullRom
+            let filter = if options.resize_mode == "exact" {
+                FilterType::Triangle
+            } else {
+                FilterType::CatmullRom
+            };
+            img.resize_exact(nw, nh, filter)
         }
-        "fixed" => {
-            let (w, h) = img.dimensions();
-            let scale = (TARGET_RESIZE_WIDTH as f32 / w as f32)
-                .min(TARGET_RESIZE_HEIGHT as f32 / h as f32);
-            let new_width = (w as f32 * scale).round() as u32;
-            let new_height = (h as f32 * scale).round() as u32;
-            if new_width == 0 || new_height == 0 {
-                return img;
-            }
-            img.resize_exact(new_width, new_height, FilterType::CatmullRom)
-        }
-        _ => img,
+        None => img,
     }
 }
 
