@@ -1434,6 +1434,11 @@ function App() {
         ...metadata,
         allowMissingColophon: isLegacyHybrid ? true : metadata.allowMissingColophon,
       };
+      const epubPreviewPageByOriginalId = new Map(
+        epubPages
+          .filter((p) => p.originalPageId)
+          .map((p) => [p.originalPageId!, p])
+      );
 
       // === PSDが含まれていれば自動的にJPEG化（Photoshop経由） ===
       const psdToJpegMap = new Map<string, string>();
@@ -1524,7 +1529,7 @@ function App() {
       }
 
       // ページ情報を構築
-      const epubPages: EpubPage[] = [];
+      const epubGeneratePages: EpubPage[] = [];
       let pageNumber = 1;
       let coverAssigned = false;
       let colophonAssignedFromChapter = false;
@@ -1561,6 +1566,7 @@ function App() {
           const resolvedFilePath = isPsdConverted
             ? psdToJpegMap.get(page.filePath!)!
             : page.filePath;
+          const previewPage = epubPreviewPageByOriginalId.get(page.id);
 
           // 画像サイズを取得（白紙はバックエンドで多数派サイズに置換される）
           let width = 0;
@@ -1597,7 +1603,7 @@ function App() {
             ? `colophon.${ext}`
             : `${String(pageNumber).padStart(4, '0')}.${ext}`;
 
-          epubPages.push({
+          epubGeneratePages.push({
             id: pageId,
             filename,
             sourcePath: isBlankPage ? '' : resolvedFilePath || '',
@@ -1606,6 +1612,8 @@ function App() {
             isCover,
             isColophon,
             isBlank: isBlankPage,
+            sourceColorMode: page.imageColorMode,
+            imageProfileOverride: previewPage?.imageProfileOverride,
           });
 
           if (!isCover && !isColophon) {
@@ -1627,7 +1635,7 @@ function App() {
       // EPUB生成
       const response = await invoke<EpubGenerateResponse>('generate_epub', {
         metadata: generateMetadata,
-        pages: epubPages,
+        pages: epubGeneratePages,
         outputPath,
         customCss: null,
       });
@@ -1635,10 +1643,18 @@ function App() {
       if (response.success) {
         // ファイルサイズを人間が読みやすい形式に
         const fileSizeMB = (response.fileSize / (1024 * 1024)).toFixed(2);
+        const profileSummary = response.imageProfileSummary;
+        const profileMessage = profileSummary
+          ? `\n\n画像プロファイル: sRGB ${profileSummary.rgbSrgbCount}件 / グレーDot Gain ${profileSummary.grayscaleDotGainCount}件 / ICCなし ${profileSummary.noIccCount}件 / グレーICC未設定 ${profileSummary.grayscaleNoProfileCount}件 / 原本維持 ${profileSummary.preservedOriginalCount}件`
+          : '';
+        const profileWarnings = profileSummary?.warnings?.length
+          ? profileSummary.warnings.join('\n')
+          : undefined;
         setExportResultDialog({
           show: true,
           title: 'EPUB生成完了',
-          message: `EPUBを生成しました\n${response.pageCount}ページ / ${fileSizeMB}MB`,
+          message: `EPUBを生成しました\n${response.pageCount}ページ / ${fileSizeMB}MB${profileMessage}`,
+          details: profileWarnings,
           outputDir: outputPath,
         });
         setIsEpubModalOpen(false);

@@ -5373,6 +5373,15 @@ body.light-mode .epub-preview-info {
   color: white;
 }
 
+.epub-thumbnail-info .page-badge.profile {
+  background: var(--color-accent-subtle);
+  color: var(--color-accent);
+  max-width: 74px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .epub-thumbnail-info .page-number {
   color: var(--color-text-secondary);
 }
@@ -5407,6 +5416,17 @@ body.light-mode .epub-preview-info {
 }
 
 /* CSS エディタモーダル */
+.epub-context-menu button.selected {
+  color: var(--color-accent);
+  background: var(--color-accent-subtle);
+}
+
+.epub-context-menu-separator {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--color-border);
+}
+
 .css-editor-modal {
   width: 700px;
   max-width: 90vw;

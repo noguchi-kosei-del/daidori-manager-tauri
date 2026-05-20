@@ -1,7 +1,8 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { useStore } from '../../store';
-import type { EpubPageInfo } from '../../types';
+import type { EpubPageImageProfileOverride, EpubPageInfo } from '../../types';
+import { EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS } from '../../types';
 import { AlertTriangleIcon, ReplaceIcon } from '../../icons';
 import { getValidationMessage } from '../../utils/validationMessage';
 
@@ -39,6 +40,7 @@ export function EpubThumbnailBar({
     setEpubPageAsColophon,
     clearEpubPageCover,
     clearEpubPageColophon,
+    setEpubPageImageProfileOverride,
     reorderEpubPage,
   } = useStore();
 
@@ -136,6 +138,13 @@ export function EpubThumbnailBar({
   const handleClearColophon = () => {
     if (contextMenu) {
       clearEpubPageColophon(contextMenu.pageId);
+      setContextMenu(null);
+    }
+  };
+
+  const handleSetImageProfileOverride = (override: EpubPageImageProfileOverride) => {
+    if (contextMenu) {
+      setEpubPageImageProfileOverride(contextMenu.pageId, override);
       setContextMenu(null);
     }
   };
@@ -238,6 +247,11 @@ export function EpubThumbnailBar({
             <div className="epub-thumbnail-info">
               {page.isCover && <span className="page-badge cover">表紙</span>}
               {page.isColophon && <span className="page-badge colophon">奥付</span>}
+              {page.imageProfileOverride && page.imageProfileOverride !== 'auto' && (
+                <span className="page-badge profile">
+                  {EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS[page.imageProfileOverride]}
+                </span>
+              )}
               <span className="page-number">{index + 1}</span>
             </div>
           </div>
@@ -262,6 +276,16 @@ export function EpubThumbnailBar({
           {selectedPage?.isColophon && (
             <button onClick={handleClearColophon}>奥付を解除</button>
           )}
+          <div className="epub-context-menu-separator" />
+          {(Object.keys(EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS) as EpubPageImageProfileOverride[]).map((override) => (
+            <button
+              key={override}
+              onClick={() => handleSetImageProfileOverride(override)}
+              className={selectedPage?.imageProfileOverride === override ? 'selected' : ''}
+            >
+              ICC: {EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS[override]}
+            </button>
+          ))}
         </div>
       )}
     </div>

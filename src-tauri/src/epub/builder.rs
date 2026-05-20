@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use image::codecs::jpeg::JpegEncoder;
-use image::DynamicImage;
+use image::{DynamicImage, ImageEncoder};
 use rayon::prelude::*;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -12,7 +12,10 @@ use zip::write::FileOptions;
 use zip::CompressionMethod;
 use zip::ZipWriter;
 
-use crate::types::{EpubFormat, EpubGenerateConfig, EpubGenerateResponse, HybridCssProfile};
+use crate::types::{
+    EpubFormat, EpubGenerateConfig, EpubGenerateResponse, EpubImageColorPolicy,
+    EpubImageProfileSummary, EpubPage, EpubPageImageProfileOverride, HybridCssProfile,
+};
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +26,49 @@ struct EpubProgressPayload<'a> {
 }
 
 const EPUB_JPEG_QUALITY: u8 = 90;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EpubImageTarget {
+    RgbSrgb,
+    GrayscaleDotGain,
+    NoIcc,
+    PreserveOriginal,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ImageCopyResult {
+    rgb_srgb_count: usize,
+    grayscale_dot_gain_count: usize,
+    grayscale_no_profile_count: usize,
+    no_icc_count: usize,
+    preserved_original_count: usize,
+    warnings: Vec<String>,
+}
+
+impl ImageCopyResult {
+    fn merge(mut self, other: ImageCopyResult) -> Self {
+        self.rgb_srgb_count += other.rgb_srgb_count;
+        self.grayscale_dot_gain_count += other.grayscale_dot_gain_count;
+        self.grayscale_no_profile_count += other.grayscale_no_profile_count;
+        self.no_icc_count += other.no_icc_count;
+        self.preserved_original_count += other.preserved_original_count;
+        self.warnings.extend(other.warnings);
+        self
+    }
+
+    fn into_summary(mut self) -> EpubImageProfileSummary {
+        self.warnings.sort();
+        self.warnings.dedup();
+        EpubImageProfileSummary {
+            rgb_srgb_count: self.rgb_srgb_count,
+            grayscale_dot_gain_count: self.grayscale_dot_gain_count,
+            grayscale_no_profile_count: self.grayscale_no_profile_count,
+            no_icc_count: self.no_icc_count,
+            preserved_original_count: self.preserved_original_count,
+            warnings: self.warnings,
+        }
+    }
+}
 
 fn replace_filename_ext(filename: &str, new_ext: &str) -> String {
     match filename.rsplit_once('.') {
@@ -43,7 +89,7 @@ fn source_needs_conversion(source_path: &str) -> Option<&'static str> {
 }
 
 /// 非白紙ページの幅×高さで最頻値（最頻サイズ）を返す
-fn majority_size_of_non_blank(pages: &[crate::types::EpubPage]) -> Option<(u32, u32)> {
+fn majority_size_of_non_blank(pages: &[EpubPage]) -> Option<(u32, u32)> {
     use std::collections::HashMap;
     let mut counts: HashMap<(u32, u32), usize> = HashMap::new();
     for page in pages {
@@ -78,6 +124,9 @@ impl EpubBuilder {
         // 白紙ページのサイズは非白紙ページの多数派サイズに揃える
         let majority = majority_size_of_non_blank(&config.pages);
 
+        let normalizes_all_images =
+            config.metadata.image_color_policy != EpubImageColorPolicy::PreserveOriginal;
+
         for page in &mut config.pages {
             // 白紙ページは多数派サイズで白JPEGを生成する
             if page.is_blank {
@@ -89,10 +138,9 @@ impl EpubBuilder {
                 continue;
             }
 
-            // EPUB readers only support jpg/jpeg/png. PSD/TIFF sources are converted
-            // to JPG during copy_images, so normalize the manifest filename ext here
-            // so the OPF/XHTML references match the actual file we will write.
-            if source_needs_conversion(&page.source_path).is_some() {
+            // EPUB readers support jpg/jpeg/png. When color normalization is enabled
+            // every image is re-encoded as JPG, so normalize references up front.
+            if normalizes_all_images || source_needs_conversion(&page.source_path).is_some() {
                 page.filename = replace_filename_ext(&page.filename, "jpg");
             }
         }
@@ -158,7 +206,7 @@ impl EpubBuilder {
         self.write_container_xml()?;
 
         // 画像ファイルをコピー
-        self.copy_images()?;
+        let image_profile_summary = self.copy_images()?;
 
         // CSSファイルをコピー
         self.copy_css_files()?;
@@ -192,6 +240,7 @@ impl EpubBuilder {
             output_path: self.config.output_path.clone(),
             page_count: self.config.pages.len(),
             file_size,
+            image_profile_summary: Some(image_profile_summary),
             error: None,
         })
     }
@@ -229,12 +278,15 @@ impl EpubBuilder {
     }
 
     /// 画像ファイルをコピー（PSD/TIFFはJPGに並列変換）
-    fn copy_images(&self) -> Result<(), String> {
+    fn copy_images(&self) -> Result<EpubImageProfileSummary, String> {
         let format = &self.config.metadata.output_format;
         let image_dir = self
             .temp_dir
             .join(root_folder(format))
             .join(image_folder(format));
+        let dot_gain_profile = load_dot_gain_icc_profile();
+        let srgb_profile = load_srgb_icc_profile();
+        let auto_blank_target = self.auto_blank_target(&dot_gain_profile);
 
         let total = self.config.pages.len();
         self.emit_progress("images", 0, total);
@@ -246,34 +298,140 @@ impl EpubBuilder {
             .pages
             .par_iter()
             .enumerate()
-            .try_for_each(|(idx, page)| -> Result<(), String> {
+            .map(|(idx, page)| -> Result<ImageCopyResult, String> {
                 let dest_filename = image_filename(format, idx, page);
                 let dest = image_dir.join(&dest_filename);
+                let target = self.image_target_for_page(page, auto_blank_target);
 
+                let mut summary = ImageCopyResult::default();
                 let result = if page.is_blank {
-                    generate_blank_jpeg(page.width, page.height, &dest)
+                    generate_blank_jpeg(page.width, page.height, &dest, target, srgb_profile.as_deref(), dot_gain_profile.as_deref())
                 } else {
                     let src = Path::new(&page.source_path);
                     if !src.exists() {
                         return Err(format!("Source image not found: {}", page.source_path));
                     }
-                    match source_needs_conversion(&page.source_path) {
-                        Some("psd") => convert_psd_to_jpeg(src, &dest),
-                        Some("tiff") => convert_via_image_crate_to_jpeg(src, &dest),
-                        _ => fs::copy(src, &dest)
-                            .map(|_| ())
-                            .map_err(|e| format!("Failed to copy image {}: {}", dest_filename, e)),
+                    match target {
+                        EpubImageTarget::PreserveOriginal => match source_needs_conversion(&page.source_path) {
+                            Some("psd") => convert_psd_to_jpeg(src, &dest, srgb_profile.as_deref()),
+                            Some("tiff") => convert_via_image_crate_to_jpeg(src, &dest, srgb_profile.as_deref()),
+                            _ => fs::copy(src, &dest)
+                                .map(|_| ())
+                                .map_err(|e| format!("Failed to copy image {}: {}", dest_filename, e)),
+                        },
+                        EpubImageTarget::RgbSrgb
+                        | EpubImageTarget::GrayscaleDotGain
+                        | EpubImageTarget::NoIcc => {
+                            normalize_image_to_jpeg(src, &dest, target, srgb_profile.as_deref(), dot_gain_profile.as_deref())
+                        }
                     }
                 };
                 result?;
+                match target {
+                    EpubImageTarget::RgbSrgb => summary.rgb_srgb_count += 1,
+                    EpubImageTarget::GrayscaleDotGain => {
+                        if dot_gain_profile.is_some() {
+                            summary.grayscale_dot_gain_count += 1;
+                        } else {
+                            summary.grayscale_no_profile_count += 1;
+                            summary.warnings.push(
+                                "Dot Gain ICC profile was not found; grayscale JPEGs were written without a grayscale ICC profile.".to_string(),
+                            );
+                        }
+                    }
+                    EpubImageTarget::PreserveOriginal => summary.preserved_original_count += 1,
+                    EpubImageTarget::NoIcc => summary.no_icc_count += 1,
+                }
+                if target == EpubImageTarget::RgbSrgb && srgb_profile.is_none() {
+                    summary.warnings.push(
+                        "sRGB ICC profile was not found; RGB JPEGs were written without embedded sRGB ICC.".to_string(),
+                    );
+                }
 
                 let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
                 self.emit_progress("images", done, total);
-                Ok(())
+                Ok(summary)
             })
+            .try_reduce(ImageCopyResult::default, |acc, item| Ok(acc.merge(item)))
+            .map(ImageCopyResult::into_summary)
     }
 
     /// CSSファイルをコピー
+    fn auto_blank_target(&self, _dot_gain_profile: &Option<Vec<u8>>) -> EpubImageTarget {
+        if self.config.metadata.image_color_policy == EpubImageColorPolicy::FullColorSrgb {
+            return EpubImageTarget::RgbSrgb;
+        }
+
+        let grayscale_body_pages = self
+            .config
+            .pages
+            .iter()
+            .filter(|page| !page.is_blank && !page.is_cover && !page.is_colophon)
+            .filter(|page| self.is_clearly_grayscale(page))
+            .count();
+        let body_pages = self
+            .config
+            .pages
+            .iter()
+            .filter(|page| !page.is_blank && !page.is_cover && !page.is_colophon)
+            .count();
+
+        if body_pages > 0 && grayscale_body_pages * 2 >= body_pages {
+            EpubImageTarget::GrayscaleDotGain
+        } else {
+            EpubImageTarget::RgbSrgb
+        }
+    }
+
+    fn image_target_for_page(
+        &self,
+        page: &EpubPage,
+        blank_target: EpubImageTarget,
+    ) -> EpubImageTarget {
+        match self.config.metadata.image_color_policy {
+            _ if page.image_profile_override == EpubPageImageProfileOverride::Srgb => {
+                EpubImageTarget::RgbSrgb
+            }
+            _ if page.image_profile_override == EpubPageImageProfileOverride::DotGain => {
+                EpubImageTarget::GrayscaleDotGain
+            }
+            _ if page.image_profile_override == EpubPageImageProfileOverride::NoIcc => {
+                EpubImageTarget::NoIcc
+            }
+            _ if page.image_profile_override == EpubPageImageProfileOverride::PreserveOriginal => {
+                EpubImageTarget::PreserveOriginal
+            }
+            EpubImageColorPolicy::PreserveOriginal => EpubImageTarget::PreserveOriginal,
+            EpubImageColorPolicy::FullColorSrgb => EpubImageTarget::RgbSrgb,
+            EpubImageColorPolicy::Auto => {
+                if page.is_blank {
+                    return blank_target;
+                }
+                if page.is_cover || page.is_colophon {
+                    return EpubImageTarget::RgbSrgb;
+                }
+                if self.is_clearly_grayscale(page) {
+                    EpubImageTarget::GrayscaleDotGain
+                } else {
+                    EpubImageTarget::RgbSrgb
+                }
+            }
+        }
+    }
+
+    fn is_clearly_grayscale(&self, page: &EpubPage) -> bool {
+        if let Some(mode) = page.source_color_mode.as_deref() {
+            let mode = mode.to_ascii_lowercase();
+            if mode == "grayscale" || mode == "bitmap" {
+                return true;
+            }
+            if mode == "rgb" || mode == "cmyk" || mode == "lab" || mode == "indexed" {
+                return false;
+            }
+        }
+        jpeg_component_count(Path::new(&page.source_path)) == Some(1)
+    }
+
     fn copy_css_files(&self) -> Result<(), String> {
         let format = &self.config.metadata.output_format;
         let css_files = get_css_files_for_format(format);
@@ -625,13 +783,22 @@ svg {
     }
 }
 
-fn write_jpeg(image: DynamicImage, dest: &Path) -> Result<(), String> {
+fn write_rgb_jpeg(
+    image: DynamicImage,
+    dest: &Path,
+    srgb_profile: Option<&[u8]>,
+) -> Result<(), String> {
     // CMYK等のRGBA以外のPSDが来てもJPEG（RGB）にエンコードできるよう変換。
     let rgb = image.to_rgb8();
     let file = File::create(dest)
         .map_err(|e| format!("Failed to create JPG output {}: {}", dest.display(), e))?;
     let mut writer = BufWriter::new(file);
     let mut encoder = JpegEncoder::new_with_quality(&mut writer, EPUB_JPEG_QUALITY);
+    if let Some(profile) = srgb_profile {
+        encoder
+            .set_icc_profile(profile.to_vec())
+            .map_err(|e| format!("Failed to set sRGB ICC profile: {}", e))?;
+    }
     encoder
         .encode(
             rgb.as_raw(),
@@ -646,8 +813,77 @@ fn write_jpeg(image: DynamicImage, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn convert_psd_to_jpeg(src: &Path, dest: &Path) -> Result<(), String> {
-    let bytes = fs::read(src).map_err(|e| format!("Failed to read PSD {}: {}", src.display(), e))?;
+fn write_grayscale_jpeg(
+    image: DynamicImage,
+    dest: &Path,
+    dot_gain_profile: Option<&[u8]>,
+) -> Result<(), String> {
+    let gray = image.to_luma8();
+    let file = File::create(dest).map_err(|e| {
+        format!(
+            "Failed to create grayscale JPG output {}: {}",
+            dest.display(),
+            e
+        )
+    })?;
+    let mut writer = BufWriter::new(file);
+    let mut encoder = JpegEncoder::new_with_quality(&mut writer, EPUB_JPEG_QUALITY);
+    if let Some(profile) = dot_gain_profile {
+        encoder
+            .set_icc_profile(profile.to_vec())
+            .map_err(|e| format!("Failed to set grayscale ICC profile: {}", e))?;
+    }
+    encoder
+        .encode(
+            gray.as_raw(),
+            gray.width(),
+            gray.height(),
+            image::ExtendedColorType::L8,
+        )
+        .map_err(|e| format!("Failed to encode grayscale JPG {}: {}", dest.display(), e))?;
+    writer
+        .flush()
+        .map_err(|e| format!("Failed to flush grayscale JPG {}: {}", dest.display(), e))?;
+    Ok(())
+}
+
+fn normalize_image_to_jpeg(
+    src: &Path,
+    dest: &Path,
+    target: EpubImageTarget,
+    srgb_profile: Option<&[u8]>,
+    dot_gain_profile: Option<&[u8]>,
+) -> Result<(), String> {
+    let img = if src
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("psd"))
+        .unwrap_or(false)
+    {
+        read_psd_as_dynamic_image(src)?
+    } else {
+        image::open(src).map_err(|e| format!("Failed to decode image {}: {}", src.display(), e))?
+    };
+
+    match target {
+        EpubImageTarget::RgbSrgb => write_rgb_jpeg(img, dest, srgb_profile),
+        EpubImageTarget::GrayscaleDotGain => write_grayscale_jpeg(img, dest, dot_gain_profile),
+        EpubImageTarget::NoIcc => {
+            if is_grayscale_dynamic_image(&img) {
+                write_grayscale_jpeg(img, dest, None)
+            } else {
+                write_rgb_jpeg(img, dest, None)
+            }
+        }
+        EpubImageTarget::PreserveOriginal => {
+            Err("Internal error: preserve target cannot normalize".to_string())
+        }
+    }
+}
+
+fn read_psd_as_dynamic_image(src: &Path) -> Result<DynamicImage, String> {
+    let bytes =
+        fs::read(src).map_err(|e| format!("Failed to read PSD {}: {}", src.display(), e))?;
     let psd_file = psd::Psd::from_bytes(&bytes)
         .map_err(|e| format!("Failed to parse PSD {}: {:?}", src.display(), e))?;
     let width = psd_file.width();
@@ -655,18 +891,146 @@ fn convert_psd_to_jpeg(src: &Path, dest: &Path) -> Result<(), String> {
     let rgba = psd_file.rgba();
     let buffer = image::RgbaImage::from_raw(width, height, rgba)
         .ok_or_else(|| format!("Invalid PSD image data: {}", src.display()))?;
-    write_jpeg(DynamicImage::ImageRgba8(buffer), dest)
+    Ok(DynamicImage::ImageRgba8(buffer))
 }
 
-fn convert_via_image_crate_to_jpeg(src: &Path, dest: &Path) -> Result<(), String> {
-    let img = image::open(src)
-        .map_err(|e| format!("Failed to decode image {}: {}", src.display(), e))?;
-    write_jpeg(img, dest)
+fn convert_psd_to_jpeg(src: &Path, dest: &Path, srgb_profile: Option<&[u8]>) -> Result<(), String> {
+    write_rgb_jpeg(read_psd_as_dynamic_image(src)?, dest, srgb_profile)
 }
 
-fn generate_blank_jpeg(width: u32, height: u32, dest: &Path) -> Result<(), String> {
+fn convert_via_image_crate_to_jpeg(
+    src: &Path,
+    dest: &Path,
+    srgb_profile: Option<&[u8]>,
+) -> Result<(), String> {
+    let img =
+        image::open(src).map_err(|e| format!("Failed to decode image {}: {}", src.display(), e))?;
+    write_rgb_jpeg(img, dest, srgb_profile)
+}
+
+fn generate_blank_jpeg(
+    width: u32,
+    height: u32,
+    dest: &Path,
+    target: EpubImageTarget,
+    srgb_profile: Option<&[u8]>,
+    dot_gain_profile: Option<&[u8]>,
+) -> Result<(), String> {
     let w = width.max(1);
     let h = height.max(1);
-    let img = image::RgbImage::from_pixel(w, h, image::Rgb([255, 255, 255]));
-    write_jpeg(DynamicImage::ImageRgb8(img), dest)
+    match target {
+        EpubImageTarget::GrayscaleDotGain => {
+            let img = image::GrayImage::from_pixel(w, h, image::Luma([255]));
+            write_grayscale_jpeg(DynamicImage::ImageLuma8(img), dest, dot_gain_profile)
+        }
+        EpubImageTarget::NoIcc => {
+            let img = image::RgbImage::from_pixel(w, h, image::Rgb([255, 255, 255]));
+            write_rgb_jpeg(DynamicImage::ImageRgb8(img), dest, None)
+        }
+        _ => {
+            let img = image::RgbImage::from_pixel(w, h, image::Rgb([255, 255, 255]));
+            write_rgb_jpeg(DynamicImage::ImageRgb8(img), dest, srgb_profile)
+        }
+    }
+}
+
+fn is_grayscale_dynamic_image(image: &DynamicImage) -> bool {
+    use image::ColorType;
+    matches!(
+        image.color(),
+        ColorType::L8 | ColorType::La8 | ColorType::L16 | ColorType::La16
+    )
+}
+
+fn load_srgb_icc_profile() -> Option<Vec<u8>> {
+    profile_candidate_paths(&[
+        r"C:\Windows\System32\spool\drivers\color\sRGB Color Space Profile.icm",
+        r"C:\Windows\System32\spool\drivers\color\sRGB.icm",
+        "/System/Library/ColorSync/Profiles/sRGB Profile.icc",
+        "/usr/share/color/icc/colord/sRGB.icc",
+    ])
+}
+
+fn load_dot_gain_icc_profile() -> Option<Vec<u8>> {
+    if let Ok(path) = std::env::var("DAIDORI_DOT_GAIN_ICC") {
+        if let Ok(bytes) = fs::read(path) {
+            return Some(bytes);
+        }
+    }
+
+    profile_candidate_paths(&[
+        r"C:\Program Files\Common Files\Adobe\Color\Profiles\Recommended\Dot Gain 20%.icc",
+        r"C:\Program Files\Common Files\Adobe\Color\Profiles\Dot Gain 20%.icc",
+        r"C:\Program Files (x86)\Common Files\Adobe\Color\Profiles\Recommended\Dot Gain 20%.icc",
+        r"C:\Program Files (x86)\Common Files\Adobe\Color\Profiles\Dot Gain 20%.icc",
+        "/Library/ColorSync/Profiles/Dot Gain 20%.icc",
+    ])
+}
+
+fn profile_candidate_paths(paths: &[&str]) -> Option<Vec<u8>> {
+    paths.iter().find_map(|path| fs::read(path).ok())
+}
+
+fn jpeg_component_count(path: &Path) -> Option<u8> {
+    if !path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg"))
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
+    let data = fs::read(path).ok()?;
+    if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+        return None;
+    }
+
+    let mut i = 2;
+    while i + 4 < data.len() {
+        while i < data.len() && data[i] != 0xFF {
+            i += 1;
+        }
+        while i < data.len() && data[i] == 0xFF {
+            i += 1;
+        }
+        if i >= data.len() {
+            return None;
+        }
+
+        let marker = data[i];
+        i += 1;
+        if marker == 0xD9 || marker == 0xDA {
+            return None;
+        }
+        if i + 2 > data.len() {
+            return None;
+        }
+        let len = u16::from_be_bytes([data[i], data[i + 1]]) as usize;
+        if len < 2 || i + len > data.len() {
+            return None;
+        }
+
+        let is_sof = matches!(
+            marker,
+            0xC0 | 0xC1
+                | 0xC2
+                | 0xC3
+                | 0xC5
+                | 0xC6
+                | 0xC7
+                | 0xC9
+                | 0xCA
+                | 0xCB
+                | 0xCD
+                | 0xCE
+                | 0xCF
+        );
+        if is_sof && len >= 8 {
+            return data.get(i + 7).copied();
+        }
+        i += len;
+    }
+
+    None
 }

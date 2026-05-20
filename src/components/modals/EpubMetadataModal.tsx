@@ -12,9 +12,13 @@ import {
   SpreadMode,
   Orientation,
   HybridCssProfile,
+  EpubImageColorPolicy,
+  EpubPageImageProfileOverride,
   EPUB_FORMAT_LABELS,
   EPUB_FORMAT_VIEWPORTS,
   HYBRID_CSS_PROFILE_LABELS,
+  EPUB_IMAGE_COLOR_POLICY_LABELS,
+  EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS,
   PAGE_DIRECTION_LABELS,
   SPREAD_MODE_LABELS,
   AUTHOR_ROLE_LABELS,
@@ -64,6 +68,7 @@ export function EpubMetadataModal({
   const [orientation] = useState<Orientation>('auto');
   const [allowMissingColophon, setAllowMissingColophon] = useState(false);
   const [hybridCssProfile, setHybridCssProfile] = useState<HybridCssProfile>('current');
+  const [imageColorPolicy, setImageColorPolicy] = useState<EpubImageColorPolicy>('auto');
 
   // ビューポート
   const [viewportWidth, setViewportWidth] = useState(1442);
@@ -86,6 +91,7 @@ export function EpubMetadataModal({
   const epubSelectedPageIds = useStore((s) => s.epubSelectedPageIds);
   const setEpubCurrentSpread = useStore((s) => s.setEpubCurrentSpread);
   const setEpubSelectedPageId = useStore((s) => s.setEpubSelectedPageId);
+  const setEpubPageImageProfileOverride = useStore((s) => s.setEpubPageImageProfileOverride);
   const loadEpubFromDaidori = useStore((s) => s.loadEpubFromDaidori);
 
   // モーダル開閉と chapters 変化に同期して台割→EPUBページ変換を実行
@@ -259,6 +265,7 @@ export function EpubMetadataModal({
       outputFormat,
       allowMissingColophon: outputFormat === 'hybrid' ? (allowMissingColophon || hybridCssProfile === 'legacy') : undefined,
       hybridCssProfile: outputFormat === 'hybrid' ? hybridCssProfile : undefined,
+      imageColorPolicy,
     };
 
     try {
@@ -271,6 +278,9 @@ export function EpubMetadataModal({
 
   // ページ数カウント
   const totalPages = chapters.reduce((sum, ch) => sum + ch.pages.length, 0);
+  const selectedEpubPage = epubSelectedPageId
+    ? epubPages.find((p) => p.id === epubSelectedPageId) ?? null
+    : null;
 
   const { shouldRender, isClosing } = useModalAnimation(isOpen);
   if (!shouldRender) return null;
@@ -406,6 +416,42 @@ export function EpubMetadataModal({
                   </label>
                 </div>
               </>
+            )}
+            <div className="form-group">
+              <label>画像カラープロファイル</label>
+              <select
+                value={imageColorPolicy}
+                onChange={(e) => setImageColorPolicy(e.target.value as EpubImageColorPolicy)}
+              >
+                {(Object.keys(EPUB_IMAGE_COLOR_POLICY_LABELS) as EpubImageColorPolicy[]).map((policy) => (
+                  <option key={policy} value={policy}>
+                    {EPUB_IMAGE_COLOR_POLICY_LABELS[policy]}
+                  </option>
+                ))}
+              </select>
+              <div className="form-hint">
+                Autoは本文のグレースケールを維持し、カラー画像はsRGB JPEGに正規化します。
+              </div>
+            </div>
+            {selectedEpubPage && (
+              <div className="form-group">
+                <label>選択ページのICC指定</label>
+                <select
+                  value={selectedEpubPage.imageProfileOverride ?? 'auto'}
+                  onChange={(e) =>
+                    setEpubPageImageProfileOverride(
+                      selectedEpubPage.id,
+                      e.target.value as EpubPageImageProfileOverride,
+                    )
+                  }
+                >
+                  {(Object.keys(EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS) as EpubPageImageProfileOverride[]).map((override) => (
+                    <option key={override} value={override}>
+                      {EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS[override]}
+                    </option>
+                  ))}
+                </select>
+              </div>
             )}
             <div className="form-group">
               <label>出力先</label>

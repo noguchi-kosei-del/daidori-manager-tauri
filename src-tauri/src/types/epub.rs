@@ -21,6 +21,26 @@ pub enum HybridCssProfile {
     Legacy,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EpubImageColorPolicy {
+    #[default]
+    Auto,
+    FullColorSrgb,
+    PreserveOriginal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EpubPageImageProfileOverride {
+    #[default]
+    Auto,
+    Srgb,
+    DotGain,
+    NoIcc,
+    PreserveOriginal,
+}
+
 impl EpubFormat {
     /// 形式に応じたデフォルトビューポートサイズを返す
     pub fn default_viewport(&self) -> (u32, u32) {
@@ -185,6 +205,9 @@ pub struct EpubMetadata {
     /// Hybrid形式で使用するCSSセット
     #[serde(default)]
     pub hybrid_css_profile: HybridCssProfile,
+    /// EPUB生成時の画像カラープロファイル方針
+    #[serde(default)]
+    pub image_color_policy: EpubImageColorPolicy,
 }
 
 fn default_language() -> String {
@@ -212,6 +235,7 @@ impl EpubMetadata {
             output_format: format,
             allow_missing_colophon: false,
             hybrid_css_profile: HybridCssProfile::Current,
+            image_color_policy: EpubImageColorPolicy::Auto,
         }
     }
 }
@@ -239,6 +263,23 @@ pub struct EpubPage {
     /// 白紙ページフラグ（true の場合は width/height で白JPEGを生成）
     #[serde(default)]
     pub is_blank: bool,
+    /// 元画像のカラーモード（RGB/Grayscale/CMYK/Bitmap など）
+    #[serde(default)]
+    pub source_color_mode: Option<String>,
+    /// ページ単位のICCプロファイル上書き
+    #[serde(default)]
+    pub image_profile_override: EpubPageImageProfileOverride,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EpubImageProfileSummary {
+    pub rgb_srgb_count: usize,
+    pub grayscale_dot_gain_count: usize,
+    pub grayscale_no_profile_count: usize,
+    pub no_icc_count: usize,
+    pub preserved_original_count: usize,
+    pub warnings: Vec<String>,
 }
 
 /// EPUB生成設定
@@ -268,6 +309,9 @@ pub struct EpubGenerateResponse {
     pub page_count: usize,
     /// ファイルサイズ（バイト）
     pub file_size: u64,
+    /// EPUB生成時の画像カラープロファイル処理サマリー
+    #[serde(default)]
+    pub image_profile_summary: Option<EpubImageProfileSummary>,
     /// エラーメッセージ（失敗時）
     #[serde(default)]
     pub error: Option<String>,

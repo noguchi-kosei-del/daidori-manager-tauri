@@ -12,6 +12,7 @@ import {
 
   EpubPageInfo,
   EpubMetadata,
+  EpubPageImageProfileOverride,
   EPUB_FORMAT_VIEWPORTS,
 } from './types';
 
@@ -144,6 +145,7 @@ interface AppState {
   setEpubPageAsColophon: (pageId: string) => void;
   clearEpubPageCover: () => void;
   clearEpubPageColophon: (pageId: string) => void;
+  setEpubPageImageProfileOverride: (pageId: string, override: EpubPageImageProfileOverride) => void;
   loadEpubFromDaidori: () => void;
   resetEpubState: () => void;
   markEpubAsModified: () => void;
@@ -1141,6 +1143,16 @@ export const useStore = create<AppState>((set, get) => {
   },
 
   // 台割データからEPUBデータへ変換
+  setEpubPageImageProfileOverride: (pageId, override) => {
+    set((state) => ({
+      epubPages: state.epubPages.map((p) => ({
+        ...p,
+        imageProfileOverride: p.id === pageId ? override : p.imageProfileOverride,
+      })),
+      isEpubModified: true,
+    }));
+  },
+
   loadEpubFromDaidori: () => {
     const { chapters, projectName } = get();
     let pageIndex = 1;
@@ -1211,6 +1223,7 @@ export const useStore = create<AppState>((set, get) => {
       outputFormat: 'kadokawa',
       allowMissingColophon: false,
       hybridCssProfile: 'current',
+      imageColorPolicy: 'auto',
     };
 
     set({

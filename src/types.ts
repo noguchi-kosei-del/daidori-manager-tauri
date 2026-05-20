@@ -203,6 +203,24 @@ export const HYBRID_CSS_PROFILE_LABELS: Record<HybridCssProfile, string> = {
   legacy: '旧Hybrid CSS',
 };
 
+export type EpubImageColorPolicy = 'auto' | 'full_color_srgb' | 'preserve_original';
+
+export const EPUB_IMAGE_COLOR_POLICY_LABELS: Record<EpubImageColorPolicy, string> = {
+  auto: 'Auto: monochrome body + sRGB color',
+  full_color_srgb: 'Full color: all sRGB',
+  preserve_original: 'Preserve original',
+};
+
+export type EpubPageImageProfileOverride = 'auto' | 'srgb' | 'dot_gain' | 'no_icc' | 'preserve_original';
+
+export const EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS: Record<EpubPageImageProfileOverride, string> = {
+  auto: '自動',
+  srgb: 'sRGBを付与',
+  dot_gain: 'Dot Gainを付与',
+  no_icc: 'ICCなし',
+  preserve_original: '原本維持',
+};
+
 // ページ綴じ方向
 export type PageDirection = 'rtl' | 'ltr';
 
@@ -261,6 +279,7 @@ export interface EpubMetadata {
   outputFormat: EpubFormat;
   allowMissingColophon?: boolean;
   hybridCssProfile?: HybridCssProfile;
+  imageColorPolicy?: EpubImageColorPolicy;
 }
 
 // EPUBページ情報
@@ -273,6 +292,17 @@ export interface EpubPage {
   isCover: boolean;
   isColophon: boolean;
   isBlank?: boolean;
+  sourceColorMode?: ImageColorMode | string;
+  imageProfileOverride?: EpubPageImageProfileOverride;
+}
+
+export interface EpubImageProfileSummary {
+  rgbSrgbCount: number;
+  grayscaleDotGainCount: number;
+  grayscaleNoProfileCount: number;
+  noIccCount: number;
+  preservedOriginalCount: number;
+  warnings: string[];
 }
 
 // EPUB生成結果
@@ -281,6 +311,7 @@ export interface EpubGenerateResponse {
   outputPath: string;
   pageCount: number;
   fileSize: number;
+  imageProfileSummary?: EpubImageProfileSummary;
   error?: string;
 }
 
@@ -311,6 +342,7 @@ export interface EpubPageInfo {
   imageHeight?: number;
   imageColorMode?: ImageColorMode | string;
   imageDpi?: number;
+  imageProfileOverride?: EpubPageImageProfileOverride;
 }
 
 // EPUBプロジェクトファイル形式
