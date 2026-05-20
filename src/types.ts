@@ -206,9 +206,9 @@ export const HYBRID_CSS_PROFILE_LABELS: Record<HybridCssProfile, string> = {
 export type EpubImageColorPolicy = 'auto' | 'full_color_srgb' | 'preserve_original';
 
 export const EPUB_IMAGE_COLOR_POLICY_LABELS: Record<EpubImageColorPolicy, string> = {
-  auto: 'Auto: monochrome body + sRGB color',
-  full_color_srgb: 'Full color: all sRGB',
-  preserve_original: 'Preserve original',
+  auto: '自動（本文モノクロ＋カラーsRGB）',
+  full_color_srgb: 'フルカラー（全ページsRGB）',
+  preserve_original: '元画像を維持',
 };
 
 export type EpubPageImageProfileOverride = 'auto' | 'srgb' | 'dot_gain' | 'no_icc' | 'preserve_original';
