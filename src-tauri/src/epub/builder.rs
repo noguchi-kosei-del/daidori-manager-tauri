@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use image::codecs::jpeg::JpegEncoder;
+use image::imageops::FilterType;
 use image::{DynamicImage, ImageEncoder};
 use rayon::prelude::*;
 use serde::Serialize;
@@ -26,6 +27,8 @@ struct EpubProgressPayload<'a> {
 }
 
 const EPUB_JPEG_QUALITY: u8 = 90;
+const APPLE_BOOKS_MAX_INTERNAL_IMAGE_PIXELS: u64 = 5_600_000;
+const APPLE_BOOKS_COVER_MIN_SHORT_EDGE: u32 = 1_400;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EpubImageTarget {
@@ -305,7 +308,15 @@ impl EpubBuilder {
 
                 let mut summary = ImageCopyResult::default();
                 let result = if page.is_blank {
-                    generate_blank_jpeg(page.width, page.height, &dest, target, srgb_profile.as_deref(), dot_gain_profile.as_deref())
+                    generate_blank_jpeg(
+                        page.width,
+                        page.height,
+                        &dest,
+                        target,
+                        page.is_cover,
+                        srgb_profile.as_deref(),
+                        dot_gain_profile.as_deref(),
+                    )
                 } else {
                     let src = Path::new(&page.source_path);
                     if !src.exists() {
@@ -322,7 +333,14 @@ impl EpubBuilder {
                         EpubImageTarget::RgbSrgb
                         | EpubImageTarget::GrayscaleDotGain
                         | EpubImageTarget::NoIcc => {
-                            normalize_image_to_jpeg(src, &dest, target, srgb_profile.as_deref(), dot_gain_profile.as_deref())
+                            normalize_image_to_jpeg(
+                                src,
+                                &dest,
+                                target,
+                                page.is_cover,
+                                srgb_profile.as_deref(),
+                                dot_gain_profile.as_deref(),
+                            )
                         }
                     }
                 };
@@ -403,6 +421,7 @@ impl EpubBuilder {
             }
             EpubImageColorPolicy::PreserveOriginal => EpubImageTarget::PreserveOriginal,
             EpubImageColorPolicy::FullColorSrgb => EpubImageTarget::RgbSrgb,
+            EpubImageColorPolicy::NoIcc => EpubImageTarget::NoIcc,
             EpubImageColorPolicy::Auto => {
                 if page.is_blank {
                     return blank_target;
@@ -851,6 +870,7 @@ fn normalize_image_to_jpeg(
     src: &Path,
     dest: &Path,
     target: EpubImageTarget,
+    is_cover: bool,
     srgb_profile: Option<&[u8]>,
     dot_gain_profile: Option<&[u8]>,
 ) -> Result<(), String> {
@@ -864,6 +884,7 @@ fn normalize_image_to_jpeg(
     } else {
         image::open(src).map_err(|e| format!("Failed to decode image {}: {}", src.display(), e))?
     };
+    let img = resize_for_apple_books(img, is_cover);
 
     match target {
         EpubImageTarget::RgbSrgb => write_rgb_jpeg(img, dest, srgb_profile),
@@ -913,6 +934,7 @@ fn generate_blank_jpeg(
     height: u32,
     dest: &Path,
     target: EpubImageTarget,
+    is_cover: bool,
     srgb_profile: Option<&[u8]>,
     dot_gain_profile: Option<&[u8]>,
 ) -> Result<(), String> {
@@ -921,17 +943,51 @@ fn generate_blank_jpeg(
     match target {
         EpubImageTarget::GrayscaleDotGain => {
             let img = image::GrayImage::from_pixel(w, h, image::Luma([255]));
-            write_grayscale_jpeg(DynamicImage::ImageLuma8(img), dest, dot_gain_profile)
+            let img = resize_for_apple_books(DynamicImage::ImageLuma8(img), is_cover);
+            write_grayscale_jpeg(img, dest, dot_gain_profile)
         }
         EpubImageTarget::NoIcc => {
             let img = image::RgbImage::from_pixel(w, h, image::Rgb([255, 255, 255]));
-            write_rgb_jpeg(DynamicImage::ImageRgb8(img), dest, None)
+            let img = resize_for_apple_books(DynamicImage::ImageRgb8(img), is_cover);
+            write_rgb_jpeg(img, dest, None)
         }
         _ => {
             let img = image::RgbImage::from_pixel(w, h, image::Rgb([255, 255, 255]));
-            write_rgb_jpeg(DynamicImage::ImageRgb8(img), dest, srgb_profile)
+            let img = resize_for_apple_books(DynamicImage::ImageRgb8(img), is_cover);
+            write_rgb_jpeg(img, dest, srgb_profile)
         }
     }
+}
+
+fn resize_for_apple_books(image: DynamicImage, is_cover: bool) -> DynamicImage {
+    let mut width = image.width().max(1);
+    let mut height = image.height().max(1);
+    let mut scale = 1.0_f64;
+
+    if is_cover {
+        let short_edge = width.min(height);
+        if short_edge < APPLE_BOOKS_COVER_MIN_SHORT_EDGE {
+            scale = scale.max(APPLE_BOOKS_COVER_MIN_SHORT_EDGE as f64 / short_edge as f64);
+        }
+    }
+
+    let scaled_width = (width as f64 * scale).round().max(1.0);
+    let scaled_height = (height as f64 * scale).round().max(1.0);
+    let scaled_pixels = scaled_width * scaled_height;
+    if scaled_pixels > APPLE_BOOKS_MAX_INTERNAL_IMAGE_PIXELS as f64 {
+        let max_scale = (APPLE_BOOKS_MAX_INTERNAL_IMAGE_PIXELS as f64 / scaled_pixels).sqrt();
+        scale *= max_scale;
+    }
+
+    let new_width = (width as f64 * scale).round().max(1.0) as u32;
+    let new_height = (height as f64 * scale).round().max(1.0) as u32;
+    if new_width == width && new_height == height {
+        return image;
+    }
+
+    width = new_width;
+    height = new_height;
+    image.resize_exact(width, height, FilterType::Lanczos3)
 }
 
 fn is_grayscale_dynamic_image(image: &DynamicImage) -> bool {

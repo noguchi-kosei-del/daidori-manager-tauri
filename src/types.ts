@@ -203,11 +203,12 @@ export const HYBRID_CSS_PROFILE_LABELS: Record<HybridCssProfile, string> = {
   legacy: '旧Hybrid CSS',
 };
 
-export type EpubImageColorPolicy = 'auto' | 'full_color_srgb' | 'preserve_original';
+export type EpubImageColorPolicy = 'auto' | 'full_color_srgb' | 'no_icc' | 'preserve_original';
 
 export const EPUB_IMAGE_COLOR_POLICY_LABELS: Record<EpubImageColorPolicy, string> = {
   auto: '自動（本文モノクロ＋カラーsRGB）',
   full_color_srgb: 'フルカラー（全ページsRGB）',
+  no_icc: '全ページICCなし',
   preserve_original: '元画像を維持',
 };
 

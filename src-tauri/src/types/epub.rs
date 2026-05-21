@@ -27,6 +27,7 @@ pub enum EpubImageColorPolicy {
     #[default]
     Auto,
     FullColorSrgb,
+    NoIcc,
     PreserveOriginal,
 }
 
