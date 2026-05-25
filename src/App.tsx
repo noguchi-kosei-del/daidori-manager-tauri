@@ -71,7 +71,7 @@ import {
 import { ExportModal, EpubMetadataModal, BleedEditorModal, UpdateDialog, SplitFoldersDialog } from './components/modals';
 import type { SplitFolderEntry, SplitFoldersDialogResult } from './components/modals';
 import { EpubMakerView } from './components/epub';
-import { EpubMetadata, EpubPage, EpubGenerateResponse } from './types';
+import { EpubMetadata, EpubPage, EpubGenerateResponse, EpubCheckResult } from './types';
 import {
   SIDEBAR_PREFIX,
 } from './constants/dnd';
@@ -1425,6 +1425,42 @@ function App() {
     }
   };
 
+  const formatEpubCheckDetails = (result: EpubCheckResult): string | undefined => {
+    if (!result.available) {
+      return result.error;
+    }
+    if (result.messages.length === 0) {
+      return undefined;
+    }
+
+    return result.messages
+      .map((item, index) => {
+        const severityLabel =
+          item.severity === 'FATAL' ? '致命的エラー' :
+          item.severity === 'ERROR' ? 'エラー' :
+          item.severity === 'WARNING' ? '警告' :
+          item.severity === 'USAGE' ? '仕様上の注意' :
+          item.severity === 'HINT' ? 'ヒント' :
+          '情報';
+        const code = item.code ? `（${item.code}）` : '';
+        const location = item.path
+          ? `\n  場所: ${item.path}${item.line ? `:${item.line}${item.column ? `:${item.column}` : ''}` : ''}`
+          : '';
+        return `${index + 1}. ${severityLabel}${code}: ${item.message}${location}`;
+      })
+      .join('\n\n');
+  };
+
+  const buildEpubCheckMessage = (result: EpubCheckResult): string => {
+    if (!result.available) {
+      return 'EPUBCheckを実行できなかったため、生成後チェックは完了していません。';
+    }
+
+    const status = result.isValid ? 'EPUBCheck: 問題なし' : 'EPUBCheck: 要確認';
+    const version = result.checkerVersion ? ` / v${result.checkerVersion}` : '';
+    return `${status}${version}\n致命的エラー ${result.fatalCount}件 / エラー ${result.errorCount}件 / 警告 ${result.warningCount}件 / 仕様上の注意 ${result.usageCount}件 / 情報 ${result.infoCount}件`;
+  };
+
   // EPUB生成ハンドラ
   const handleEpubGenerate = async (metadata: EpubMetadata, outputPath: string) => {
     try {
@@ -1650,12 +1686,30 @@ function App() {
         const profileWarnings = profileSummary?.warnings?.length
           ? profileSummary.warnings.join('\n')
           : undefined;
+        let epubCheckMessage = '';
+        let epubCheckDetails: string | undefined;
+        let epubCheckFailed = false;
+        try {
+          await emit('epub-progress', { phase: 'epubcheck', current: 0, total: 0 });
+          const epubCheckResult = await invoke<EpubCheckResult>('validate_epub_with_epubcheck', {
+            epubPath: response.outputPath || outputPath,
+          });
+          epubCheckMessage = `\n\n${buildEpubCheckMessage(epubCheckResult)}`;
+          epubCheckDetails = formatEpubCheckDetails(epubCheckResult);
+          epubCheckFailed = epubCheckResult.available && !epubCheckResult.isValid;
+        } catch (epubCheckError) {
+          epubCheckMessage = '\n\nEPUBCheckを実行できなかったため、生成後チェックは完了していません。';
+          epubCheckDetails = `${epubCheckError}`;
+          epubCheckFailed = false;
+        }
+        const details = [profileWarnings, epubCheckDetails].filter(Boolean).join('\n\n');
         setExportResultDialog({
           show: true,
-          title: 'EPUB生成完了',
-          message: `EPUBを生成しました\n${response.pageCount}ページ / ${fileSizeMB}MB${profileMessage}`,
-          details: profileWarnings,
-          outputDir: outputPath,
+          title: epubCheckFailed ? 'EPUB生成完了（チェック要確認）' : 'EPUB生成完了',
+          message: `EPUBを生成しました\n${response.pageCount}ページ / ${fileSizeMB}MB${profileMessage}${epubCheckMessage}`,
+          details: details || undefined,
+          outputDir: response.outputPath || outputPath,
+          isError: epubCheckFailed,
         });
         setIsEpubModalOpen(false);
       } else {

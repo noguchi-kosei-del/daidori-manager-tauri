@@ -23,6 +23,7 @@ use commands::open_file::open_file_with_default_app;
 use commands::tiff::{check_photoshop_installed, run_photoshop_tiff_convert};
 use commands::jpeg_native::run_native_jpeg_convert;
 use commands::epub::{generate_epub, generate_book_uuid, get_image_dimensions, create_epub_metadata, get_default_viewport, read_psd_guides};
+use commands::epubcheck::validate_epub_with_epubcheck;
 use commands::tachimi::{detect_tachimi_exe, generate_tachimi_chapter_pdfs};
 use thumbnail::generate_thumbnail;
 
@@ -106,6 +107,7 @@ pub fn run() {
             create_epub_metadata,
             get_default_viewport,
             read_psd_guides,
+            validate_epub_with_epubcheck,
             detect_tachimi_exe,
             generate_tachimi_chapter_pdfs,
         ])

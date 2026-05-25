@@ -3853,7 +3853,7 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
 /* ==================== エクスポート結果ダイアログ ==================== */
 
 .export-result-dialog {
-  max-width: 500px;
+  max-width: 640px;
   text-align: center;
 }
 
@@ -3870,6 +3870,9 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
   margin-bottom: var(--spacing-md);
   font-size: var(--font-size-md);
   color: var(--color-text-primary);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 .tachimi-progress {
@@ -3953,6 +3956,34 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
   font-size: var(--font-size-xs);
   color: var(--color-text-primary);
   word-break: break-all;
+}
+
+.epub-license-info p {
+  margin: 0 0 var(--spacing-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.6;
+}
+
+.epub-license-info details {
+  margin-top: var(--spacing-xs);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.epub-license-info summary {
+  cursor: pointer;
+  color: var(--color-accent);
+  font-weight: var(--font-weight-medium);
+}
+
+.epub-license-detail {
+  margin-top: var(--spacing-sm);
+  padding: var(--spacing-sm);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius-sm);
+  text-align: left;
 }
 
 .export-result-dialog .modal-footer {

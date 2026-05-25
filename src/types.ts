@@ -316,6 +316,31 @@ export interface EpubGenerateResponse {
   error?: string;
 }
 
+export interface EpubCheckMessage {
+  severity: string;
+  code?: string;
+  message: string;
+  path?: string;
+  line?: number;
+  column?: number;
+}
+
+export interface EpubCheckResult {
+  available: boolean;
+  isValid: boolean;
+  checkedPath: string;
+  checkerVersion?: string;
+  elapsedMs: number;
+  fatalCount: number;
+  errorCount: number;
+  warningCount: number;
+  usageCount: number;
+  infoCount: number;
+  messages: EpubCheckMessage[];
+  rawOutput?: string;
+  error?: string;
+}
+
 // ========== EPUB_makerモード関連 ==========
 
 // EPUB_maker用ページ情報（EpubPageを拡張）

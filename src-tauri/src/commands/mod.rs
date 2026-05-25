@@ -7,4 +7,5 @@ pub mod photoshop;
 pub mod tiff;
 pub mod jpeg_native;
 pub mod epub;
+pub mod epubcheck;
 pub mod tachimi;

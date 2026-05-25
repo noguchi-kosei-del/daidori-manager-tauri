@@ -290,8 +290,11 @@ export function EpubMetadataModal({
     const isImagesPhase = progress?.phase === 'images' && progress.total > 0;
     const isPackagingPhase = progress?.phase === 'packaging';
     const isPsdToJpegPhase = progress?.phase === 'psd-to-jpeg';
+    const isEpubCheckPhase = progress?.phase === 'epubcheck';
     const phaseLabel = isPsdToJpegPhase
       ? 'PSDをJPEGに変換しています…'
+      : isEpubCheckPhase
+      ? 'EPUBチェック機能を準備・検証しています…'
       : isImagesPhase
       ? '画像を変換しています…'
       : isPackagingPhase
@@ -681,6 +684,29 @@ export function EpubMetadataModal({
                 <span className="stat-value">{EPUB_FORMAT_LABELS[outputFormat]}</span>
               </div>
             </div>
+          </div>
+
+          <div className="form-section epub-license-info">
+            <h3>使用ツール・ライセンス</h3>
+            <p>
+              EPUB生成後の検証には、W3C/DAISY Consortium が管理する EPUBCheck を使用します。
+            </p>
+            <details>
+              <summary>EPUBCheck ライセンス</summary>
+              <div className="epub-license-detail">
+                <p>EPUBCheck is licensed under the BSD 3-Clause License.</p>
+                <p>
+                  Copyright © 2007 Adobe Systems Incorporated<br />
+                  Copyright © 2008 IDPF<br />
+                  Copyright © 2017 W3C (MIT, ERCIM, Keio, Beihang)
+                </p>
+                <p>
+                  EPUBCheck は現状有姿で提供され、明示または黙示の保証はありません。
+                  詳細なライセンス本文と第三者ライセンスは、初回チェック時に取得される
+                  EPUBCheck 配布物内の LICENSE.txt / THIRD-PARTY.txt に含まれます。
+                </p>
+              </div>
+            </details>
           </div>
           </div>
         </div>
