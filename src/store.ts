@@ -88,6 +88,7 @@ interface AppState {
   ) => string[];
   addSpecialPage: (chapterId: string, pageType: PageType, afterPageId?: string) => void;
   setPageFile: (pageId: string, file: FileInfo | null) => void;
+  refreshPagesLinks: (updates: { pageId: string; file: FileInfo }[]) => void;
   removePage: (chapterId: string, pageId: string) => void;
   reorderPages: (chapterId: string, fromIndex: number, toIndex: number) => void;
   movePage: (fromChapterId: string, toChapterId: string, pageId: string, toIndex: number) => void;
@@ -676,6 +677,34 @@ export const useStore = create<AppState>((set, get) => {
               thumbnailCachePath: undefined,
             };
           }
+        }),
+      })),
+    }));
+  },
+
+  // 複数ページのファイルメタデータを一括更新（履歴は1ステップ）
+  refreshPagesLinks: (updates) => {
+    if (updates.length === 0) return;
+    const map = new Map(updates.map((u) => [u.pageId, u.file]));
+    set((state) => ({
+      ...saveHistory(),
+      chapters: state.chapters.map((c) => ({
+        ...c,
+        pages: c.pages.map((p) => {
+          const file = map.get(p.id);
+          if (!file) return p;
+          return {
+            ...p,
+            filePath: file.path,
+            fileName: file.name,
+            fileType: file.file_type as Page['fileType'],
+            fileSize: file.size,
+            modifiedTime: file.modified_time,
+            thumbnailStatus: 'pending' as const,
+            thumbnailCacheKey: undefined,
+            thumbnailCachePath: undefined,
+            fileValidationStatus: 'ok' as const,
+          };
         }),
       })),
     }));

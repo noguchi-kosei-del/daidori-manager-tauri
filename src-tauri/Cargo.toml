@@ -1,6 +1,6 @@
 [package]
 name = "daidori-manager-tauri"
-version = "1.5.0"
+version = "1.5.3"
 description = "漫画の台割管理・入稿データ生成ツール"
 authors = ["you"]
 edition = "2021"
@@ -28,6 +28,9 @@ image = { version = "0.25", features = ["jpeg", "png", "tiff"] }
 psd = "0.3"
 memmap2 = "0.9"
 mozjpeg = "0.10"
+
+# PDF読み込み（ラスタライズ用）
+pdfium-render = { version = "0.8", features = ["thread_safe", "image"] }
 
 # ファイル操作
 walkdir = "2"

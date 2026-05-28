@@ -9,3 +9,4 @@ pub mod jpeg_native;
 pub mod epub;
 pub mod epubcheck;
 pub mod tachimi;
+pub mod pdf;

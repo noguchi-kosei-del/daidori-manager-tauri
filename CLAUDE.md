@@ -42,7 +42,7 @@
 ### 2. ページ管理
 - フォルダからの画像ファイル一括読み込み
 - ドラッグ&ドロップによるページ追加・並べ替え
-- 対応フォーマット: **JPG, PNG, PSD, TIFF**
+- 対応フォーマット: **JPG, PNG, PSD, TIFF, PDF**（PDFは取り込み時に全ページを350dpiでJPEG化）
 - 特殊ページの挿入（白紙、表紙、奥付など）
 - 複数選択による一括操作（Ctrl+クリック、Shift+クリック）
 
@@ -66,7 +66,7 @@
 - コピー/移動モード選択
 
 ### 6. プロジェクト管理
-- `.daidori` 形式での保存/読込
+- `.daiw` 形式での保存/読込
 - 最近使ったファイル履歴（最大10件）
 - ファイル参照の検証（移動/変更検出）
 - Undo/Redo機能（最大50履歴）
@@ -108,7 +108,7 @@ interface Page {
 }
 ```
 
-## プロジェクトファイル形式 (.daidori)
+## プロジェクトファイル形式 (.daiw)
 
 JSONベースのファイル形式:
 ```typescript
@@ -271,6 +271,40 @@ style-src 'self' 'unsafe-inline'
 | `constants.rs` | 定数定義（キャッシュサイズ、対応拡張子等） |
 
 ## 変更履歴
+
+### 2026-05-25: `.daiw`プロジェクト保存復帰・保存UI整理・リンク変更検知強化
+
+#### プロジェクト保存/読込（App.tsx）
+- InDesignの`.indd`相当のプロジェクトファイルとして、台割状態を`.daiw`ファイルに保存/読込できるようにした。
+- `save_project` / `load_project` TauriコマンドをReact側から利用し、チャプター、ページ、特殊ページ、ファイル参照、選択状態、サムネイルサイズ、折りたたみ状態を保存/復元する。
+- 保存時はプロジェクトファイルの親フォルダを`basePath`として持ち、画像ファイル参照は絶対パスと相対パスの両方を保存する。
+- 読込時は保存済みファイル参照からページを復元し、サムネイルは`pending`に戻して再生成できる状態にする。
+- 未保存変更のスナップショット比較を追加し、終了時に「保存して終了」「保存せず終了」を選べるようにした。
+- `Ctrl+S`で保存、`Ctrl+Shift+S`で名前を付けて保存、`Ctrl+O`でプロジェクトを開くショートカットを追加した。
+- プロジェクト読込成功時の「プロジェクトを開きました」完了ダイアログは表示しない仕様に変更した。
+
+#### 拡張子変更
+- プロジェクトファイル拡張子を`.daidori`から`.daiw`へ変更した。
+- 保存ダイアログのデフォルト拡張子、自動付与、開くダイアログのフィルタを`.daiw`に統一した。
+- ドキュメント上のプロジェクトファイル形式表記も`.daiw`へ更新した。
+
+#### 保存UI配置（App.tsx, styles.css）
+- ヘッダーのプロジェクト操作ボタンから「新規」を削除し、最終的に「開く」「保存」もサイドバー下部へ移動した。
+- `chapter-actions-bar`直下に`project-sidebar-actions`を追加し、「開く」「保存」を二列で配置した。
+- `chapter-actions-bar`と`project-sidebar-actions`の間に区切り線を追加し、チャプター追加ボタン群の上部余白を約半分に調整した。
+- `project-sidebar-actions`下部の余計な区切り線を削除し、合計ページ数エリアとの間隔を詰めた。
+- ハンバーガーメニュー内の`hamburger-project-section`（新規/開く/上書き保存/名前を付けて保存/パス表示）は削除した。
+
+#### ツールバーアクションUI
+- `JPEG/TIF生成`ボタンを`EPUB生成`と同じ青枠・青文字のアウトラインスタイル（`preview-fab-secondary`）に変更した。
+
+#### リンク変更検知（src-tauri/src/commands/project.rs）
+- `validate_pages`のファイル参照検証で、更新日時だけでなくファイルサイズも比較するようにした。
+- 変更前後のファイル名が同じ場合でも、実体差し替えなどでファイルサイズが変わっていれば`modified`扱いにし、カードにアラートと手動リンク更新ボタンを表示できるようにした。
+
+#### 検証
+- `npm run build` 成功。
+- `cargo check` 成功。
 
 ### 2026-02-06: UI改善
 
@@ -2062,3 +2096,208 @@ E2. **出力フォルダ名変更** ([App.tsx](src/App.tsx)): チャプターPDF
 > - 旧: 保存機能撤去で残った未使用 store/型/コンポーネント/アイコンが残存 → 新: 確実デッドを削除
 > - 旧: ボタン文言「チャプターPDF」／出力先「Script_Output/チャプターPDF」 →
 >   新: 「PDF生成」／「Script_Output/台割pdf」
+
+---
+
+## v1.5.1: チャプター単位のリンク一括更新
+
+v1.5.0 までは、フォルダ内のファイルを差し替えた後にリンク更新するには、ページ単位の黄色「リンクを更新」ボタン（`fileValidationStatus === 'modified'` の時のみ表示）を1ページずつクリックするか、`fileValidationStatus` が `modified` 以外（`missing` / `meta_error` 等）のページについては個別にファイル選択し直すしかなかった。チャプター全体を一度に再リンクする手段を追加。
+
+### A. 一括リンク更新アクション
+
+A1. **store アクション `refreshPagesLinks(updates)` 追加** ([src/store.ts](src/store.ts)): `{ pageId, file: FileInfo }[]` を受け取り、該当する全ページの `filePath` / `fileName` / `fileType` / `fileSize` / `modifiedTime` を更新し、`thumbnailStatus: 'pending'`・`fileValidationStatus: 'ok'`・キャッシュキー無効化までを **`saveHistory()` 1回** で行う。既存の `setPageFile` をループ呼び出しすると Undo 履歴が件数分積まれてしまうため、専用の一括アクションとして分離。
+
+### B. App.tsx ハンドラ
+
+B1. **`handleRefreshChapterLinks(chapterId)`** ([src/App.tsx](src/App.tsx) `handleRefreshFile` の直後): チャプター内の `pageType === 'file'` かつ `filePath` あり のページを抽出し、**親フォルダ単位でグループ化**してから `get_folder_contents` を**ユニークなフォルダごとに1回**だけ呼ぶ。同一フォルダ内に N ページあっても invoke は 1 回で済む（30ページなら 30→1）。
+- 取得した `FileInfo[]` を `path → FileInfo` の Map に変換し、各ページの `filePath` で照合
+- 一致したものは `updates[]` へ、見つからなかったものは `missing[]`（ファイル名ベース）へ振り分け
+- `updates.length > 0` のときだけ `refreshPagesLinks(updates)` を呼ぶ（空ならストアを触らない）
+- 結果は既存の `setExportResultDialog` を再利用して通知: 更新件数＋欠落件数を本文に、欠落ファイル名一覧（先頭20件・超過分は「…他N件」）を `details` に表示。`updates.length === 0` のときは `isError: true`
+- フォルダの読み込みに失敗した場合も同ダイアログで詳細を表示
+
+### C. UI 配線
+
+C1. **チャプター「…」メニューに項目追加** ([src/components/sidebar/ChapterItem.tsx](src/components/sidebar/ChapterItem.tsx)):
+- 既存の `MoreIcon` トリガーメニューに `RefreshIcon` 付きの **「リンクを一括更新」** を、リネームの直下・フォルダから差し替えの直上に挿入
+- 表示条件は **`chapter.pages.some(p => p.pageType === 'file')`** — ファイルページが 1 つでもあるチャプターでのみ表示（blank チャプター・白紙のみのチャプターでは出ない）。「フォルダから差し替え」のチャプタータイプ限定（cover / chapter / intermission / ad / title / toc）とは判定軸が違う点に注意
+- props として `onRefreshChapterLinks: () => void` を追加し、App.tsx 側で `handleRefreshChapterLinks(chapter.id)` を束ねて渡す
+- tooltip: 「チャプター内の全ページについて、同じパスのファイルを再読込してメタデータ・サムネイルを更新」
+
+### バージョン同期
+
+今回は機能追加のみで **`package.json` 等のバージョンファイルは未更新**（v1.5.0 のまま）。リリース時にまとめて `1.5.1` へ昇格する想定。
+
+> **このバージョンの構造変更まとめ**:
+> - 旧: ページ単位の黄色「リンクを更新」ボタンを1ページずつクリックする必要 → 新: チャプター「…」メニューの「リンクを一括更新」1クリックで全ページ再リンク
+> - 旧: 同一フォルダの N ページに対して `get_folder_contents` を N 回呼ぶ素朴な実装しかなかった → 新: 親フォルダ単位でグループ化し invoke 回数を `unique(folder)` 件に圧縮
+> - 旧: setPageFile を N 回呼ぶと Undo 履歴が N 段積まれる → 新: `refreshPagesLinks` で `saveHistory()` 1 回・履歴 1 段に集約
+
+---
+
+## v1.5.2: PDF読み込み対応（ラスタライズ at boundary）
+
+ユーザーが PDF をフォルダドロップ／ファイル選択／個別ドロップで投入すると、各ページが自動でチャプターのページとして取り込まれるように拡張。実装戦略は「PDF を受け取った瞬間に JPEG 群へ展開し `FileInfo[]` として上位に返す」boundary 変換方式で、既存パイプライン（サムネイル / 検証 / カラーモード / エクスポート / EPUB / Tachimi PDF / 例外サイズ）は **一切改修せずに** PDF 由来 JPEG をそのまま処理する。
+
+### A. PDFium 依存と DLL バンドル
+
+A1. **`pdfium-render = { version = "0.8", features = ["thread_safe", "image"] }`** を [src-tauri/Cargo.toml](src-tauri/Cargo.toml) に追加。
+
+A2. **DLL 配置**: `src-tauri/binaries/pdfium.dll` に [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries/releases) の `pdfium-win-x64.tgz` から取り出した `bin/pdfium.dll`（約 10MB）を配置。[src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) の `bundle.resources` に `"binaries/pdfium.dll"` を追加。リポジトリには 154B のプレースホルダ `pdfium.dll` がコミットされており、Tauri バンドラのリソース存在チェックを通過しつつ起動時には「サイズが小さすぎる」として除外される（[binaries/README.md](src-tauri/binaries/README.md) に手順を記載）。
+
+A3. **G:\共有ドライブ 自動取得** ([src-tauri/src/commands/pdf.rs](src-tauri/src/commands/pdf.rs) `fetch_pdfium_from_shared`): montblanc アプリの AI モデル自動取得 (`install-ai-models.ps1` の `Copy-DirectoryFromShared`) と同様のパターンで、初回 PDF 取り込み時に DLL が見つからなければ G:\共有ドライブ 上の以下候補から `fs::copy` でローカルキャッシュにコピーする:
+- `G:\共有ドライブ\ソニーからのデータ受領\編集企画_AT業務推進\DTP制作部\Daiwari PDF\bin\pdfium.dll` ← **現運用先**（bblanchon アーカイブ展開時）
+- `G:\共有ドライブ\ソニーからのデータ受領\編集企画_AT業務推進\DTP制作部\Daiwari PDF\pdfium.dll`
+- `G:\共有ドライブ\編集企画_AT業務推進\DTP制作部\pdfium.dll`
+- `G:\共有ドライブ\編集企画_AT業務推進\DTP制作部\Daiwari Manager\pdfium.dll`
+- `G:\共有ドライブ\編集企画_AT業務推進\DTP制作部\daidori-manager\pdfium.dll`
+
+ローカルキャッシュ先は `%LOCALAPPDATA%\daidori-manager\binaries\pdfium.dll`（既存のサムネイルキャッシュ `daidori-manager/thumbnails/` と同じディレクトリ規約）。一度コピーされれば以後は G: 接続なしで動作する。コピー進捗は既存 `pdf-rasterize-progress` イベントに `fetching` / `fetched` フェーズとして相乗りし、フロント側オーバーレイは「PDFエンジン (pdfium.dll) のセットアップ」タイトル＋共有元パスを表示する。
+
+A4. **遅延 Pdfium 初期化** ([src-tauri/src/commands/pdf.rs](src-tauri/src/commands/pdf.rs) `create_pdfium`): `Pdfium` 型は `Send` ではないため `OnceLock<Mutex<Pdfium>>` 方式は使えず、`tokio::task::spawn_blocking` のブロッキングスレッド内で **呼び出しごとに `Pdfium::bind_to_library` → `Pdfium::new`** を実行する。OS が DLL をキャッシュするため繰り返しオーバヘッドは数十 ms 程度で、レンダリング時間に比べて無視できる。DLL は exe と同階層 → `resources/binaries/pdfium.dll` → ローカルキャッシュ → `binaries/pdfium.dll` の順で探索し、1MB 未満はプレースホルダ扱いで除外、見つからなければ A3 の G: ドライブ取得を試行、最終フォールバックは `bind_to_system_library`。
+
+### B. rasterize_pdf コマンド
+
+B1. **新規 [src-tauri/src/commands/pdf.rs](src-tauri/src/commands/pdf.rs) `rasterize_pdf(pdf_path) -> Vec<FileInfo>`**:
+- 出力先 = `<pdf_basename>_pages/`（PDF と同じ親フォルダ配下、Windows 禁止文字を `_` で除去）
+- ファイル名 = `p0001.jpg, p0002.jpg, ...` 4 桁ゼロパディング（natord 並び替え保証）
+- DPI = 350（カラー漫画印刷標準、CLAUDE.md の `target_dpi_color` と整合）
+- エンコーダ = MozJPEG 品質 95（既存 [src-tauri/src/native_jpeg/jpeg.rs](src-tauri/src/native_jpeg/jpeg.rs) `write_jpeg_mozjpeg_to_file` を再利用、PDF 用ベースラインではなく品質側を採用）
+- 内部処理: pdfium で直列レンダリング → RGBA → RGB → rayon `par_iter` で並列 MozJPEG エンコード（pdfium-render の `thread_safe` は内部 mutex で並列メリットなし → レンダリングだけ直列、エンコードは並列で全コア利用）
+- ページ数上限 = 300、超過時はエラー
+- パスワード保護 PDF はエラー文言「パスワード保護されたPDFは読み込めません」に変換
+
+B2. **サイドカーキャッシュ** (`.daiwari-pdf-meta.json`): `pdf_size` / `pdf_mtime_ns` / `page_count` / `dpi` / `encoder` をサブフォルダ直下に JSON で保存。再ラスタライズ呼び出し時にメタが一致 **かつ** 全 `p{NNNN}.jpg` が揃っていれば即座に既存 JPEG の `FileInfo[]` を返す（重い処理を完全スキップ）。
+
+B3. **進捗イベント** (`pdf-rasterize-progress`): `{ phase: "loading" | "rendering" | "encoding" | "done", current, total, pdfName }` を `Emitter::emit` で逐次送出。フロントは `listen` で購読し専用オーバーレイ（既存の `.epub-progress-overlay` / `.epub-progress-dialog` クラスを流用）に反映、`done` 受信で 800ms 後に自動消去。
+
+B4. **コマンド登録** ([src-tauri/src/commands/mod.rs](src-tauri/src/commands/mod.rs), [src-tauri/src/lib.rs](src-tauri/src/lib.rs)): `pub mod pdf;` 追加、`invoke_handler!` に `rasterize_pdf` を登録。
+
+### C. バックエンドのファイル列挙
+
+C1. **`SUPPORTED_EXTENSIONS` に `"pdf"` 追加** ([src-tauri/src/constants.rs](src-tauri/src/constants.rs)): `get_folder_contents` が PDF をエントリとして拾うようになる。`FileInfo.file_type` には `"pdf"` のマーカーが入る。
+
+C2. **`get_file_type` に `"pdf"` 分岐追加** ([src-tauri/src/image_utils.rs](src-tauri/src/image_utils.rs)): フロントの `FileType` union（`'jpg' | 'jpeg' | 'png' | 'psd' | 'tif' | 'tiff'`）には **意図的に追加しない**。PDF は `expandPdfFiles` で消費されて `addPagesToChapter` には到達しない設計のため、union を汚さない。
+
+C3. **`get_folder_contents` には PDF ラスタライズを組み込まない**: 当初は backend でインライン展開する案だったが、フォルダ検証や `validate_pages` から呼ばれる経路もあるため、**意図せず無関係な PDF が大量に展開される**事故を避け、フロント側の `expandPdfFiles` ヘルパで明示的に呼ぶ責務分離に変更。
+
+### D. フロント展開ヘルパ
+
+D1. **新規 [src/utils/pdf.ts](src/utils/pdf.ts) `expandPdfFiles(files: FileInfo[]): Promise<ExpandPdfResult>`**: 入力配列を走査し `file_type === 'pdf'` のエントリを `rasterize_pdf` 経由で JPEG 群に置換、それ以外は素通し。エラーは `errors[]` に積んで処理を継続。戻り値の `{ files, pdfCount, expandedCount, errors }` を呼び出し側で扱う。
+
+D2. **`rasterizeSinglePdf(pdfPath)`** も補助関数として export（個別ドロップ／単独 PDF 選択時の最小経路で利用可能）。
+
+### E. App.tsx 配線
+
+E1. **ファイル選択ダイアログの拡張子フィルタ**: `'画像ファイル'` → `'画像・PDFファイル'`、`extensions` に `'pdf'` を追加（4 箇所一括: ページ追加 / ファイル挿入 / 特殊ページ用 / その他）。
+
+E2. **`handleAddPages` / `handleAddFolder` / `handleInsertFile` / `handleReplacePages`**: `get_folder_contents` の結果を **`expandPdfFiles` に通してから** `addPagesToChapter` / `addPagesToChapterAt` / `replacePagesInChapter` へ。`handleAddFolder` は各フォルダのファイルを個別に展開してから `folderEntries` に集約（複数フォルダ + 各フォルダ内の PDF にも対応）。
+
+E3. **`handleSelectFile`（表紙・奥付の単一ファイル）**: PDF が選ばれた場合、`expandPdfFiles` 後の **1 ページ目のみ** を `setPageFile` で採用（表紙チャプターは 1 ファイル制限のため）。
+
+E4. **`handleRefreshFile` / `handleRefreshChapterLinks`**: 既存リンクの再読み込みは **既に展開済みの JPEG** を再走査するだけのため PDF 展開を呼ばない（無関係な PDF が再ラスタライズされない）。
+
+E5. **ドロップハンドラ `__dropHandler`**:
+- 分類フェーズで `imageExtensions` から `'pdf'` を除外し、新たに `pdfPaths` として分離
+- 通常画像は親フォルダ単位でグルーピング → `get_folder_contents` で取得
+- **PDF は 1 つ 1 つを独立した `folderEntry`** として追加（`folderName = pdf_basename`）。これにより複数 PDF を同時ドロップした場合、既存の **「分割ダイアログ」** ロジックが自動的に発動し、各 PDF を別チャプターに振り分けるか確認できる
+- フォルダ候補も `expandPdfFiles` を通して内包される PDF を展開
+- すべての展開エラーを `notifyPdfExpansionErrors` でまとめて 1 ダイアログ表示
+
+E6. **PDF 進捗オーバーレイ** ([src/App.tsx](src/App.tsx)): `pdfRasterizeProgress` state + `pdf-rasterize-progress` リスナで取得 → 既存の `.epub-progress-overlay` / `.epub-progress-dialog` CSS を流用したオーバーレイで「PDFを取り込み中: {ファイル名}」+ phase ラベル + プログレスバー + `{current} / {total} ページ ({percent}%)` を表示。`phase === 'done'` で 800ms 後に自動消去。
+
+### F. CMYK ガード・例外サイズへの影響
+
+F1. **CMYK 警告**: PDF は 350dpi で sRGB JPEG として焼くため、元 PDF が CMYK でも `blockIfCmyk` には引っかからない（意図通り）。
+
+F2. **例外サイズバッジ**: PDF 由来 JPEG は他のページと寸法が異なれば、既存ロジック通り「例外サイズ」グループとして同色バッジで表示される（PDF 主体のチャプターでは全ページが同一例外サイズ＝同一色でグループ化、UX 上の混乱は最小）。
+
+### G. チャプターヘッダ「+」メニューのラベル明確化
+
+G1. **「ファイルを選択」→「ファイル / PDF を選択」へ改名** ([src/components/sidebar/ChapterItem.tsx](src/components/sidebar/ChapterItem.tsx)): チャプター右上の `+` ボタンを開いたポップアップメニューで、PDF 対応が discoverable になるようラベル変更。
+- 旧: 「ファイルを選択」/「フォルダを選択」 — ユーザーが PDF を選びたくて「フォルダを選択」を開くと OS のディレクトリピッカーは PDF ファイルを表示しないため詰む事故が発生していた
+- 新: 「**ファイル / PDF を選択**」/「フォルダを選択」 — どちらのボタンを使うべきか直感的に分かるように
+
+G2. **tooltip 追加**:
+- 「ファイル / PDF を選択」: 「画像ファイル (JPG/PNG/PSD/TIFF) または PDF を選択」
+- 「フォルダを選択」: 「フォルダ内の画像ファイルを一括追加（PDFはフォルダピッカーでは選べません）」 — OS 仕様の制約を明示
+
+### H. PDFium DLL 共有ドライブパスの実運用反映
+
+H1. **`shared_pdfium_candidates` を実配置に合わせて更新** ([src-tauri/src/commands/pdf.rs](src-tauri/src/commands/pdf.rs)): 当初は推測ベースで `編集企画_AT業務推進\DTP制作部\Daiwari Manager\` を想定していたが、実際の DTP制作部 配下のフォルダ構成（`JSON` / `OCR` / `Photoshop Scrypts` / `テキスト抽出プロンプト`）には Daiwari 用フォルダが存在しなかった。ユーザーが `G:\共有ドライブ\ソニーからのデータ受領\編集企画_AT業務推進\DTP制作部\Daiwari PDF\` 配下に **bblanchon の pdfium アーカイブ全体**（`bin/`, `include/`, `lib/`, `licenses/`, `LICENSE`, `VERSION` 等）を解凍配置したため、`bin/pdfium.dll`（7,262,208 bytes ≈ 7MB）を最優先候補に組み込んだ。
+
+H2. **候補パスの優先順位**（5 候補に拡張）:
+1. `…\Daiwari PDF\bin\pdfium.dll` ← 現運用先（アーカイブ展開時の bin/ サブフォルダ）
+2. `…\Daiwari PDF\pdfium.dll` ← 将来 DLL のみ平置きされた場合のフォールバック
+3. `編集企画_AT業務推進\DTP制作部\pdfium.dll` ← フォールバック
+4. `…\DTP制作部\Daiwari Manager\pdfium.dll` ← 旧運用想定
+5. `…\DTP制作部\daidori-manager\pdfium.dll` ← 英字運用想定
+
+エラー文言も具体的な現運用パス（`Daiwari PDF\bin\pdfium.dll`）を明示するよう更新。
+
+### バージョン同期
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を **`1.5.2`** に更新（DLL バンドルを伴うのでメジャー寄りに昇格しない）。
+
+> **このバージョンの構造変更まとめ**:
+> - 旧: PDF は対応外。ユーザーは別ツールで PDF → 画像にバラしてから取り込む必要 → 新: PDF を直接ドロップ/選択するだけで各ページが 350dpi MozJPEG q95 で `<pdf>_pages/p0001.jpg` … に焼かれ、チャプターのページとして並ぶ
+> - 旧: 既存パイプライン（サムネイル/検証/カラーモード/エクスポート/EPUB/Tachimi PDF/例外サイズ）は PDF を知らない → 新: boundary 変換で PDF を JPEG 化してから上位に渡すため、**既存パイプラインに分岐追加ゼロ**で PDF 由来ページが透過的に流れる
+> - 旧: 一度ラスタライズした PDF を再度ドロップしても毎回展開していた（仕様上ありえなかった） → 新: `.daiwari-pdf-meta.json` サイドカーで `(pdf_size, mtime, page_count, dpi, encoder)` 一致 + 全 JPEG 揃いを検出して即スキップ
+> - 旧: tachimi-pdf-progress / epub-progress と同じ進捗パターンを持たなかった → 新: `pdf-rasterize-progress` で loading/rendering/encoding/done フェーズを送出、既存の `.epub-progress-*` CSS を流用した専用オーバーレイで表示
+> - 旧: 複数 PDF を同時ドロップする経路が存在しなかった → 新: ドロップハンドラで各 PDF を独立した `folderEntry` として扱うため、既存の「複数フォルダ → 分割ダイアログ」UX がそのまま発動し各 PDF を別チャプターに振り分けられる
+> - 旧: pdfium.dll はユーザーが手動で配置する必要があった → 新: montblanc の AI モデル自動取得パターンに倣い、初回 PDF 取り込み時に G:\共有ドライブ から `%LOCALAPPDATA%\daidori-manager\binaries\pdfium.dll` へ自動コピー。共有先候補は 5 つ用意し、いずれかにあれば取得・以後はローカルキャッシュから読み込み（G: 接続なしで動作）
+> - 旧: 共有 DLL 配置先を `DTP制作部\Daiwari Manager\` と推測ベースで設計していたが該当フォルダは存在しなかった → 新: 実際の運用に合わせて `DTP制作部\Daiwari PDF\bin\pdfium.dll`（bblanchon アーカイブ展開そのまま）を最優先候補に組み込み、エラー文言も実パスを明示
+> - 旧: チャプター「+」メニューの「ファイルを選択」が PDF 対応か不明で、ユーザーが PDF 取り込みのつもりで「フォルダを選択」を押すと OS のフォルダピッカーが PDF を表示せず詰む事故が起きた → 新: 「ファイル / PDF を選択」にラベル変更 + 両ボタンに tooltip 追加（フォルダピッカーでは PDF が選べない旨を明示）し、PDF 取り込みの正しい導線が discoverable に
+
+---
+
+## v1.5.3: `.daiw` プロジェクトファイルのアイコン設定
+
+`.daiw` 拡張子のファイル関連付けを Windows に登録し、Explorer 上で専用アイコン
+（`logo/daidori_project_icon.png` ベース）が表示されるようにした。Tauri 2 の
+NSIS バンドラの `bundle.fileAssociations` を利用してインストール時に
+`HKCR\.daiw` → `HKCR\DaiwariProject\DefaultIcon` のレジストリエントリを自動生成する。
+
+### A. アイコン ICO 生成
+
+A1. **新規 `src-tauri/icons/daidori_project.ico`** (約 280KB, 多解像度): 既存の
+`logo/daidori_project_icon.png`（333×333 RGBA）から `png-to-ico` で 4 解像度
+（16/32/48/256）の ICO を生成。`%TEMP%\p2i` に `npm install --silent png-to-ico` で
+モジュールを退避してから `node -e "require('png-to-ico').default(src).then(...)"` で
+バイナリセーフに直接ファイル書き出し。PowerShell の `>` リダイレクトは UTF-16 LE
+変換でバイナリを破壊するため使えなかった。
+
+### B. tauri.conf.json — fileAssociations 追加
+
+B1. **`bundle.fileAssociations`** ([src-tauri/tauri.conf.json](src-tauri/tauri.conf.json)):
+`bundle.resources` と `bundle.windows` の間に新規追加:
+```json
+"fileAssociations": [
+  {
+    "ext": ["daiw"],
+    "name": "DaiwariProject",
+    "description": "台割マネージャー プロジェクトファイル",
+    "icon": "icons/daidori_project.ico",
+    "role": "Editor"
+  }
+]
+```
+- `ext` はドットなし指定（Tauri 仕様）、`icon` は `src-tauri/` からの相対パス
+- NSIS バンドラがインストーラ生成時にレジストリ書き込みコードを埋め込む
+
+### C. 既知の制約
+
+- ダブルクリック時のアプリ起動は登録されるが、v1.0.5 で `.daiw` の **保存/読込 UI 経路**
+  （`save_project` / `load_project` を呼ぶ箇所）が削除済みのため、アプリは起動するが
+  ファイルは読み込まれない。**アイコン表示が目的で、CLI 引数からの自動読み込みは未対応**。
+- 既存インストールユーザーは、本バージョンのインストーラを実行するまでアイコンが反映されない
+  （関連付け書き込みは NSIS インストーラのみが行うため）。
+
+### バージョン同期
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を **`1.5.3`** に更新。
+
+> **このバージョンの構造変更まとめ**:
+> - 旧: `.daiw` ファイルは Windows 上で拡張子未登録（汎用白アイコン）で表示され、台割マネージャー
+>   との視覚的紐付けがなかった → 新: NSIS 経由でインストール時に拡張子＋専用アイコンを Windows
+>   レジストリに登録、Explorer 上で `logo/daidori_project_icon.png` ベースのアイコンが表示される

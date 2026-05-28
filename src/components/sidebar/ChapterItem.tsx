@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Chapter, PageType, CHAPTER_TYPE_LABELS, CHAPTER_TYPE_COLORS } from '../../types';
-import { FileIcon, FolderIcon, TrashIcon, PlusCircleIcon, ReplaceIcon, CopyIcon, PencilIcon, MoreIcon } from '../../icons';
+import { FileIcon, FolderIcon, TrashIcon, PlusCircleIcon, ReplaceIcon, CopyIcon, PencilIcon, MoreIcon, RefreshIcon } from '../../icons';
 import { SIDEBAR_PREFIX } from '../../constants/dnd';
 import { SortablePageItem } from './SortablePageItem';
 
@@ -24,6 +24,7 @@ export function ChapterItem({
   onAddFiles,
   onAddFolder,
   onReplacePages,
+  onRefreshChapterLinks,
   onAddSpecialPage,
   onInsertFile,
   onSelectFile,
@@ -44,6 +45,7 @@ export function ChapterItem({
   onAddFiles: () => void;
   onAddFolder: () => void;
   onReplacePages: () => void;
+  onRefreshChapterLinks: () => void;
   onAddSpecialPage: (pageType: PageType, afterPageId?: string) => void;
   onInsertFile: (afterPageId: string) => void;
   onSelectFile: (pageId: string) => void;
@@ -282,6 +284,20 @@ export function ChapterItem({
                 >
                   <PencilIcon size={14} /> リネーム
                 </button>
+                {chapter.pages.some((p) => p.pageType === 'file') && (
+                  <button
+                    role="menuitem"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRefreshChapterLinks();
+                      cancelClose();
+                      setShowActionsMenu(false);
+                    }}
+                    title="チャプター内の全ページについて、同じパスのファイルを再読込してメタデータ・サムネイルを更新"
+                  >
+                    <RefreshIcon size={14} /> リンクを一括更新
+                  </button>
+                )}
                 {(chapter.type === 'cover' || chapter.type === 'chapter' || chapter.type === 'intermission' || chapter.type === 'ad' || chapter.type === 'title' || chapter.type === 'toc') && (
                   <button
                     role="menuitem"
@@ -414,8 +430,9 @@ export function ChapterItem({
                         onAddFiles();
                         setShowAddMenu(false);
                       }}
+                      title="画像ファイル (JPG/PNG/PSD/TIFF) または PDF を選択"
                     >
-                      <FileIcon size={14} /> ファイルを選択
+                      <FileIcon size={14} /> ファイル / PDF を選択
                     </button>
                     <button
                       onClick={(e) => {
@@ -423,6 +440,7 @@ export function ChapterItem({
                         onAddFolder();
                         setShowAddMenu(false);
                       }}
+                      title="フォルダ内の画像ファイルを一括追加（PDFはフォルダピッカーでは選べません）"
                     >
                       <FolderIcon size={14} /> フォルダを選択
                     </button>

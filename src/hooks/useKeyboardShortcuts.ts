@@ -23,6 +23,9 @@ interface UseKeyboardShortcutsOptions {
   selectPage: (id: string | null) => void;
   handleDeleteChapter: (chapterId: string) => void;
   handleNewProject: () => void;
+  handleOpenProject: () => void;
+  handleSaveProject: () => void;
+  handleSaveProjectAs: () => void;
   setIsViewerMode: (value: boolean | ((prev: boolean) => boolean)) => void;
 }
 
@@ -43,6 +46,9 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
     selectPage,
     handleDeleteChapter,
     handleNewProject,
+    handleOpenProject,
+    handleSaveProject,
+    handleSaveProjectAs,
     setIsViewerMode,
   } = options;
 
@@ -77,6 +83,24 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
       if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
         e.preventDefault();
         handleNewProject();
+        return;
+      }
+
+      // Ctrl+O: プロジェクトを開く
+      if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
+        e.preventDefault();
+        handleOpenProject();
+        return;
+      }
+
+      // Ctrl+S / Ctrl+Shift+S: プロジェクトを保存
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          handleSaveProjectAs();
+        } else {
+          handleSaveProject();
+        }
         return;
       }
 
@@ -162,6 +186,9 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
     selectPage,
     handleDeleteChapter,
     handleNewProject,
+    handleOpenProject,
+    handleSaveProject,
+    handleSaveProjectAs,
     setIsViewerMode,
   ]);
 }

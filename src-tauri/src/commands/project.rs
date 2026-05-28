@@ -347,9 +347,15 @@ fn check_one_page(page: &PageCheckInput) -> PageCheckResult {
 
     // 2. 更新日時確認
     let mut status = "ok".to_string();
-    if let Some(expected) = page.modified_time {
-        match fs::metadata(path) {
-            Ok(metadata) => {
+    match fs::metadata(path) {
+        Ok(metadata) => {
+            if let Some(expected_size) = page.file_size {
+                if metadata.len() != expected_size {
+                    status = "modified".to_string();
+                }
+            }
+
+            if let Some(expected) = page.modified_time {
                 let current = metadata
                     .modified()
                     .ok()
@@ -360,16 +366,16 @@ fn check_one_page(page: &PageCheckInput) -> PageCheckResult {
                     status = "modified".to_string();
                 }
             }
-            Err(_) => {
-                return PageCheckResult {
-                    page_id: page.page_id.clone(),
-                    status: "missing".to_string(),
-                    width: None,
-                    height: None,
-                    color_mode: None,
-                    dpi: None,
-                };
-            }
+        }
+        Err(_) => {
+            return PageCheckResult {
+                page_id: page.page_id.clone(),
+                status: "missing".to_string(),
+                width: None,
+                height: None,
+                color_mode: None,
+                dpi: None,
+            };
         }
     }
 

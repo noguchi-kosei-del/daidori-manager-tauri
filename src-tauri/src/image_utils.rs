@@ -24,12 +24,15 @@ pub fn validate_dimensions(width: u32, height: u32) -> Result<(), String> {
 }
 
 // ファイルタイプを取得
+// "pdf" はフロント側で rasterize_pdf を介して JPEG 群へ展開するためのマーカー。
+// Page.fileType の TypeScript union には含めない（展開前に消費される）。
 pub fn get_file_type(ext: &str) -> Option<&'static str> {
     match ext.to_lowercase().as_str() {
         "jpg" | "jpeg" => Some("jpg"),
         "png" => Some("png"),
         "psd" => Some("psd"),
         "tif" | "tiff" => Some("tif"),
+        "pdf" => Some("pdf"),
         _ => None,
     }
 }

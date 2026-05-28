@@ -2,7 +2,7 @@
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import { desktopDir, join } from '@tauri-apps/api/path';
-import { open, ask } from '@tauri-apps/plugin-dialog';
+import { open, ask, save } from '@tauri-apps/plugin-dialog';
 import { useTauriFileDrop } from './hooks/useTauriFileDrop';
 import {
   DndContext,
@@ -21,16 +21,21 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useKeyboardShortcuts, useDragHandlers, useExport, resolveBleedRegion, buildProcessOptions, queueThumbnail, useAutoUpdate, scheduleStartupCheck, useModalAnimation } from './hooks';
 import { getVersion } from '@tauri-apps/api/app';
 import { describePhysicalSize, findPaperSize, pixelsToMm } from './utils/paperSize';
+import { expandPdfFiles } from './utils/pdf';
 import {
   Chapter,
   ChapterType,
   CHAPTER_TYPE_LABELS,
   CHAPTER_TYPE_COLORS,
   Page,
+  PageType,
+  FileType,
   FileValidationStatus,
+  DaidoriProjectFile,
 } from './types';
 import {
   FolderIcon,
+  FileIcon,
   PlusIcon,
   PlusCircleIcon,
   SunIcon,
@@ -121,6 +126,249 @@ const getChapterDisplayTitle = (
   };
 };
 
+type RustSavedFileReference = {
+  absolute_path: string;
+  relative_path: string;
+  file_name: string;
+  file_type: string;
+  file_size: number;
+  modified_time: number;
+};
+
+type RustSavedPage = {
+  id: string;
+  page_type: PageType;
+  file?: RustSavedFileReference;
+  label?: string;
+};
+
+type RustSavedChapter = {
+  id: string;
+  name: string;
+  subtitle?: string;
+  type: ChapterType;
+  pages: RustSavedPage[];
+  folder_path?: string;
+};
+
+type RustSavedUiState = {
+  selected_chapter_id: string | null;
+  selected_page_id: string | null;
+  view_mode: 'selection' | 'all';
+  thumbnail_size: 'small' | 'medium' | 'large';
+  collapsed_chapter_ids: string[];
+};
+
+type RustProjectFile = {
+  version: '1.0';
+  name: string;
+  created_at: string;
+  modified_at: string;
+  base_path: string;
+  chapters: RustSavedChapter[];
+  ui_state?: RustSavedUiState;
+};
+
+const PROJECT_FILE_EXTENSION = 'daiw';
+const DEFAULT_PROJECT_NAME = '新規プロジェクト';
+
+const normalizeForPathCompare = (path: string): string =>
+  path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+
+const getParentPath = (filePath: string): string => {
+  const index = Math.max(filePath.lastIndexOf('\\'), filePath.lastIndexOf('/'));
+  return index >= 0 ? filePath.slice(0, index) : '';
+};
+
+const ensureProjectExtension = (filePath: string): string =>
+  filePath.toLowerCase().endsWith(`.${PROJECT_FILE_EXTENSION}`)
+    ? filePath
+    : `${filePath}.${PROJECT_FILE_EXTENSION}`;
+
+const sanitizeFileName = (name: string): string =>
+  (name.trim() || DEFAULT_PROJECT_NAME).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+
+const buildRelativePath = (absolutePath: string, basePath: string): string => {
+  const normalizedAbsolute = normalizeForPathCompare(absolutePath);
+  const normalizedBase = normalizeForPathCompare(basePath);
+  const absoluteWithForwardSlashes = absolutePath.replace(/\\/g, '/');
+  const baseWithForwardSlashes = basePath.replace(/\\/g, '/').replace(/\/+$/, '');
+
+  if (normalizedAbsolute === normalizedBase) {
+    return absoluteWithForwardSlashes.split('/').pop() ?? absolutePath;
+  }
+  if (normalizedAbsolute.startsWith(`${normalizedBase}/`)) {
+    return absoluteWithForwardSlashes.slice(baseWithForwardSlashes.length + 1);
+  }
+  return absolutePath;
+};
+
+const resolveSavedPath = (absolutePath: string, relativePath: string, basePath: string): string => {
+  if (absolutePath) return absolutePath;
+  if (!relativePath) return '';
+  if (/^[a-zA-Z]:[\\/]/.test(relativePath) || relativePath.startsWith('\\\\') || relativePath.startsWith('/')) {
+    return relativePath;
+  }
+  const separator = basePath.includes('\\') ? '\\' : '/';
+  return `${basePath.replace(/[\\/]+$/, '')}${separator}${relativePath}`;
+};
+
+const readProjectField = <T,>(value: Record<string, unknown>, camelKey: string, snakeKey: string): T | undefined =>
+  (value[camelKey] ?? value[snakeKey]) as T | undefined;
+
+const createProjectStateSnapshot = (
+  name: string,
+  chapters: Chapter[],
+  thumbnailSize: 'small' | 'medium' | 'large'
+): string => {
+  const persistentChapters = chapters.map((chapter) => ({
+    id: chapter.id,
+    name: chapter.name,
+    subtitle: chapter.subtitle,
+    type: chapter.type,
+    collapsed: chapter.collapsed,
+    folderPath: chapter.folderPath,
+    pages: chapter.pages.map((page) => ({
+      id: page.id,
+      pageType: page.pageType,
+      filePath: page.filePath,
+      fileName: page.fileName,
+      fileType: page.fileType,
+      fileSize: page.fileSize,
+      modifiedTime: page.modifiedTime,
+      label: page.label,
+    })),
+  }));
+
+  return JSON.stringify({
+    name,
+    thumbnailSize,
+    chapters: persistentChapters,
+  });
+};
+
+const createEmptyProjectSnapshot = (): string =>
+  createProjectStateSnapshot(DEFAULT_PROJECT_NAME, [], 'medium');
+
+const buildProjectFile = (
+  filePath: string,
+  name: string,
+  createdAt: string,
+  chapters: Chapter[],
+  selectedChapterId: string | null,
+  selectedPageId: string | null,
+  thumbnailSize: 'small' | 'medium' | 'large'
+): RustProjectFile => {
+  const basePath = getParentPath(filePath);
+
+  return {
+    version: '1.0',
+    name: name || DEFAULT_PROJECT_NAME,
+    created_at: createdAt,
+    modified_at: new Date().toISOString(),
+    base_path: basePath,
+    chapters: chapters.map((chapter) => ({
+      id: chapter.id,
+      name: chapter.name,
+      subtitle: chapter.subtitle,
+      type: chapter.type,
+      folder_path: chapter.folderPath,
+      pages: chapter.pages.map((page) => ({
+        id: page.id,
+        page_type: page.pageType,
+        label: page.label,
+        file: page.filePath
+          ? {
+              absolute_path: page.filePath,
+              relative_path: buildRelativePath(page.filePath, basePath),
+              file_name: page.fileName ?? page.filePath.split(/[\\/]/).pop() ?? '',
+              file_type: page.fileType ?? 'jpg',
+              file_size: page.fileSize ?? 0,
+              modified_time: page.modifiedTime ?? 0,
+            }
+          : undefined,
+      })),
+    })),
+    ui_state: {
+      selected_chapter_id: selectedChapterId,
+      selected_page_id: selectedPageId,
+      view_mode: 'all',
+      thumbnail_size: thumbnailSize,
+      collapsed_chapter_ids: chapters.filter((chapter) => chapter.collapsed).map((chapter) => chapter.id),
+    },
+  };
+};
+
+const restoreProjectFromFile = (project: RustProjectFile | DaidoriProjectFile): {
+  name: string;
+  createdAt: string;
+  basePath: string;
+  chapters: Chapter[];
+  selectedChapterId: string | null;
+  selectedPageId: string | null;
+  thumbnailSize: 'small' | 'medium' | 'large';
+  collapsedChapterIds: string[];
+} => {
+  const rawProject = project as unknown as Record<string, unknown>;
+  const name = readProjectField<string>(rawProject, 'name', 'name') ?? DEFAULT_PROJECT_NAME;
+  const createdAt = readProjectField<string>(rawProject, 'createdAt', 'created_at') ?? new Date().toISOString();
+  const basePath = readProjectField<string>(rawProject, 'basePath', 'base_path') ?? '';
+  const rawUiState = (readProjectField<Record<string, unknown>>(rawProject, 'uiState', 'ui_state') ?? {}) as Record<string, unknown>;
+  const collapsedChapterIds =
+    readProjectField<string[]>(rawUiState, 'collapsedChapterIds', 'collapsed_chapter_ids') ?? [];
+  const rawChapters = (readProjectField<Record<string, unknown>[]>(rawProject, 'chapters', 'chapters') ?? []);
+
+  const chapters = rawChapters.map((rawChapter) => {
+    const rawPages = (readProjectField<Record<string, unknown>[]>(rawChapter, 'pages', 'pages') ?? []);
+    const chapterId = readProjectField<string>(rawChapter, 'id', 'id') ?? crypto.randomUUID();
+    const chapter: Chapter = {
+      id: chapterId,
+      name: readProjectField<string>(rawChapter, 'name', 'name') ?? 'Chapter',
+      subtitle: readProjectField<string>(rawChapter, 'subtitle', 'subtitle'),
+      type: (readProjectField<ChapterType>(rawChapter, 'type', 'type') ?? 'chapter') as ChapterType,
+      collapsed: collapsedChapterIds.includes(chapterId),
+      folderPath: readProjectField<string>(rawChapter, 'folderPath', 'folder_path'),
+      pages: rawPages.map((rawPage) => {
+        const rawFile = readProjectField<Record<string, unknown>>(rawPage, 'file', 'file');
+        const filePath = rawFile
+          ? resolveSavedPath(
+              readProjectField<string>(rawFile, 'absolutePath', 'absolute_path') ?? '',
+              readProjectField<string>(rawFile, 'relativePath', 'relative_path') ?? '',
+              basePath
+            )
+          : undefined;
+
+        const page: Page = {
+          id: readProjectField<string>(rawPage, 'id', 'id') ?? crypto.randomUUID(),
+          pageType: (readProjectField<PageType>(rawPage, 'pageType', 'page_type') ?? 'file') as PageType,
+          label: readProjectField<string>(rawPage, 'label', 'label'),
+          filePath,
+          fileName: rawFile ? readProjectField<string>(rawFile, 'fileName', 'file_name') : undefined,
+          fileType: rawFile ? (readProjectField<FileType>(rawFile, 'fileType', 'file_type') as FileType | undefined) : undefined,
+          fileSize: rawFile ? readProjectField<number>(rawFile, 'fileSize', 'file_size') : undefined,
+          modifiedTime: rawFile ? readProjectField<number>(rawFile, 'modifiedTime', 'modified_time') : undefined,
+          thumbnailStatus: filePath ? 'pending' : undefined,
+        };
+        return page;
+      }),
+    };
+    return chapter;
+  });
+
+  const savedThumbnailSize = readProjectField<'small' | 'medium' | 'large'>(rawUiState, 'thumbnailSize', 'thumbnail_size');
+
+  return {
+    name,
+    createdAt,
+    basePath,
+    chapters,
+    selectedChapterId: readProjectField<string | null>(rawUiState, 'selectedChapterId', 'selected_chapter_id') ?? null,
+    selectedPageId: readProjectField<string | null>(rawUiState, 'selectedPageId', 'selected_page_id') ?? null,
+    thumbnailSize: savedThumbnailSize ?? 'medium',
+    collapsedChapterIds,
+  };
+};
+
 type ImageSizeGroupInfo = {
   key: string;
   paperLabel: string;
@@ -195,6 +443,7 @@ function App() {
     insertChaptersFromFolders,
     addSpecialPage,
     setPageFile,
+    refreshPagesLinks,
     removePage,
     reorderPages,
     movePage,
@@ -326,6 +575,22 @@ function App() {
     chapterName?: string;
     pageCount?: number;
   }>({ show: false, type: 'chapter' });
+  const [currentProjectPath, setCurrentProjectPath] = useState<string | null>(null);
+  const [projectCreatedAt, setProjectCreatedAt] = useState(() => new Date().toISOString());
+  const [lastSavedSnapshot, setLastSavedSnapshot] = useState<string | null>(null);
+  const projectStateSnapshot = useMemo(
+    () => createProjectStateSnapshot(projectName, chapters, thumbnailSize),
+    [projectName, chapters, thumbnailSize]
+  );
+  const isProjectDirty = lastSavedSnapshot === null
+    ? chapters.length > 0
+    : projectStateSnapshot !== lastSavedSnapshot;
+
+  useEffect(() => {
+    if (lastSavedSnapshot === null) {
+      setLastSavedSnapshot(projectStateSnapshot);
+    }
+  }, [lastSavedSnapshot, projectStateSnapshot]);
 
   // ウィンドウ終了確認ダイアログ
   const [showCloseConfirmDialog, setShowCloseConfirmDialog] = useState(false);
@@ -341,11 +606,7 @@ function App() {
       try {
         const win = getCurrentWindow();
         const fn = await win.onCloseRequested((event) => {
-          // ファイル（pageType='file'）が読み込まれているかチェック
-          const hasLoadedFiles = useStore
-            .getState()
-            .chapters.some((c) => c.pages.some((p) => p.pageType === 'file'));
-          if (hasLoadedFiles) {
+          if (isProjectDirty) {
             event.preventDefault();
             setShowCloseConfirmDialog(true);
           }
@@ -363,7 +624,7 @@ function App() {
       mounted = false;
       unlisten?.();
     };
-  }, []);
+  }, [isProjectDirty]);
 
   const handleConfirmClose = async () => {
     setShowCloseConfirmDialog(false);
@@ -570,6 +831,18 @@ function App() {
     [selectPage]
   );
 
+  // PDF展開時のエラーがあればまとめてダイアログ表示
+  const notifyPdfExpansionErrors = (errors: { pdfName: string; message: string }[]) => {
+    if (errors.length === 0) return;
+    setExportResultDialog({
+      show: true,
+      title: 'PDFの読み込みに失敗',
+      message: `${errors.length} 件のPDFを読み込めませんでした。`,
+      details: errors.map((e) => `${e.pdfName}: ${e.message}`).join('\n'),
+      isError: true,
+    });
+  };
+
   // CMYKチェック: エクスポート/EPUB生成前のガード。CMYKがあれば警告ダイアログを出してブロックする。
   // 戻り値: true=ブロック(中断), false=続行可
   const blockIfCmyk = (action: 'export' | 'epub') => {
@@ -754,6 +1027,144 @@ function App() {
     closeExportResultDialog,
   } = useExport(chapters, allPages);
 
+  const showProjectResult = useCallback((title: string, message: string, isError = false) => {
+    setExportResultDialog({
+      show: true,
+      title,
+      message,
+      isError,
+    });
+  }, [setExportResultDialog]);
+
+  const confirmDiscardUnsavedChanges = useCallback(async () => {
+    if (!isProjectDirty) return true;
+    return await ask(
+      '未保存の変更があります。保存せずに続行しますか？',
+      { title: '未保存の変更', kind: 'warning' }
+    );
+  }, [isProjectDirty]);
+
+  const saveProjectToPath = useCallback(async (targetPath: string): Promise<boolean> => {
+    const filePath = ensureProjectExtension(targetPath);
+    const projectFile = buildProjectFile(
+      filePath,
+      projectName,
+      projectCreatedAt,
+      chapters,
+      selectedChapterId,
+      selectedPageId,
+      thumbnailSize
+    );
+
+    try {
+      await invoke('save_project', { filePath, project: projectFile });
+      await invoke('add_recent_file', { path: filePath, name: projectFile.name }).catch((error) => {
+        console.warn('最近使ったファイルへの追加に失敗:', error);
+      });
+      setCurrentProjectPath(filePath);
+      setProjectCreatedAt(projectFile.created_at);
+      setLastSavedSnapshot(projectStateSnapshot);
+      showProjectResult('プロジェクトを保存しました', `${filePath} に保存しました。`);
+      return true;
+    } catch (error) {
+      const message = typeof error === 'string' ? error : error instanceof Error ? error.message : '保存に失敗しました。';
+      showProjectResult('プロジェクト保存に失敗', message, true);
+      return false;
+    }
+  }, [
+    chapters,
+    projectCreatedAt,
+    projectName,
+    projectStateSnapshot,
+    selectedChapterId,
+    selectedPageId,
+    showProjectResult,
+    thumbnailSize,
+  ]);
+
+  const handleSaveProjectAs = useCallback(async (): Promise<boolean> => {
+    const fallbackDir = await desktopDir();
+    const defaultPath = currentProjectPath ?? await join(
+      fallbackDir,
+      `${sanitizeFileName(projectName || DEFAULT_PROJECT_NAME)}.${PROJECT_FILE_EXTENSION}`
+    );
+    const selected = await save({
+      title: 'プロジェクトを保存',
+      defaultPath,
+      filters: [
+        {
+          name: '台割マネージャー プロジェクト',
+          extensions: [PROJECT_FILE_EXTENSION],
+        },
+      ],
+    });
+
+    if (!selected) return false;
+    return saveProjectToPath(selected);
+  }, [currentProjectPath, projectName, saveProjectToPath]);
+
+  const handleSaveProject = useCallback(async (): Promise<boolean> => {
+    if (currentProjectPath) {
+      return saveProjectToPath(currentProjectPath);
+    }
+    return handleSaveProjectAs();
+  }, [currentProjectPath, handleSaveProjectAs, saveProjectToPath]);
+
+  const loadProjectFromPath = useCallback(async (filePath: string): Promise<boolean> => {
+    try {
+      const loadedProject = await invoke<RustProjectFile>('load_project', { filePath });
+      const restored = restoreProjectFromFile(loadedProject);
+      useStore.setState({
+        chapters: restored.chapters,
+        projectName: restored.name,
+        history: [],
+        future: [],
+        selectedChapterId: restored.selectedChapterId,
+        selectedPageId: restored.selectedPageId,
+        selectedPageIds: restored.selectedPageId ? [restored.selectedPageId] : [],
+        thumbnailSize: restored.thumbnailSize,
+        viewMode: 'all',
+      });
+      setPreviewCollapsedChapters(new Set(restored.collapsedChapterIds));
+      setCurrentProjectPath(filePath);
+      setProjectCreatedAt(restored.createdAt);
+      setLastSavedSnapshot(createProjectStateSnapshot(restored.name, restored.chapters, restored.thumbnailSize));
+      await invoke('add_recent_file', { path: filePath, name: restored.name }).catch((error) => {
+        console.warn('最近使ったファイルへの追加に失敗:', error);
+      });
+      return true;
+    } catch (error) {
+      const message = typeof error === 'string' ? error : error instanceof Error ? error.message : '読み込みに失敗しました。';
+      showProjectResult('プロジェクト読込に失敗', message, true);
+      return false;
+    }
+  }, [showProjectResult]);
+
+  const handleOpenProject = useCallback(async (): Promise<boolean> => {
+    if (!(await confirmDiscardUnsavedChanges())) return false;
+    const selected = await open({
+      title: 'プロジェクトを開く',
+      multiple: false,
+      directory: false,
+      filters: [
+        {
+          name: '台割マネージャー プロジェクト',
+          extensions: [PROJECT_FILE_EXTENSION],
+        },
+      ],
+    });
+
+    if (!selected || typeof selected !== 'string') return false;
+    return loadProjectFromPath(selected);
+  }, [confirmDiscardUnsavedChanges, loadProjectFromPath]);
+
+  const handleSaveAndClose = useCallback(async () => {
+    const saved = await handleSaveProject();
+    if (saved) {
+      await handleConfirmClose();
+    }
+  }, [handleSaveProject]);
+
   const exportResultAnim = useModalAnimation(exportResultDialog.show);
   const [tachimiPdfProgress, setTachimiPdfProgress] = useState<{
     phase: string;
@@ -784,6 +1195,53 @@ function App() {
     return () => {
       mounted = false;
       unlisten?.();
+    };
+  }, []);
+
+  // PDFラスタライズ進捗
+  const [pdfRasterizeProgress, setPdfRasterizeProgress] = useState<{
+    phase: string;
+    current: number;
+    total: number;
+    pdfName: string;
+  } | null>(null);
+  const pdfProgressClearRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let mounted = true;
+    listen<{
+      phase: string;
+      current: number;
+      total: number;
+      pdfName: string;
+    }>('pdf-rasterize-progress', (event) => {
+      if (!mounted) return;
+      if (pdfProgressClearRef.current !== null) {
+        window.clearTimeout(pdfProgressClearRef.current);
+        pdfProgressClearRef.current = null;
+      }
+      setPdfRasterizeProgress(event.payload);
+      if (event.payload.phase === 'done') {
+        // 800ms 後に自動的に閉じる
+        pdfProgressClearRef.current = window.setTimeout(() => {
+          setPdfRasterizeProgress(null);
+          pdfProgressClearRef.current = null;
+        }, 800);
+      }
+    }).then((fn) => {
+      if (mounted) {
+        unlisten = fn;
+      } else {
+        fn();
+      }
+    }).catch((err) => console.warn('[App] PDF rasterize progress listener failed:', err));
+    return () => {
+      mounted = false;
+      unlisten?.();
+      if (pdfProgressClearRef.current !== null) {
+        window.clearTimeout(pdfProgressClearRef.current);
+      }
     };
   }, []);
 
@@ -939,7 +1397,7 @@ function App() {
       </button>
       <button
         type="button"
-        className="preview-fab preview-fab-primary preview-fab-toolbar"
+        className="preview-fab preview-fab-secondary preview-fab-toolbar"
         onClick={() => { if (!blockIfCmyk('export')) openExportModal(); }}
         disabled={allPages.length === 0}
         title="JPEG/TIF生成"
@@ -951,8 +1409,14 @@ function App() {
   );
 
   // 新規プロジェクト
-  const handleNewProject = () => {
+  const handleNewProject = async () => {
+    if (!(await confirmDiscardUnsavedChanges())) return;
     resetProject();
+    const createdAt = new Date().toISOString();
+    setCurrentProjectPath(null);
+    setProjectCreatedAt(createdAt);
+    setPreviewCollapsedChapters(new Set());
+    setLastSavedSnapshot(createEmptyProjectSnapshot());
   };
 
 
@@ -1178,6 +1642,9 @@ function App() {
     selectPage,
     handleDeleteChapter,
     handleNewProject,
+    handleOpenProject,
+    handleSaveProject,
+    handleSaveProjectAs,
     setIsViewerMode,
   });
 
@@ -1213,8 +1680,8 @@ function App() {
         directory: false,
         filters: [
           {
-            name: '画像ファイル',
-            extensions: ['jpg', 'jpeg', 'png', 'psd', 'tif', 'tiff'],
+            name: '画像・PDFファイル',
+            extensions: ['jpg', 'jpeg', 'png', 'psd', 'tif', 'tiff', 'pdf'],
           },
         ],
       });
@@ -1242,7 +1709,11 @@ function App() {
         );
 
         if (selectedFiles.length > 0) {
-          addPagesToChapter(chapterId, selectedFiles);
+          const expanded = await expandPdfFiles(selectedFiles);
+          notifyPdfExpansionErrors(expanded.errors);
+          if (expanded.files.length > 0) {
+            addPagesToChapter(chapterId, expanded.files);
+          }
         }
       }
     } catch (error) {
@@ -1266,22 +1737,26 @@ function App() {
 
       if (folderPaths.length === 0) return;
 
-      // フォルダごとに内容を取得
+      // フォルダごとに内容を取得（PDF はラスタライズ展開）
       const folderEntries: SplitFolderEntry[] = [];
+      const allErrors: { pdfName: string; message: string }[] = [];
       for (const folderPath of folderPaths) {
         try {
           const files: FileInfo[] = await invoke('get_folder_contents', { folderPath });
-          if (files.length > 0) {
+          const expanded = await expandPdfFiles(files);
+          if (expanded.errors.length > 0) allErrors.push(...expanded.errors);
+          if (expanded.files.length > 0) {
             folderEntries.push({
               folderPath,
               folderName: getFolderName(folderPath),
-              files,
+              files: expanded.files,
             });
           }
         } catch (e) {
           console.error('フォルダ読み取りエラー:', folderPath, e);
         }
       }
+      notifyPdfExpansionErrors(allErrors);
 
       if (folderEntries.length === 0) return;
 
@@ -1324,8 +1799,8 @@ function App() {
         directory: false,
         filters: [
           {
-            name: '画像ファイル',
-            extensions: ['jpg', 'jpeg', 'png', 'psd', 'tif', 'tiff'],
+            name: '画像・PDFファイル',
+            extensions: ['jpg', 'jpeg', 'png', 'psd', 'tif', 'tiff', 'pdf'],
           },
         ],
       });
@@ -1339,7 +1814,11 @@ function App() {
       if (!chapter) return;
       const afterIndex = chapter.pages.findIndex((p) => p.id === afterPageId);
       const insertIndex = afterIndex >= 0 ? afterIndex + 1 : chapter.pages.length;
-      addPagesToChapterAt(chapterId, [target], insertIndex);
+      const expanded = await expandPdfFiles([target]);
+      notifyPdfExpansionErrors(expanded.errors);
+      if (expanded.files.length > 0) {
+        addPagesToChapterAt(chapterId, expanded.files, insertIndex);
+      }
     } catch (error) {
       console.error('ファイル挿入エラー:', error);
     }
@@ -1363,8 +1842,10 @@ function App() {
         const files: FileInfo[] = await invoke('get_folder_contents', {
           folderPath: selected,
         });
-        if (files.length > 0) {
-          replacePagesInChapter(chapterId, files);
+        const expanded = await expandPdfFiles(files);
+        notifyPdfExpansionErrors(expanded.errors);
+        if (expanded.files.length > 0) {
+          replacePagesInChapter(chapterId, expanded.files);
         }
       }
     } catch (error) {
@@ -1381,8 +1862,8 @@ function App() {
         directory: false,
         filters: [
           {
-            name: '画像ファイル',
-            extensions: ['jpg', 'jpeg', 'png', 'psd', 'tif', 'tiff'],
+            name: '画像・PDFファイル',
+            extensions: ['jpg', 'jpeg', 'png', 'psd', 'tif', 'tiff', 'pdf'],
           },
         ],
       });
@@ -1400,7 +1881,13 @@ function App() {
         });
         const fileInfo = files.find((f) => f.path === selected);
         if (fileInfo) {
-          setPageFile(pageId, fileInfo);
+          // 特殊ページは1ファイルのみ。PDFが選ばれた場合は1ページ目のみ採用
+          const expanded = await expandPdfFiles([fileInfo]);
+          notifyPdfExpansionErrors(expanded.errors);
+          const firstFile = expanded.files[0];
+          if (firstFile) {
+            setPageFile(pageId, firstFile);
+          }
         }
       }
     } catch (error) {
@@ -1460,6 +1947,75 @@ function App() {
     const version = result.checkerVersion ? ` / v${result.checkerVersion}` : '';
     return `${status}${version}\n致命的エラー ${result.fatalCount}件 / エラー ${result.errorCount}件 / 警告 ${result.warningCount}件 / 仕様上の注意 ${result.usageCount}件 / 情報 ${result.infoCount}件`;
   };
+
+  // チャプター内の全ファイルページのリンクを一括更新
+  const handleRefreshChapterLinks = useCallback(async (chapterId: string) => {
+    const chapter = chapters.find((c) => c.id === chapterId);
+    if (!chapter) return;
+    const filePages = chapter.pages.filter((p) => p.pageType === 'file' && !!p.filePath);
+    if (filePages.length === 0) {
+      setExportResultDialog({
+        show: true,
+        title: 'リンクを更新',
+        message: '更新対象のファイルページがありません。',
+        isError: true,
+      });
+      return;
+    }
+    // フォルダ単位でグループ化して get_folder_contents の呼び出し回数を減らす
+    const folderGroups = new Map<string, typeof filePages>();
+    for (const page of filePages) {
+      const folder = page.filePath!.replace(/[^\\/]+$/, '');
+      if (!folder) continue;
+      const group = folderGroups.get(folder);
+      if (group) {
+        group.push(page);
+      } else {
+        folderGroups.set(folder, [page]);
+      }
+    }
+    const updates: { pageId: string; file: FileInfo }[] = [];
+    const missing: string[] = [];
+    try {
+      for (const [folder, pagesInFolder] of folderGroups) {
+        const files: FileInfo[] = await invoke('get_folder_contents', { folderPath: folder });
+        const byPath = new Map(files.map((f) => [f.path, f]));
+        for (const page of pagesInFolder) {
+          const f = byPath.get(page.filePath!);
+          if (f) {
+            updates.push({ pageId: page.id, file: f });
+          } else {
+            missing.push(page.fileName || page.filePath!);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('リンク更新エラー:', error);
+      setExportResultDialog({
+        show: true,
+        title: 'リンク更新失敗',
+        message: 'フォルダの読み込み中にエラーが発生しました。',
+        details: String(error),
+        isError: true,
+      });
+      return;
+    }
+    if (updates.length > 0) {
+      refreshPagesLinks(updates);
+    }
+    const missingDetails = missing.length > 0
+      ? missing.slice(0, 20).join('\n') + (missing.length > 20 ? `\n…他${missing.length - 20}件` : '')
+      : undefined;
+    setExportResultDialog({
+      show: true,
+      title: 'リンクを更新',
+      message:
+        `「${chapter.name}」の${updates.length}件のページのリンクを更新しました。` +
+        (missing.length > 0 ? `\n${missing.length}件は元のファイルが見つかりませんでした。` : ''),
+      details: missingDetails,
+      isError: updates.length === 0,
+    });
+  }, [chapters, refreshPagesLinks, setExportResultDialog]);
 
   // EPUB生成ハンドラ
   const handleEpubGenerate = async (metadata: EpubMetadata, outputPath: string) => {
@@ -1988,13 +2544,16 @@ function App() {
     console.log('Processing drop at', now, 'mode:', mode, 'targetPageId:', targetPageId, 'targetChapterId:', targetChapterId, 'insertPos:', insertPos);
 
     try {
-      // 画像ファイルとフォルダ候補に分類
+      // 画像ファイル / PDF / フォルダ候補に分類
       const imageExtensions = ['jpg', 'jpeg', 'png', 'psd', 'tif', 'tiff'];
       const imagePaths: string[] = [];
+      const pdfPaths: string[] = [];
       const folderCandidates: string[] = [];
       for (const p of paths) {
         const ext = p.split('.').pop()?.toLowerCase();
-        if (ext && imageExtensions.includes(ext)) {
+        if (ext === 'pdf') {
+          pdfPaths.push(p);
+        } else if (ext && imageExtensions.includes(ext)) {
           imagePaths.push(p);
         } else {
           folderCandidates.push(p);
@@ -2003,6 +2562,7 @@ function App() {
 
       // フォルダ単位で取り込み内容をまとめる（後で分割ダイアログ判定にも利用）
       const folderEntries: SplitFolderEntry[] = [];
+      const pdfErrors: { pdfName: string; message: string }[] = [];
       // 個別ファイル: 親フォルダ単位でグルーピング
       const parentFolderSet = new Set<string>();
       for (const p of imagePaths) {
@@ -2025,21 +2585,44 @@ function App() {
         }
       }
 
-      // フォルダ候補: 直接 get_folder_contents を試行（成功したらフォルダごとにエントリ追加）
+      // 個別 PDF: それぞれを独立した folderEntry として追加（複数 PDF→分割ダイアログ）
+      for (const pdfPath of pdfPaths) {
+        const pdfName = pdfPath.split(/[\\/]/).pop() ?? pdfPath;
+        const stem = pdfName.replace(/\.pdf$/i, '');
+        const parentFolder = pdfPath.replace(/[^\\/]+$/, '');
+        const pdfEntry: FileInfo = {
+          path: pdfPath, name: pdfName, size: 0, modified_time: 0, file_type: 'pdf',
+        };
+        const expanded = await expandPdfFiles([pdfEntry]);
+        if (expanded.errors.length > 0) pdfErrors.push(...expanded.errors);
+        if (expanded.files.length > 0) {
+          folderEntries.push({
+            folderPath: parentFolder,
+            folderName: stem,
+            files: expanded.files,
+          });
+        }
+      }
+
+      // フォルダ候補: 直接 get_folder_contents を試行（成功したらフォルダごとにエントリ追加。PDF を含めば展開）
       for (const candidate of folderCandidates) {
         try {
           const files: FileInfo[] = await invoke('get_folder_contents', { folderPath: candidate });
-          if (files.length > 0) {
+          const expanded = await expandPdfFiles(files);
+          if (expanded.errors.length > 0) pdfErrors.push(...expanded.errors);
+          if (expanded.files.length > 0) {
             folderEntries.push({
               folderPath: candidate,
               folderName: getFolderName(candidate),
-              files,
+              files: expanded.files,
             });
           }
         } catch {
           // フォルダではない or 読み取り不可はスキップ
         }
       }
+
+      notifyPdfExpansionErrors(pdfErrors);
 
       const droppedFiles: FileInfo[] = folderEntries.flatMap(e => e.files);
 
@@ -2438,6 +3021,7 @@ function App() {
                         onAddFiles={() => handleAddPages(chapter.id)}
                         onAddFolder={() => handleAddFolder(chapter.id)}
                         onReplacePages={() => handleReplacePages(chapter.id)}
+                        onRefreshChapterLinks={() => handleRefreshChapterLinks(chapter.id)}
                         onAddSpecialPage={(pageType, afterPageId) => addSpecialPage(chapter.id, pageType, afterPageId)}
                         onInsertFile={(afterPageId) => handleInsertFile(chapter.id, afterPageId)}
                         onSelectFile={handleSelectFile}
@@ -2501,6 +3085,24 @@ function App() {
                     onClick={() => handleAddChapter('ad')}
                   >
                     +AD
+                  </button>
+                </div>
+                <div className="project-sidebar-actions">
+                  <button
+                    className="project-action-btn"
+                    onClick={() => void handleOpenProject()}
+                    title="プロジェクトを開く (Ctrl+O)"
+                  >
+                    <FolderIcon size={14} />
+                    <span>開く</span>
+                  </button>
+                  <button
+                    className={`project-action-btn ${isProjectDirty ? 'dirty' : ''}`}
+                    onClick={() => void handleSaveProject()}
+                    title={currentProjectPath ? `保存: ${currentProjectPath}` : 'プロジェクトを保存 (Ctrl+S)'}
+                  >
+                    <FileIcon size={14} />
+                    <span>{isProjectDirty ? '保存*' : '保存'}</span>
                   </button>
                 </div>
                 <div className="footer-stats">
@@ -3147,6 +3749,49 @@ function App() {
         </div>
       )}
 
+      {/* PDFラスタライズ進捗オーバーレイ */}
+      {pdfRasterizeProgress && (() => {
+        const total = pdfRasterizeProgress.total || 0;
+        const cur = pdfRasterizeProgress.current || 0;
+        const phase = pdfRasterizeProgress.phase;
+        const isFetchPhase = phase === 'fetching' || phase === 'fetched';
+        const isIndeterminate = phase === 'loading' || phase === 'fetching' || total === 0;
+        const percent = isIndeterminate ? 0 : Math.min(100, Math.round((cur / total) * 100));
+        const phaseLabel =
+          phase === 'fetching' ? 'pdfium.dll を G:\\共有ドライブ から取得中…'
+          : phase === 'fetched' ? 'pdfium.dll を配置しました'
+          : phase === 'loading' ? 'PDFを読み込んでいます…'
+          : phase === 'rendering' ? 'ページをレンダリング中'
+          : phase === 'encoding' ? 'JPEGに書き出し中'
+          : phase === 'done' ? '完了'
+          : phase;
+        const title = isFetchPhase
+          ? 'PDFエンジン (pdfium.dll) のセットアップ'
+          : `PDFを取り込み中: ${pdfRasterizeProgress.pdfName}`;
+        return (
+          <div className="modal-overlay epub-progress-overlay">
+            <div className="epub-progress-dialog">
+              <div className="epub-progress-title">{title}</div>
+              <div className="epub-progress-phase">{phaseLabel}</div>
+              <div className="epub-progress-bar-track">
+                <div
+                  className={`epub-progress-bar-fill ${isIndeterminate ? 'indeterminate' : ''}`}
+                  style={isIndeterminate ? undefined : { width: `${percent}%` }}
+                />
+              </div>
+              <div className="epub-progress-meta">
+                {!isIndeterminate && !isFetchPhase && (
+                  <span>{cur} / {total} ページ ({percent}%)</span>
+                )}
+                {isFetchPhase && (
+                  <span className="output-path">{pdfRasterizeProgress.pdfName}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* 削除確認ダイアログ */}
       {deleteConfirmAnim.shouldRender && (
         <div className={`modal-overlay ${deleteConfirmAnim.isClosing ? 'closing' : ''}`}>
@@ -3202,9 +3847,9 @@ function App() {
           >
             <h2>アプリを終了しますか？</h2>
             <p>
-              読み込まれているチャプターのデータは保存されません。
+              プロジェクトに未保存の変更があります。
               <br />
-              本当に終了してもよろしいですか？
+              保存してから終了できます。
             </p>
             <div className="modal-footer">
               <button
@@ -3214,10 +3859,16 @@ function App() {
                 キャンセル
               </button>
               <button
+                className="btn-primary"
+                onClick={() => void handleSaveAndClose()}
+              >
+                保存して終了
+              </button>
+              <button
                 className="btn-danger"
                 onClick={handleConfirmClose}
               >
-                終了する
+                保存せず終了
               </button>
             </div>
           </div>

@@ -25,6 +25,7 @@ use commands::jpeg_native::run_native_jpeg_convert;
 use commands::epub::{generate_epub, generate_book_uuid, get_image_dimensions, create_epub_metadata, get_default_viewport, read_psd_guides};
 use commands::epubcheck::validate_epub_with_epubcheck;
 use commands::tachimi::{detect_tachimi_exe, generate_tachimi_chapter_pdfs};
+use commands::pdf::rasterize_pdf;
 use thumbnail::generate_thumbnail;
 
 /// スプラッシュウィンドウを一定時間表示した後、閉じてメインウィンドウを表示する
@@ -110,6 +111,7 @@ pub fn run() {
             validate_epub_with_epubcheck,
             detect_tachimi_exe,
             generate_tachimi_chapter_pdfs,
+            rasterize_pdf,
         ])
         .run(tauri::generate_context!())
     {
