@@ -2251,53 +2251,69 @@ H2. **候補パスの優先順位**（5 候補に拡張）:
 
 ---
 
-## v1.5.3: `.daiw` プロジェクトファイルのアイコン設定
+## v1.5.3: `.daiw` ファイル関連付け（ビルド失敗・GitHub Release 未作成）
 
-`.daiw` 拡張子のファイル関連付けを Windows に登録し、Explorer 上で専用アイコン
-（`logo/daidori_project_icon.png` ベース）が表示されるようにした。Tauri 2 の
-NSIS バンドラの `bundle.fileAssociations` を利用してインストール時に
-`HKCR\.daiw` → `HKCR\DaiwariProject\DefaultIcon` のレジストリエントリを自動生成する。
+`.daiw` 拡張子の Windows ファイル関連付けを目的に `bundle.fileAssociations` を
+`tauri.conf.json` に追加したが、`icon` フィールドが Tauri 2 の `FileAssociation`
+スキーマ（`#[serde(deny_unknown_fields)]`）に無く、CI でのビルドが
+`Additional properties are not allowed ('icon' was unexpected)` で失敗した。
+タグ `v1.5.3` は push 済みだが GitHub Release ページは作成されていない。実際に
+ユーザーへ配布されたのは v1.5.4 から。
 
-### A. アイコン ICO 生成
+> Tauri 2 の `FileAssociation` 構造体には `ext` / `content_types` / `name` /
+> `description` / `role` / `mime_type` / `rank` / `exported_type` /
+> `android_intent_action_filters` のみ存在し、**`icon` は無い**。per-association
+> アイコンは NSIS インストーラフックなどの追加対応が必要で、Tauri 2 標準では
+> アプリ本体アイコン（`bundle.icon` の `.ico`）が `.daiw` に自動採用される。
 
-A1. **新規 `src-tauri/icons/daidori_project.ico`** (約 280KB, 多解像度): 既存の
-`logo/daidori_project_icon.png`（333×333 RGBA）から `png-to-ico` で 4 解像度
-（16/32/48/256）の ICO を生成。`%TEMP%\p2i` に `npm install --silent png-to-ico` で
-モジュールを退避してから `node -e "require('png-to-ico').default(src).then(...)"` で
-バイナリセーフに直接ファイル書き出し。PowerShell の `>` リダイレクトは UTF-16 LE
-変換でバイナリを破壊するため使えなかった。
+---
 
-### B. tauri.conf.json — fileAssociations 追加
+## v1.5.4: `.daiw` ファイル関連付け（v1.5.3 修正リリース）
 
-B1. **`bundle.fileAssociations`** ([src-tauri/tauri.conf.json](src-tauri/tauri.conf.json)):
-`bundle.resources` と `bundle.windows` の間に新規追加:
+[src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) の `bundle.fileAssociations`
+から `icon` フィールドを削除して Tauri 2 スキーマに準拠させ、`.daiw` を Windows に
+登録できるようにした。NSIS バンドラがインストール時に `HKCR\.daiw` →
+`HKCR\DaiwariProject` のレジストリエントリを書き込み、`DefaultIcon` には
+`bundle.icon` の `icons/icon.ico`（= `daidori_icon` ベース）が自動採用される。
+
+### A. tauri.conf.json — fileAssociations 修正
+
 ```json
 "fileAssociations": [
   {
     "ext": ["daiw"],
     "name": "DaiwariProject",
     "description": "台割マネージャー プロジェクトファイル",
-    "icon": "icons/daidori_project.ico",
     "role": "Editor"
   }
 ]
 ```
-- `ext` はドットなし指定（Tauri 仕様）、`icon` は `src-tauri/` からの相対パス
-- NSIS バンドラがインストーラ生成時にレジストリ書き込みコードを埋め込む
+
+- `icon` フィールドを削除（Tauri 2 スキーマで未サポート）
+- それ以外は v1.5.3 と同じ
+
+### B. 副産物として残る ICO ファイル
+
+[src-tauri/icons/daidori_project.ico](src-tauri/icons/daidori_project.ico)
+（v1.5.3 時に `logo/daidori_project_icon.png` から `png-to-ico` で生成した 4 解像度
+ICO）はリポジトリに残置するが、本バージョンでは参照されない。将来 NSIS インストーラ
+フックで `.daiw` 専用アイコンを上書きする際に再利用可能。
 
 ### C. 既知の制約
 
-- ダブルクリック時のアプリ起動は登録されるが、v1.0.5 で `.daiw` の **保存/読込 UI 経路**
-  （`save_project` / `load_project` を呼ぶ箇所）が削除済みのため、アプリは起動するが
-  ファイルは読み込まれない。**アイコン表示が目的で、CLI 引数からの自動読み込みは未対応**。
-- 既存インストールユーザーは、本バージョンのインストーラを実行するまでアイコンが反映されない
-  （関連付け書き込みは NSIS インストーラのみが行うため）。
+- `.daiw` ファイルのアイコンはアプリ本体アイコン（`daidori_icon`）と同一になる。
+  プロジェクト専用アイコン（`daidori_project_icon`）を別途使いたい場合は、
+  `bundle.windows.nsis.installerHooks` で `WriteRegStr HKCR
+  "DaiwariProject\DefaultIcon"` を上書きする NSIS マクロを追加する必要がある（未対応）。
+- v1.0.5 で `.daiw` の **保存/読込 UI 経路**（`save_project` / `load_project` を
+  呼ぶ箇所）が削除済みのため、Explorer でダブルクリックしてもアプリは起動するが
+  ファイルは読み込まれない。
 
 ### バージョン同期
 
-`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を **`1.5.3`** に更新。
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を **`1.5.4`** に更新。
 
 > **このバージョンの構造変更まとめ**:
-> - 旧: `.daiw` ファイルは Windows 上で拡張子未登録（汎用白アイコン）で表示され、台割マネージャー
->   との視覚的紐付けがなかった → 新: NSIS 経由でインストール時に拡張子＋専用アイコンを Windows
->   レジストリに登録、Explorer 上で `logo/daidori_project_icon.png` ベースのアイコンが表示される
+> - 旧（v1.5.3）: `bundle.fileAssociations[0].icon` を指定 → Tauri 2 スキーマ違反で CI ビルド失敗
+> - 新（v1.5.4）: `icon` フィールドを削除しスキーマ準拠 → ビルド成功、`.daiw` 拡張子が
+>   Windows に登録される（アイコンはアプリ本体アイコンを使用）
