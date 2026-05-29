@@ -2299,7 +2299,8 @@ function App() {
         };
         const outputs: string[] = [];
         const failures: string[] = [];
-        const checkDetails: string[] = [];
+        const checkSummaries: string[] = [];
+        let hasCheckIssue = false;
         let totalFileSize = 0;
         let totalPageCount = 0;
 
@@ -2334,20 +2335,31 @@ function App() {
             const epubCheckResult = await invoke<EpubCheckResult>('validate_epub_with_epubcheck', {
               epubPath: response.outputPath || volumeOutputPath,
             });
+            const message = buildEpubCheckMessage(epubCheckResult);
+            const details = formatEpubCheckDetails(epubCheckResult);
+            checkSummaries.push(`分割 ${i + 1}: ${message}${details ? `\n${details}` : ''}`);
             if (!epubCheckResult.isValid || !epubCheckResult.available) {
-              checkDetails.push(`分割 ${i + 1}: ${buildEpubCheckMessage(epubCheckResult)}\n${formatEpubCheckDetails(epubCheckResult)}`);
+              hasCheckIssue = true;
             }
           } catch (epubCheckError) {
-            checkDetails.push(`分割 ${i + 1}: EPUBCheckを実行できませんでした\n${epubCheckError}`);
+            hasCheckIssue = true;
+            checkSummaries.push(`分割 ${i + 1}: EPUBCheckを実行できませんでした\n${epubCheckError}`);
           }
         }
+
+        const checkDetailsText = checkSummaries.length > 0
+          ? `EPUBCheck結果:\n${checkSummaries.join('\n\n')}`
+          : '';
+        const outputDetailsText = outputs.length > 0
+          ? `出力:\n${outputs.join('\n')}`
+          : '';
 
         if (failures.length > 0) {
           setExportResultDialog({
             show: true,
             title: outputs.length > 0 ? '分割EPUB生成完了（一部失敗）' : '分割EPUB生成失敗',
             message: `${outputs.length}件のEPUBを生成しました / ${failures.length}件失敗しました`,
-            details: [...failures, ...checkDetails].join('\n\n') || undefined,
+            details: [`失敗:\n${failures.join('\n')}`, checkDetailsText, outputDetailsText].filter(Boolean).join('\n\n') || undefined,
             outputDir: outputs[0],
             isError: true,
           });
@@ -2357,11 +2369,11 @@ function App() {
         const fileSizeMB = (totalFileSize / (1024 * 1024)).toFixed(2);
         setExportResultDialog({
           show: true,
-          title: checkDetails.length > 0 ? '分割EPUB生成完了（チェック要確認）' : '分割EPUB生成完了',
+          title: hasCheckIssue ? '分割EPUB生成完了（チェック要確認）' : '分割EPUB生成完了',
           message: `${outputs.length}件のEPUBを生成しました\n合計 ${totalPageCount}ページ / ${fileSizeMB}MB`,
-          details: checkDetails.length > 0 ? checkDetails.join('\n\n') : outputs.join('\n'),
+          details: [checkDetailsText, outputDetailsText].filter(Boolean).join('\n\n') || undefined,
           outputDir: outputs[0],
-          isError: checkDetails.length > 0,
+          isError: hasCheckIssue,
         });
         setIsEpubModalOpen(false);
         return;
