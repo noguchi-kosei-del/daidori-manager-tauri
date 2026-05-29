@@ -12,7 +12,24 @@ use std::sync::Mutex;
 use cache::{ThumbnailCache, ThumbnailMemoryCache};
 use state::AppState;
 use constants::MEMORY_CACHE_MAX_SIZE;
-use tauri::Manager;
+use tauri::{Manager, Emitter};
+
+/// ファイル関連付け（.daiw ダブルクリック）起動時のファイルパスを保持する
+struct PendingOpen(Mutex<Option<String>>);
+
+/// 起動引数（exe パスを除く）から実在する .daiw を探す
+fn find_daiw_path(args: &[String]) -> Option<String> {
+    args.iter()
+        .skip(1)
+        .find(|a| a.to_lowercase().ends_with(".daiw") && std::path::Path::new(a).is_file())
+        .cloned()
+}
+
+/// フロント準備後に保持済みの起動ファイルパスを取得（取得と同時にクリア）
+#[tauri::command]
+fn take_pending_open_path(state: tauri::State<PendingOpen>) -> Option<String> {
+    state.0.lock().unwrap().take()
+}
 
 // Tauri コマンドを再エクスポート
 use commands::folder::get_folder_contents;
@@ -52,6 +69,18 @@ async fn close_splash(window: tauri::Window) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if let Err(e) = tauri::Builder::default()
+        // single-instance は最初に登録する（Tauri 公式要件）。
+        // 既にアプリが開いている状態で .daiw をダブルクリックした場合（ウォームスタート）、
+        // 二重起動を防ぎ、既存ウィンドウを前面化してファイルを読み込む。
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if let Some(path) = find_daiw_path(&argv) {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.unminimize();
+                    let _ = w.set_focus();
+                }
+                let _ = app.emit("open-project-file", path);
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -61,7 +90,16 @@ pub fn run() {
         .manage(AppState {
             memory_cache: Mutex::new(ThumbnailMemoryCache::new(MEMORY_CACHE_MAX_SIZE)),
         })
+        .manage(PendingOpen(Mutex::new(None)))
         .setup(|app| {
+            // コールドスタート: 起動引数から .daiw を拾って保持し、
+            // フロント準備後に take_pending_open_path で取得・読込する。
+            if let Some(path) = find_daiw_path(&std::env::args().collect::<Vec<_>>()) {
+                if let Some(state) = app.try_state::<PendingOpen>() {
+                    *state.0.lock().unwrap() = Some(path);
+                }
+            }
+
             // スプラッシュウィンドウを作成
             let splash_url = tauri::WebviewUrl::App("splash.html".into());
             tauri::WebviewWindowBuilder::new(app, "splash", splash_url)
@@ -89,6 +127,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             close_splash,
+            take_pending_open_path,
             get_folder_contents,
             generate_thumbnail,
             export_pages,

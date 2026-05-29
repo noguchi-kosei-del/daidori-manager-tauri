@@ -2317,3 +2317,77 @@ ICO）はリポジトリに残置するが、本バージョンでは参照さ�
 > - 旧（v1.5.3）: `bundle.fileAssociations[0].icon` を指定 → Tauri 2 スキーマ違反で CI ビルド失敗
 > - 新（v1.5.4）: `icon` フィールドを削除しスキーマ準拠 → ビルド成功、`.daiw` 拡張子が
 >   Windows に登録される（アイコンはアプリ本体アイコンを使用）
+
+---
+
+## v1.5.6: `.daiw` ダブルクリック起動でチャプターが復元されるよう修正（ファイル関連付け起動の読込実装）
+
+### 背景・症状
+
+ユーザー報告: 「保存した `.daiw` をエクスプローラーでダブルクリックして開いてもチャプターが
+復元されない」（インストール版で発生）。
+
+### 根本原因
+
+- `.daiw` 保存/読込コード自体は正常で、**アプリ内「開く」ボタン / Ctrl+O 経由の読込は問題なく動作する**
+  （`save_project` / `load_project` / `loadProjectFromPath` / `restoreProjectFromFile` を静的解析で確認、
+  JS↔Rust のフィールド対応も完全一致、`tsc --noEmit` / `cargo check` クリーン）。
+- 真の原因は、**`.daiw` 拡張子の Windows ファイル関連付け（v1.5.4 で NSIS 登録済み）でダブルクリック起動した際、
+  OS が渡すファイルパス（`argv[1]`）を受け取って読み込む処理が一切実装されていなかった**こと。
+  `src-tauri/src/lib.rs` の `setup` に CLI 引数・single-instance・deep-link ハンドラが無く、
+  アプリは空のプロジェクトで起動していた（= v1.5.4「既知の制約」に記載のまま）。
+
+> 注: CLAUDE.md v1.5.4「既知の制約」の「v1.0.5 で `.daiw` の保存/読込 UI 経路が削除済み」という記述は
+> 実コードと乖離していた。保存/読込 UI（サイドバー「開く」「保存」ボタン・Ctrl+S/Ctrl+Shift+S/Ctrl+O・
+> `saveProjectToPath` / `loadProjectFromPath`）は `c5af7b4`（=v1.5.3 相当コミット）で**再追加済み**であり、
+> 本バージョン時点で正常に機能している。本修正で v1.5.4「既知の制約」の後段（ダブルクリックで読み込まれない）も解消。
+
+### A. single-instance プラグイン導入と起動ファイル受け渡し
+
+`tauri-plugin-single-instance` を導入し、コールドスタート（アプリ未起動）／ウォームスタート（既に起動中）の
+2 経路でダブルクリック起動を処理する。**新規の読込ロジックは作らず、既存の `loadProjectFromPath` を再利用。**
+
+A1. **依存追加** ([src-tauri/Cargo.toml](src-tauri/Cargo.toml)): `tauri-plugin-single-instance = "2"` を追加。
+
+A2. **バックエンド** ([src-tauri/src/lib.rs](src-tauri/src/lib.rs)):
+- `use tauri::Emitter;` を追加（`app.emit` 用）。
+- `struct PendingOpen(Mutex<Option<String>>)` を managed state として追加。
+- `find_daiw_path(args)`: 起動引数（exe パス除く）から、実在しかつ拡張子 `.daiw` のパスを 1 件抽出するヘルパー。
+- `take_pending_open_path` コマンド: 保持済み起動パスを取得し**同時にクリア**（多重実行に対して冪等で二重読込を防止）。
+- `tauri_plugin_single_instance::init` を**最初のプラグインとして登録**（Tauri 公式要件）。
+  ウォームスタート時にコールバックが発火し、`main` ウィンドウを `unminimize` + `set_focus` してから
+  `open-project-file` イベントを emit。これにより**多重起動も抑止**される。
+- `setup` でコールドスタートの `std::env::args()` から `.daiw` を拾って `PendingOpen` に保持。
+- `invoke_handler!` に `take_pending_open_path` を登録。
+
+A3. **フロントエンド** ([src/App.tsx](src/App.tsx)): `loadProjectFromPath` 定義以降に useEffect を 2 つ追加。
+- コールドスタート: マウント時に `take_pending_open_path` を呼び、返ったパスがあれば `loadProjectFromPath` で読込。
+- ウォームスタート: `open-project-file` イベント（`@tauri-apps/api/event` の `listen`）を購読して即時読込。
+
+### 動作
+
+- `.daiw` をダブルクリック → アプリ起動 → チャプター/ページが復元された状態で開く（コールドスタート）。
+  main ウィンドウは `visible: false` で生成されスプラッシュ表示中に裏で読込が完了するため UX も自然。
+- 起動中に別の `.daiw` をダブルクリック → 二重起動せず、既存ウィンドウが前面化して当該ファイルを読込（ウォームスタート）。
+- アプリ内「開く」/ Ctrl+O 経路は従来どおり（無変更）。
+
+### 権限
+
+- `take_pending_open_path` はカスタムコマンドのため capability 追記不要。
+- `app.emit` / フロント `listen` は既存の `core:event:default` でカバー。
+- single-instance プラグインはコマンドを追加しないため権限追記不要。
+
+### 検証
+
+- `npx tsc --noEmit` 成功 / `cargo check` 成功（`tauri-plugin-single-instance v2.4.2` 取得・コンパイル、警告なし）。
+
+### バージョン同期
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を **`1.5.6`** に更新。
+
+> **このバージョンの構造変更まとめ**:
+> - 旧: `.daiw` 関連付けは登録済みだがダブルクリック起動時にファイルパスを受け取る処理が無く、空プロジェクトで起動 →
+>   新: `tauri-plugin-single-instance` 導入 + コールドスタートは起動引数保持→フロントが取得、ウォームスタートはイベント発火で、
+>   既存の `loadProjectFromPath` を使ってダブルクリックした `.daiw` を確実に復元（多重起動抑止の副次効果あり）
+> - 補足: CLAUDE.md v1.5.4 の「保存/読込 UI は削除済み」記述は実コードと乖離していた（v1.5.3 で再追加済み）点を本節で訂正。
+>   なお v1.5.5（分割 EPUB 関連: split range 編集・page role override・split EPUBCheck 結果表示）は本リポジトリにマージ済みだが CLAUDE.md には未文書化。

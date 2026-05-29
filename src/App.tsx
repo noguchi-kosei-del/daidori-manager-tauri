@@ -1169,6 +1169,31 @@ function App() {
     }
   }, [handleSaveProject]);
 
+  // .daiw ファイル関連付け（ダブルクリック）でのコールドスタート起動時、
+  // バックエンドが保持した起動ファイルパスを取得して読み込む。
+  // take_pending_open_path は取得と同時にクリアするため二重読込は起きない。
+  useEffect(() => {
+    (async () => {
+      try {
+        const path = await invoke<string | null>('take_pending_open_path');
+        if (path) await loadProjectFromPath(path);
+      } catch (e) {
+        console.warn('起動ファイルの取得に失敗:', e);
+      }
+    })();
+  }, [loadProjectFromPath]);
+
+  // すでにアプリが開いている状態で .daiw をダブルクリックした場合（ウォームスタート）、
+  // single-instance プラグインが発火する open-project-file イベントを購読して読み込む。
+  useEffect(() => {
+    const pending = listen<string>('open-project-file', (event) => {
+      void loadProjectFromPath(event.payload);
+    });
+    return () => {
+      pending.then((unlisten) => unlisten()).catch(() => {});
+    };
+  }, [loadProjectFromPath]);
+
   const exportResultAnim = useModalAnimation(exportResultDialog.show);
   const [tachimiPdfProgress, setTachimiPdfProgress] = useState<{
     phase: string;
