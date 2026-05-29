@@ -1188,6 +1188,27 @@ export const useStore = create<AppState>((set, get) => {
     let coverAssigned = false;
     let colophonAssignedFromChapter = false;
     const epubPages: EpubPageInfo[] = [];
+    const hasExplicitCover = chapters.some((chapter) =>
+      chapter.pages.some((page) => {
+        const isBlankPage = page.pageType === 'blank' || (chapter.type === 'blank' && !page.filePath);
+        return !isBlankPage && !!page.filePath && (chapter.type === 'cover' || page.pageType === 'cover');
+      })
+    );
+    const eligibleImagePages = chapters.flatMap((chapter) =>
+      chapter.pages
+        .filter((page) => {
+          const isBlankPage = page.pageType === 'blank' || (chapter.type === 'blank' && !page.filePath);
+          return !isBlankPage && !!page.filePath;
+        })
+        .map((page) => page.id)
+    );
+    const fallbackColophonPageId = eligibleImagePages[eligibleImagePages.length - 1];
+    const hasExplicitColophon = chapters.some((chapter) =>
+      chapter.pages.some((page) => {
+        const isBlankPage = page.pageType === 'blank' || (chapter.type === 'blank' && !page.filePath);
+        return !isBlankPage && !!page.filePath && (chapter.type === 'colophon' || page.pageType === 'colophon');
+      })
+    );
 
     for (const chapter of chapters) {
       for (const page of chapter.pages) {
@@ -1195,15 +1216,22 @@ export const useStore = create<AppState>((set, get) => {
         // 白紙ページはプレビュー用に含める（生成時は別処理でスキップ）
         if (!isBlankPage && !page.filePath) continue;
 
+        const canBeCover = !isBlankPage && !!page.filePath;
         const isCover =
-          !coverAssigned && (chapter.type === 'cover' || page.pageType === 'cover');
+          !coverAssigned &&
+          canBeCover &&
+          ((chapter.type === 'cover' || page.pageType === 'cover') ||
+            (!hasExplicitCover && canBeCover));
         if (isCover) {
           coverAssigned = true;
         }
 
         const isColophon =
-          page.pageType === 'colophon' ||
-          (!colophonAssignedFromChapter && chapter.type === 'colophon');
+          canBeCover &&
+          !isCover &&
+          (page.pageType === 'colophon' ||
+            (!colophonAssignedFromChapter && chapter.type === 'colophon') ||
+            (!hasExplicitColophon && page.id === fallbackColophonPageId));
         if (chapter.type === 'colophon' && isColophon) {
           colophonAssignedFromChapter = true;
         }

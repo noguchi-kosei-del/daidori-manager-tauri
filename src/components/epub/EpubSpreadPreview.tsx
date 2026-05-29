@@ -257,9 +257,20 @@ export function EpubSpreadPreview({
       setShowJumpDialog(false);
       return;
     }
-    const spreadIndex = Math.floor((pageNum - 1) / 2);
-    const clamped = Math.min(spreadIndex, totalSpreads - 1);
-    onSpreadChange(clamped);
+    const targetPageIndex = pageNum - 1;
+    let spreadIndex = 0;
+    let pageIndex = 0;
+    while (pageIndex < pages.length) {
+      const current = pages[pageIndex];
+      const spanCount = current?.isCover ? 1 : (pages[pageIndex + 1] ? 2 : 1);
+      if (pageIndex <= targetPageIndex && targetPageIndex < pageIndex + spanCount) {
+        onSpreadChange(spreadIndex);
+        setShowJumpDialog(false);
+        return;
+      }
+      pageIndex += spanCount;
+      spreadIndex++;
+    }
     setShowJumpDialog(false);
   }, [jumpPageInput, pages.length, totalSpreads, onSpreadChange]);
 
@@ -325,10 +336,9 @@ export function EpubSpreadPreview({
     // 空スロット：兄弟画像で同サイズを保持
     if (!page) {
       if (!sibling || sibling.isBlank) return null;
-      const isCoverSibling = sibling.isCover;
-      const slotClass = isCoverSibling ? 'epub-spread-page-hidden' : 'epub-spread-page-blank';
+      if (sibling.isCover) return null;
       return (
-        <div className={`epub-spread-page ${side}-page ${slotClass}`}>
+        <div className={`epub-spread-page ${side}-page epub-spread-page-blank`}>
           <img
             src={getImageSrc(sibling)}
             alt=""

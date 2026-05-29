@@ -255,12 +255,17 @@ export function EpubMetadataModal({
     }
 
     // 奥付ページの確認
-    const hasColophon = chapters.some((ch) =>
-      ch.type === 'colophon' || ch.pages.some((p) => p.pageType === 'colophon')
-    );
+    const hasColophon = epubPages.some((page) => page.isColophon);
+    const canAutoAssignColophon = splitEnabled
+      ? splitRanges.every((range) =>
+          epubPages
+            .slice(range.startIndex, range.endIndex + 1)
+            .some((page) => !page.isBlank && !!page.sourcePath)
+        )
+      : epubPages.some((page) => !page.isBlank && !!page.sourcePath);
     const allowsMissingColophon =
       outputFormat === 'hybrid' && (allowMissingColophon || hybridCssProfile === 'legacy');
-    if (!hasColophon && !allowsMissingColophon) {
+    if (!hasColophon && !canAutoAssignColophon && !allowsMissingColophon) {
       return '奥付ページを設定してください';
     }
 
@@ -339,10 +344,40 @@ export function EpubMetadataModal({
     return assigned;
   }, [splitRanges]);
 
+  const splitPageRoles = useMemo(() => {
+    const roles = new Map<number, { cover: boolean; colophon: boolean }>();
+    splitRanges.forEach((range) => {
+      roles.set(range.startIndex, {
+        ...(roles.get(range.startIndex) ?? { cover: false, colophon: false }),
+        cover: true,
+      });
+      roles.set(range.endIndex, {
+        ...(roles.get(range.endIndex) ?? { cover: false, colophon: false }),
+        colophon: true,
+      });
+    });
+    if (splitSelectingStart !== null && !splitAssigned.has(splitSelectingStart)) {
+      roles.set(splitSelectingStart, {
+        ...(roles.get(splitSelectingStart) ?? { cover: false, colophon: false }),
+        cover: true,
+      });
+    }
+    return roles;
+  }, [splitRanges, splitSelectingStart, splitAssigned]);
+
   const handleSplitPageClick = (index: number) => {
-    if (splitAssigned.has(index)) return;
+    const rangeIndex = getSplitRangeIndex(index);
+    if (rangeIndex >= 0) {
+      setSplitRanges((ranges) => ranges.filter((_, i) => i !== rangeIndex));
+      setSplitSelectingStart(null);
+      return;
+    }
     if (splitSelectingStart === null) {
       setSplitSelectingStart(index);
+      return;
+    }
+    if (splitSelectingStart === index) {
+      setSplitSelectingStart(null);
       return;
     }
 
@@ -532,7 +567,7 @@ export function EpubMetadataModal({
               splitEnabled ? (
                 <div className="epub-split-thumbnail-mode">
                   <div className="epub-split-preview-guide">
-                    <span>サムネイルで開始ページ、終了ページの順にクリック</span>
+                    <span>未分割サムネイルをクリックして範囲作成、分割済みサムネイルをクリックして解除</span>
                     <span>
                       {splitSelectingStart !== null
                         ? `開始: p${splitSelectingStart + 1} / 終了ページを選択`
@@ -544,18 +579,21 @@ export function EpubMetadataModal({
                       const rangeIndex = getSplitRangeIndex(index);
                       const isAssigned = rangeIndex >= 0;
                       const isSelecting = splitSelectingStart === index;
-                      const isRangeCover = isAssigned && splitRanges[rangeIndex].startIndex === index;
+                      const splitRole = splitPageRoles.get(index);
+                      const isRangeCover = splitRole?.cover ?? false;
+                      const isRangeColophon = splitRole?.colophon ?? false;
                       const thumbnailSrc = getSplitThumbnailSrc(page);
                       return (
                         <button
                           key={page.id}
                           type="button"
-                          className={`epub-split-thumbnail ${isAssigned ? 'assigned' : ''} ${isSelecting ? 'selecting' : ''} ${isRangeCover || page.isCover ? 'cover' : ''} ${epubSelectedPageId === page.id ? 'selected' : ''}`}
+                          className={`epub-split-thumbnail ${isAssigned ? 'assigned' : ''} ${isSelecting ? 'selecting' : ''} ${isRangeCover || page.isCover ? 'cover' : ''} ${isRangeColophon || page.isColophon ? 'colophon' : ''} ${epubSelectedPageId === page.id ? 'selected' : ''}`}
                           onClick={() => handleSplitThumbnailClick(index)}
                           onContextMenu={(e) => handleSplitThumbnailContextMenu(e, index)}
                           title={`${index + 1}ページ`}
                           style={isAssigned ? { ['--split-color' as string]: `var(--split-color-${rangeIndex % 8})` } : undefined}
                         >
+                          {isAssigned && <span className="epub-split-remove-hint">クリックで解除</span>}
                           <span className="epub-split-thumbnail-image">
                             {thumbnailSrc ? (
                               <img src={thumbnailSrc} alt="" loading="lazy" />
@@ -566,8 +604,8 @@ export function EpubMetadataModal({
                           <span className="epub-split-thumbnail-meta">
                             <span>{index + 1}</span>
                             <span className="epub-split-thumbnail-badges">
-                              {page.isCover ? <span>表紙</span> : isRangeCover && <span>先頭</span>}
-                              {page.isColophon && <span>奥付</span>}
+                              {(page.isCover || isRangeCover) && <span className="cover">表紙</span>}
+                              {(page.isColophon || isRangeColophon) && <span className="colophon">奥付</span>}
                             </span>
                           </span>
                         </button>

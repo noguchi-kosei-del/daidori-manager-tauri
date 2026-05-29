@@ -2031,10 +2031,11 @@ function App() {
 
   const buildSplitVolumePages = (pages: EpubPage[]) => {
     const hasExplicitCover = pages.some((page) => page.isCover);
+    const hasExplicitColophon = pages.some((page) => page.isColophon);
     return pages.map((page, index) => {
       const ext = page.filename.split('.').pop()?.toLowerCase() || 'jpg';
       const isCover = page.isCover || (!hasExplicitCover && index === 0);
-      const isColophon = !isCover && page.isColophon;
+      const isColophon = page.isColophon || (!hasExplicitColophon && index === pages.length - 1);
       return {
         ...page,
         id: isCover ? 'p-cover' : isColophon ? 'p-colophon' : `p-${String(index).padStart(3, '0')}`,
@@ -2154,6 +2155,36 @@ function App() {
       let coverAssigned = false;
       let colophonAssignedFromChapter = false;
       let nonBlankCount = 0;
+      const hasExplicitCover = chapters.some((chapter) =>
+        chapter.pages.some((page) => {
+          const isBlankPage =
+            page.pageType === 'blank' || (chapter.type === 'blank' && !page.filePath);
+          if (isBlankPage || !page.filePath) return false;
+          const previewPage = epubPreviewPageByOriginalId.get(page.id);
+          return !!previewPage?.isCover || chapter.type === 'cover' || page.pageType === 'cover';
+        })
+      );
+      const eligibleImagePageIds = chapters.flatMap((chapter) =>
+        chapter.pages
+          .filter((page) => {
+            const isBlankPage =
+              page.pageType === 'blank' || (chapter.type === 'blank' && !page.filePath);
+            if (isBlankPage || !page.filePath) return false;
+            return !(isLegacyHybrid && (chapter.type === 'colophon' || page.pageType === 'colophon'));
+          })
+          .map((page) => page.id)
+      );
+      const fallbackColophonPageId = eligibleImagePageIds[eligibleImagePageIds.length - 1];
+      const hasExplicitColophon = chapters.some((chapter) =>
+        chapter.pages.some((page) => {
+          const isBlankPage =
+            page.pageType === 'blank' || (chapter.type === 'blank' && !page.filePath);
+          if (isBlankPage || !page.filePath) return false;
+          if (isLegacyHybrid && (chapter.type === 'colophon' || page.pageType === 'colophon')) return false;
+          const previewPage = epubPreviewPageByOriginalId.get(page.id);
+          return !!previewPage?.isColophon || chapter.type === 'colophon' || page.pageType === 'colophon';
+        })
+      );
 
       for (const chapter of chapters) {
         for (const page of chapter.pages) {
@@ -2168,19 +2199,25 @@ function App() {
           }
           const previewPage = epubPreviewPageByOriginalId.get(page.id);
 
+          const canBeCover = !isBlankPage && !!page.filePath;
           const isCover =
-            !isBlankPage &&
             !coverAssigned &&
-            (previewPage?.isCover || chapter.type === 'cover' || page.pageType === 'cover');
+            canBeCover &&
+            (previewPage?.isCover ||
+              chapter.type === 'cover' ||
+              page.pageType === 'cover' ||
+              (!hasExplicitCover && canBeCover));
           if (isCover) {
             coverAssigned = true;
           }
 
           const isColophon =
-            !isBlankPage &&
+            canBeCover &&
+            !isCover &&
             (previewPage?.isColophon ||
               page.pageType === 'colophon' ||
-              (!colophonAssignedFromChapter && chapter.type === 'colophon'));
+              (!colophonAssignedFromChapter && chapter.type === 'colophon') ||
+              (!hasExplicitColophon && page.id === fallbackColophonPageId));
           if ((chapter.type === 'colophon' || previewPage?.isColophon) && isColophon) {
             colophonAssignedFromChapter = true;
           }
