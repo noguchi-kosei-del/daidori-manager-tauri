@@ -33,6 +33,7 @@ const APPLE_BOOKS_COVER_MIN_SHORT_EDGE: u32 = 1_400;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EpubImageTarget {
     RgbSrgb,
+    RgbAdobe,
     GrayscaleDotGain,
     NoIcc,
     PreserveOriginal,
@@ -41,6 +42,7 @@ enum EpubImageTarget {
 #[derive(Debug, Clone, Default)]
 struct ImageCopyResult {
     rgb_srgb_count: usize,
+    adobe_rgb_count: usize,
     grayscale_dot_gain_count: usize,
     grayscale_no_profile_count: usize,
     no_icc_count: usize,
@@ -51,6 +53,7 @@ struct ImageCopyResult {
 impl ImageCopyResult {
     fn merge(mut self, other: ImageCopyResult) -> Self {
         self.rgb_srgb_count += other.rgb_srgb_count;
+        self.adobe_rgb_count += other.adobe_rgb_count;
         self.grayscale_dot_gain_count += other.grayscale_dot_gain_count;
         self.grayscale_no_profile_count += other.grayscale_no_profile_count;
         self.no_icc_count += other.no_icc_count;
@@ -64,6 +67,7 @@ impl ImageCopyResult {
         self.warnings.dedup();
         EpubImageProfileSummary {
             rgb_srgb_count: self.rgb_srgb_count,
+            adobe_rgb_count: self.adobe_rgb_count,
             grayscale_dot_gain_count: self.grayscale_dot_gain_count,
             grayscale_no_profile_count: self.grayscale_no_profile_count,
             no_icc_count: self.no_icc_count,
@@ -289,6 +293,7 @@ impl EpubBuilder {
             .join(image_folder(format));
         let dot_gain_profile = load_dot_gain_icc_profile();
         let srgb_profile = load_srgb_icc_profile();
+        let adobe_rgb_profile = load_adobe_rgb_icc_profile();
         let auto_blank_target = self.auto_blank_target(&dot_gain_profile);
 
         let total = self.config.pages.len();
@@ -315,6 +320,7 @@ impl EpubBuilder {
                         target,
                         page.is_cover,
                         srgb_profile.as_deref(),
+                        adobe_rgb_profile.as_deref(),
                         dot_gain_profile.as_deref(),
                     )
                 } else {
@@ -331,6 +337,7 @@ impl EpubBuilder {
                                 .map_err(|e| format!("Failed to copy image {}: {}", dest_filename, e)),
                         },
                         EpubImageTarget::RgbSrgb
+                        | EpubImageTarget::RgbAdobe
                         | EpubImageTarget::GrayscaleDotGain
                         | EpubImageTarget::NoIcc => {
                             normalize_image_to_jpeg(
@@ -339,6 +346,7 @@ impl EpubBuilder {
                                 target,
                                 page.is_cover,
                                 srgb_profile.as_deref(),
+                                adobe_rgb_profile.as_deref(),
                                 dot_gain_profile.as_deref(),
                             )
                         }
@@ -347,6 +355,7 @@ impl EpubBuilder {
                 result?;
                 match target {
                     EpubImageTarget::RgbSrgb => summary.rgb_srgb_count += 1,
+                    EpubImageTarget::RgbAdobe => summary.adobe_rgb_count += 1,
                     EpubImageTarget::GrayscaleDotGain => {
                         if dot_gain_profile.is_some() {
                             summary.grayscale_dot_gain_count += 1;
@@ -365,6 +374,11 @@ impl EpubBuilder {
                         "sRGB ICC profile was not found; RGB JPEGs were written without embedded sRGB ICC.".to_string(),
                     );
                 }
+                if target == EpubImageTarget::RgbAdobe && adobe_rgb_profile.is_none() {
+                    summary.warnings.push(
+                        "Adobe RGB ICC profile was not found; RGB JPEGs were written without embedded Adobe RGB ICC.".to_string(),
+                    );
+                }
 
                 let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
                 self.emit_progress("images", done, total);
@@ -378,6 +392,9 @@ impl EpubBuilder {
     fn auto_blank_target(&self, _dot_gain_profile: &Option<Vec<u8>>) -> EpubImageTarget {
         if self.config.metadata.image_color_policy == EpubImageColorPolicy::FullColorSrgb {
             return EpubImageTarget::RgbSrgb;
+        }
+        if self.config.metadata.image_color_policy == EpubImageColorPolicy::FullColorAdobeRgb {
+            return EpubImageTarget::RgbAdobe;
         }
 
         let grayscale_body_pages = self
@@ -396,6 +413,8 @@ impl EpubBuilder {
 
         if body_pages > 0 && grayscale_body_pages * 2 >= body_pages {
             EpubImageTarget::GrayscaleDotGain
+        } else if self.config.metadata.image_color_policy == EpubImageColorPolicy::AdobeRgbDotGain {
+            EpubImageTarget::RgbAdobe
         } else {
             EpubImageTarget::RgbSrgb
         }
@@ -410,6 +429,16 @@ impl EpubBuilder {
             _ if page.image_profile_override == EpubPageImageProfileOverride::Srgb => {
                 EpubImageTarget::RgbSrgb
             }
+            _ if page.image_profile_override == EpubPageImageProfileOverride::AdobeRgb => {
+                EpubImageTarget::RgbAdobe
+            }
+            _ if page.image_profile_override == EpubPageImageProfileOverride::AdobeRgbDotGain => {
+                if self.is_clearly_grayscale(page) {
+                    EpubImageTarget::GrayscaleDotGain
+                } else {
+                    EpubImageTarget::RgbAdobe
+                }
+            }
             _ if page.image_profile_override == EpubPageImageProfileOverride::DotGain => {
                 EpubImageTarget::GrayscaleDotGain
             }
@@ -421,6 +450,20 @@ impl EpubBuilder {
             }
             EpubImageColorPolicy::PreserveOriginal => EpubImageTarget::PreserveOriginal,
             EpubImageColorPolicy::FullColorSrgb => EpubImageTarget::RgbSrgb,
+            EpubImageColorPolicy::FullColorAdobeRgb => EpubImageTarget::RgbAdobe,
+            EpubImageColorPolicy::AdobeRgbDotGain => {
+                if page.is_blank {
+                    return blank_target;
+                }
+                if page.is_cover || page.is_colophon {
+                    return EpubImageTarget::RgbAdobe;
+                }
+                if self.is_clearly_grayscale(page) {
+                    EpubImageTarget::GrayscaleDotGain
+                } else {
+                    EpubImageTarget::RgbAdobe
+                }
+            }
             EpubImageColorPolicy::NoIcc => EpubImageTarget::NoIcc,
             EpubImageColorPolicy::Auto => {
                 if page.is_blank {
@@ -872,6 +915,7 @@ fn normalize_image_to_jpeg(
     target: EpubImageTarget,
     is_cover: bool,
     srgb_profile: Option<&[u8]>,
+    adobe_rgb_profile: Option<&[u8]>,
     dot_gain_profile: Option<&[u8]>,
 ) -> Result<(), String> {
     let img = if src
@@ -888,6 +932,7 @@ fn normalize_image_to_jpeg(
 
     match target {
         EpubImageTarget::RgbSrgb => write_rgb_jpeg(img, dest, srgb_profile),
+        EpubImageTarget::RgbAdobe => write_rgb_jpeg(img, dest, adobe_rgb_profile),
         EpubImageTarget::GrayscaleDotGain => write_grayscale_jpeg(img, dest, dot_gain_profile),
         EpubImageTarget::NoIcc => {
             if is_grayscale_dynamic_image(&img) {
@@ -936,6 +981,7 @@ fn generate_blank_jpeg(
     target: EpubImageTarget,
     is_cover: bool,
     srgb_profile: Option<&[u8]>,
+    adobe_rgb_profile: Option<&[u8]>,
     dot_gain_profile: Option<&[u8]>,
 ) -> Result<(), String> {
     let w = width.max(1);
@@ -945,6 +991,11 @@ fn generate_blank_jpeg(
             let img = image::GrayImage::from_pixel(w, h, image::Luma([255]));
             let img = resize_for_apple_books(DynamicImage::ImageLuma8(img), is_cover);
             write_grayscale_jpeg(img, dest, dot_gain_profile)
+        }
+        EpubImageTarget::RgbAdobe => {
+            let img = image::RgbImage::from_pixel(w, h, image::Rgb([255, 255, 255]));
+            let img = resize_for_apple_books(DynamicImage::ImageRgb8(img), is_cover);
+            write_rgb_jpeg(img, dest, adobe_rgb_profile)
         }
         EpubImageTarget::NoIcc => {
             let img = image::RgbImage::from_pixel(w, h, image::Rgb([255, 255, 255]));
@@ -1004,6 +1055,25 @@ fn load_srgb_icc_profile() -> Option<Vec<u8>> {
         r"C:\Windows\System32\spool\drivers\color\sRGB.icm",
         "/System/Library/ColorSync/Profiles/sRGB Profile.icc",
         "/usr/share/color/icc/colord/sRGB.icc",
+    ])
+}
+
+fn load_adobe_rgb_icc_profile() -> Option<Vec<u8>> {
+    if let Ok(path) = std::env::var("DAIDORI_ADOBE_RGB_ICC") {
+        if let Ok(bytes) = fs::read(path) {
+            return Some(bytes);
+        }
+    }
+
+    profile_candidate_paths(&[
+        r"C:\Windows\System32\spool\drivers\color\AdobeRGB1998.icc",
+        r"C:\Windows\System32\spool\drivers\color\Adobe RGB (1998).icc",
+        r"C:\Program Files\Common Files\Adobe\Color\Profiles\Recommended\Adobe RGB (1998).icc",
+        r"C:\Program Files\Common Files\Adobe\Color\Profiles\Adobe RGB (1998).icc",
+        r"C:\Program Files (x86)\Common Files\Adobe\Color\Profiles\Recommended\Adobe RGB (1998).icc",
+        r"C:\Program Files (x86)\Common Files\Adobe\Color\Profiles\Adobe RGB (1998).icc",
+        "/Library/ColorSync/Profiles/Adobe RGB (1998).icc",
+        "/System/Library/ColorSync/Profiles/Adobe RGB (1998).icc",
     ])
 }
 

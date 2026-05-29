@@ -2,7 +2,7 @@ import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { useStore } from '../../store';
 import type { EpubPageImageProfileOverride, EpubPageInfo } from '../../types';
-import { EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS } from '../../types';
+import { EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS, EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_OPTIONS } from '../../types';
 import { AlertTriangleIcon, ReplaceIcon } from '../../icons';
 import { getValidationMessage } from '../../utils/validationMessage';
 
@@ -101,6 +101,7 @@ export function EpubThumbnailBar({
   // 右クリックメニュー
   const handleContextMenu = useCallback((e: React.MouseEvent, pageId: string) => {
     e.preventDefault();
+    e.stopPropagation();
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
@@ -157,6 +158,10 @@ export function EpubThumbnailBar({
   const [dropIndex, setDropIndex] = useState<number | null>(null);
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
+    if (contextMenu) {
+      e.preventDefault();
+      return;
+    }
     setDraggedIndex(index);
     e.dataTransfer.effectAllowed = 'move';
   };
@@ -198,11 +203,18 @@ export function EpubThumbnailBar({
               dropIndex === index ? 'drop-target' : ''
             }`}
             onClick={(e) => {
+              if (e.button !== 0) return;
               onSelectPage(page.id, e);
               onSpreadChange(pageToSpread[index]);
             }}
+            onMouseDown={(e) => {
+              if (e.button === 2) {
+                e.preventDefault();
+                e.stopPropagation();
+              }
+            }}
             onContextMenu={(e) => handleContextMenu(e, page.id)}
-            draggable
+            draggable={!contextMenu}
             onDragStart={(e) => handleDragStart(e, index)}
             onDragOver={(e) => handleDragOver(e, index)}
             onDragLeave={handleDragLeave}
@@ -263,6 +275,11 @@ export function EpubThumbnailBar({
         <div
           className="epub-context-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
         >
           {!selectedPage?.isCover && (
             <button onClick={handleSetCover}>表紙に設定</button>
@@ -277,7 +294,7 @@ export function EpubThumbnailBar({
             <button onClick={handleClearColophon}>奥付を解除</button>
           )}
           <div className="epub-context-menu-separator" />
-          {(Object.keys(EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS) as EpubPageImageProfileOverride[]).map((override) => (
+          {EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_OPTIONS.map((override) => (
             <button
               key={override}
               onClick={() => handleSetImageProfileOverride(override)}

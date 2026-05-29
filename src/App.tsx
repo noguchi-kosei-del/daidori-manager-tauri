@@ -32,6 +32,11 @@ import {
   FileType,
   FileValidationStatus,
   DaidoriProjectFile,
+  EpubMetadata,
+  EpubPage,
+  EpubGenerateResponse,
+  EpubCheckResult,
+  EpubSplitSettings,
 } from './types';
 import {
   FolderIcon,
@@ -76,7 +81,6 @@ import {
 import { ExportModal, EpubMetadataModal, BleedEditorModal, UpdateDialog, SplitFoldersDialog } from './components/modals';
 import type { SplitFolderEntry, SplitFoldersDialogResult } from './components/modals';
 import { EpubMakerView } from './components/epub';
-import { EpubMetadata, EpubPage, EpubGenerateResponse, EpubCheckResult } from './types';
 import {
   SIDEBAR_PREFIX,
 } from './constants/dnd';
@@ -2017,8 +2021,32 @@ function App() {
     });
   }, [chapters, refreshPagesLinks, setExportResultDialog]);
 
+  const buildSplitOutputPath = (templatePath: string, splitSettings: EpubSplitSettings, index: number) => {
+    const slashIndex = Math.max(templatePath.lastIndexOf('/'), templatePath.lastIndexOf('\\'));
+    const directory = slashIndex >= 0 ? templatePath.slice(0, slashIndex + 1) : '';
+    const suffixNumber = splitSettings.suffixStart + index;
+    const suffix = String(suffixNumber).padStart(splitSettings.suffixDigits, '0');
+    return `${directory}${splitSettings.baseName}${splitSettings.suffixSeparator}${suffix}.epub`;
+  };
+
+  const buildSplitVolumePages = (pages: EpubPage[]) => {
+    const hasExplicitCover = pages.some((page) => page.isCover);
+    return pages.map((page, index) => {
+      const ext = page.filename.split('.').pop()?.toLowerCase() || 'jpg';
+      const isCover = page.isCover || (!hasExplicitCover && index === 0);
+      const isColophon = !isCover && page.isColophon;
+      return {
+        ...page,
+        id: isCover ? 'p-cover' : isColophon ? 'p-colophon' : `p-${String(index).padStart(3, '0')}`,
+        filename: isCover ? `cover.${ext}` : isColophon ? `colophon.${ext}` : `${String(index).padStart(4, '0')}.${ext}`,
+        isCover,
+        isColophon,
+      };
+    });
+  };
+
   // EPUB生成ハンドラ
-  const handleEpubGenerate = async (metadata: EpubMetadata, outputPath: string) => {
+  const handleEpubGenerate = async (metadata: EpubMetadata, outputPath: string, splitSettings?: EpubSplitSettings) => {
     try {
       const isLegacyHybrid =
         metadata.outputFormat === 'hybrid' && metadata.hybridCssProfile === 'legacy';
@@ -2138,18 +2166,22 @@ function App() {
           if (isLegacyHybrid && (chapter.type === 'colophon' || page.pageType === 'colophon')) {
             continue;
           }
+          const previewPage = epubPreviewPageByOriginalId.get(page.id);
 
           const isCover =
-            !isBlankPage && !coverAssigned && (chapter.type === 'cover' || page.pageType === 'cover');
+            !isBlankPage &&
+            !coverAssigned &&
+            (previewPage?.isCover || chapter.type === 'cover' || page.pageType === 'cover');
           if (isCover) {
             coverAssigned = true;
           }
 
           const isColophon =
             !isBlankPage &&
-            (page.pageType === 'colophon' ||
+            (previewPage?.isColophon ||
+              page.pageType === 'colophon' ||
               (!colophonAssignedFromChapter && chapter.type === 'colophon'));
-          if (chapter.type === 'colophon' && isColophon) {
+          if ((chapter.type === 'colophon' || previewPage?.isColophon) && isColophon) {
             colophonAssignedFromChapter = true;
           }
 
@@ -2158,7 +2190,6 @@ function App() {
           const resolvedFilePath = isPsdConverted
             ? psdToJpegMap.get(page.filePath!)!
             : page.filePath;
-          const previewPage = epubPreviewPageByOriginalId.get(page.id);
 
           // 画像サイズを取得（白紙はバックエンドで多数派サイズに置換される）
           let width = 0;
@@ -2224,6 +2255,81 @@ function App() {
         return;
       }
 
+      if (splitSettings?.enabled) {
+        const splitMetadata: EpubMetadata = {
+          ...generateMetadata,
+          allowMissingColophon: true,
+        };
+        const outputs: string[] = [];
+        const failures: string[] = [];
+        const checkDetails: string[] = [];
+        let totalFileSize = 0;
+        let totalPageCount = 0;
+
+        for (let i = 0; i < splitSettings.ranges.length; i++) {
+          const range = splitSettings.ranges[i];
+          const volumePages = epubGeneratePages.slice(range.startIndex, range.endIndex + 1);
+          const volumeNonBlankCount = volumePages.filter((page) => !page.isBlank).length;
+          if (volumePages.length === 0 || volumeNonBlankCount === 0) {
+            failures.push(`分割 ${i + 1}: 画像ページがありません`);
+            continue;
+          }
+
+          const volumeOutputPath = buildSplitOutputPath(outputPath, splitSettings, i);
+          const response = await invoke<EpubGenerateResponse>('generate_epub', {
+            metadata: splitMetadata,
+            pages: buildSplitVolumePages(volumePages),
+            outputPath: volumeOutputPath,
+            customCss: null,
+          });
+
+          if (!response.success) {
+            failures.push(`分割 ${i + 1}: ${response.error || 'EPUB生成中にエラーが発生しました'}`);
+            continue;
+          }
+
+          outputs.push(response.outputPath || volumeOutputPath);
+          totalFileSize += response.fileSize;
+          totalPageCount += response.pageCount;
+
+          try {
+            await emit('epub-progress', { phase: 'epubcheck', current: 0, total: 0 });
+            const epubCheckResult = await invoke<EpubCheckResult>('validate_epub_with_epubcheck', {
+              epubPath: response.outputPath || volumeOutputPath,
+            });
+            if (!epubCheckResult.isValid || !epubCheckResult.available) {
+              checkDetails.push(`分割 ${i + 1}: ${buildEpubCheckMessage(epubCheckResult)}\n${formatEpubCheckDetails(epubCheckResult)}`);
+            }
+          } catch (epubCheckError) {
+            checkDetails.push(`分割 ${i + 1}: EPUBCheckを実行できませんでした\n${epubCheckError}`);
+          }
+        }
+
+        if (failures.length > 0) {
+          setExportResultDialog({
+            show: true,
+            title: outputs.length > 0 ? '分割EPUB生成完了（一部失敗）' : '分割EPUB生成失敗',
+            message: `${outputs.length}件のEPUBを生成しました / ${failures.length}件失敗しました`,
+            details: [...failures, ...checkDetails].join('\n\n') || undefined,
+            outputDir: outputs[0],
+            isError: true,
+          });
+          return;
+        }
+
+        const fileSizeMB = (totalFileSize / (1024 * 1024)).toFixed(2);
+        setExportResultDialog({
+          show: true,
+          title: checkDetails.length > 0 ? '分割EPUB生成完了（チェック要確認）' : '分割EPUB生成完了',
+          message: `${outputs.length}件のEPUBを生成しました\n合計 ${totalPageCount}ページ / ${fileSizeMB}MB`,
+          details: checkDetails.length > 0 ? checkDetails.join('\n\n') : outputs.join('\n'),
+          outputDir: outputs[0],
+          isError: checkDetails.length > 0,
+        });
+        setIsEpubModalOpen(false);
+        return;
+      }
+
       // EPUB生成
       const response = await invoke<EpubGenerateResponse>('generate_epub', {
         metadata: generateMetadata,
@@ -2237,7 +2343,7 @@ function App() {
         const fileSizeMB = (response.fileSize / (1024 * 1024)).toFixed(2);
         const profileSummary = response.imageProfileSummary;
         const profileMessage = profileSummary
-          ? `\n\n画像プロファイル: sRGB ${profileSummary.rgbSrgbCount}件 / グレーDot Gain ${profileSummary.grayscaleDotGainCount}件 / ICCなし ${profileSummary.noIccCount}件 / グレーICC未設定 ${profileSummary.grayscaleNoProfileCount}件 / 原本維持 ${profileSummary.preservedOriginalCount}件`
+          ? `\n\n画像プロファイル: sRGB ${profileSummary.rgbSrgbCount}件 / Adobe RGB ${profileSummary.adobeRgbCount}件 / グレーDot Gain ${profileSummary.grayscaleDotGainCount}件 / ICCなし ${profileSummary.noIccCount}件 / グレーICC未設定 ${profileSummary.grayscaleNoProfileCount}件 / 原本維持 ${profileSummary.preservedOriginalCount}件`
           : '';
         const profileWarnings = profileSummary?.warnings?.length
           ? profileSummary.warnings.join('\n')

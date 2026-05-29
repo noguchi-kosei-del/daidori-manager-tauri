@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { useStore } from '../../store';
 import { EpubSpreadPreview } from './EpubSpreadPreview';
 import { EpubThumbnailBar } from './EpubThumbnailBar';
@@ -35,6 +35,18 @@ export function EpubMakerView({
     toggleEpubPageSelection,
     selectEpubPageRange,
   } = useStore();
+
+  useEffect(() => {
+    const preventNativeContextMenu = (event: MouseEvent) => {
+      const target = event.target as Element | null;
+      if (target?.closest('.preview-area')) {
+        event.preventDefault();
+      }
+    };
+
+    document.addEventListener('contextmenu', preventNativeContextMenu, { capture: true });
+    return () => document.removeEventListener('contextmenu', preventNativeContextMenu, { capture: true });
+  }, []);
 
   // ページ選択（Ctrl/Shift対応・再選択で解除）
   const handleSelectPage = (pageId: string, e?: React.MouseEvent) => {

@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { save } from '@tauri-apps/plugin-dialog';
 import { desktopDir, join } from '@tauri-apps/api/path';
@@ -14,10 +14,13 @@ import {
   HybridCssProfile,
   EpubImageColorPolicy,
   EpubPageImageProfileOverride,
+  EpubSplitSettings,
+  EPUB_IMAGE_COLOR_POLICY_OPTIONS,
   EPUB_FORMAT_LABELS,
   EPUB_FORMAT_VIEWPORTS,
   HYBRID_CSS_PROFILE_LABELS,
   EPUB_IMAGE_COLOR_POLICY_LABELS,
+  EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_OPTIONS,
   EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS,
   PAGE_DIRECTION_LABELS,
   SPREAD_MODE_LABELS,
@@ -32,7 +35,7 @@ import { useModalAnimation } from '../../hooks';
 interface EpubMetadataModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onGenerate: (metadata: EpubMetadata, outputPath: string) => void;
+  onGenerate: (metadata: EpubMetadata, outputPath: string, splitSettings?: EpubSplitSettings) => void;
   chapters: Chapter[];
   projectName: string;
 }
@@ -80,6 +83,15 @@ export function EpubMetadataModal({
   // 出力パス
   const [outputPath, setOutputPath] = useState('');
 
+  const [splitEnabled, setSplitEnabled] = useState(false);
+  const [splitRanges, setSplitRanges] = useState<{ startIndex: number; endIndex: number }[]>([]);
+  const [splitSelectingStart, setSplitSelectingStart] = useState<number | null>(null);
+  const [splitBaseName, setSplitBaseName] = useState('');
+  const [splitSuffixStart, setSplitSuffixStart] = useState(1);
+  const [splitSuffixDigits, setSplitSuffixDigits] = useState(3);
+  const [splitSuffixSeparator, setSplitSuffixSeparator] = useState('_');
+  const [splitContextMenu, setSplitContextMenu] = useState<{ x: number; y: number; pageId: string } | null>(null);
+
   // 生成中フラグ
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState<{ phase: string; current: number; total: number } | null>(null);
@@ -91,6 +103,10 @@ export function EpubMetadataModal({
   const epubSelectedPageIds = useStore((s) => s.epubSelectedPageIds);
   const setEpubCurrentSpread = useStore((s) => s.setEpubCurrentSpread);
   const setEpubSelectedPageId = useStore((s) => s.setEpubSelectedPageId);
+  const setEpubPageAsCover = useStore((s) => s.setEpubPageAsCover);
+  const setEpubPageAsColophon = useStore((s) => s.setEpubPageAsColophon);
+  const clearEpubPageCover = useStore((s) => s.clearEpubPageCover);
+  const clearEpubPageColophon = useStore((s) => s.clearEpubPageColophon);
   const setEpubPageImageProfileOverride = useStore((s) => s.setEpubPageImageProfileOverride);
   const loadEpubFromDaidori = useStore((s) => s.loadEpubFromDaidori);
 
@@ -100,6 +116,19 @@ export function EpubMetadataModal({
       loadEpubFromDaidori();
     }
   }, [isOpen, chapters, loadEpubFromDaidori]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const preventNativeContextMenu = (event: MouseEvent) => {
+      const target = event.target as Element | null;
+      if (target?.closest('.epub-modal')) {
+        event.preventDefault();
+      }
+    };
+
+    document.addEventListener('contextmenu', preventNativeContextMenu, { capture: true });
+    return () => document.removeEventListener('contextmenu', preventNativeContextMenu, { capture: true });
+  }, [isOpen]);
 
   // 進捗イベントを購読
   useEffect(() => {
@@ -121,6 +150,9 @@ export function EpubMetadataModal({
       // プロジェクト名をタイトルに設定
       if (!title && projectName) {
         setTitle(projectName);
+      }
+      if (!splitBaseName && projectName) {
+        setSplitBaseName(projectName);
       }
 
       // UUIDが空なら生成
@@ -217,6 +249,10 @@ export function EpubMetadataModal({
       return '著者を1人以上入力してください';
     }
     if (!outputPath) return '出力先を選択してください';
+    if (splitEnabled) {
+      if (splitRanges.length === 0) return '分割出力の範囲を1つ以上選択してください';
+      if (!splitBaseName.trim()) return '分割出力のベース名を入力してください';
+    }
 
     // 奥付ページの確認
     const hasColophon = chapters.some((ch) =>
@@ -269,7 +305,20 @@ export function EpubMetadataModal({
     };
 
     try {
-      await onGenerate(metadata, outputPath);
+      await onGenerate(
+        metadata,
+        outputPath,
+        splitEnabled
+          ? {
+              enabled: true,
+              ranges: splitRanges,
+              baseName: splitBaseName.trim(),
+              suffixStart: splitSuffixStart,
+              suffixDigits: splitSuffixDigits,
+              suffixSeparator: splitSuffixSeparator,
+            }
+          : undefined,
+      );
     } finally {
       setIsGenerating(false);
       setProgress(null);
@@ -281,6 +330,125 @@ export function EpubMetadataModal({
   const selectedEpubPage = epubSelectedPageId
     ? epubPages.find((p) => p.id === epubSelectedPageId) ?? null
     : null;
+
+  const splitAssigned = useMemo(() => {
+    const assigned = new Set<number>();
+    splitRanges.forEach((range) => {
+      for (let i = range.startIndex; i <= range.endIndex; i++) assigned.add(i);
+    });
+    return assigned;
+  }, [splitRanges]);
+
+  const handleSplitPageClick = (index: number) => {
+    if (splitAssigned.has(index)) return;
+    if (splitSelectingStart === null) {
+      setSplitSelectingStart(index);
+      return;
+    }
+
+    const startIndex = Math.min(splitSelectingStart, index);
+    const endIndex = Math.max(splitSelectingStart, index);
+    for (let i = startIndex; i <= endIndex; i++) {
+      if (splitAssigned.has(i)) {
+        alert(`ページ ${i + 1} は既に別の分割範囲に含まれています`);
+        setSplitSelectingStart(null);
+        return;
+      }
+    }
+
+    setSplitRanges((ranges) => [...ranges, { startIndex, endIndex }]);
+    setSplitSelectingStart(null);
+  };
+
+  const undoSplitRange = () => {
+    setSplitRanges((ranges) => ranges.slice(0, -1));
+    setSplitSelectingStart(null);
+  };
+
+  const clearSplitRanges = () => {
+    setSplitRanges([]);
+    setSplitSelectingStart(null);
+  };
+
+  const getSplitRangeIndex = (pageIndex: number) =>
+    splitRanges.findIndex((range) => pageIndex >= range.startIndex && pageIndex <= range.endIndex);
+
+  const getSplitThumbnailSrc = (page: (typeof epubPages)[number]): string | null => {
+    if (page.isBlank) return null;
+    const imagePath = page.thumbnailPath || page.sourcePath;
+    return imagePath.startsWith('data:') ? imagePath : convertFileSrc(imagePath);
+  };
+
+  const handleSplitThumbnailClick = (index: number) => {
+    const page = epubPages[index];
+    if (!page) return;
+    setSplitContextMenu(null);
+    setEpubSelectedPageId(page.id);
+    handleSplitPageClick(index);
+  };
+
+  const handleSplitThumbnailContextMenu = (e: React.MouseEvent, index: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const page = epubPages[index];
+    if (!page) return;
+    setEpubSelectedPageId(page.id);
+    setSplitContextMenu({ x: e.clientX, y: e.clientY, pageId: page.id });
+  };
+
+  const handleSplitContextProfileOverride = (override: EpubPageImageProfileOverride) => {
+    if (!splitContextMenu) return;
+    setEpubPageImageProfileOverride(splitContextMenu.pageId, override);
+    setSplitContextMenu(null);
+  };
+
+  const handleSplitContextSetCover = () => {
+    if (!splitContextMenu) return;
+    setEpubPageAsCover(splitContextMenu.pageId);
+    setSplitContextMenu(null);
+  };
+
+  const handleSplitContextClearCover = () => {
+    clearEpubPageCover();
+    setSplitContextMenu(null);
+  };
+
+  const handleSplitContextSetColophon = () => {
+    if (!splitContextMenu) return;
+    setEpubPageAsColophon(splitContextMenu.pageId);
+    setSplitContextMenu(null);
+  };
+
+  const handleSplitContextClearColophon = () => {
+    if (!splitContextMenu) return;
+    clearEpubPageColophon(splitContextMenu.pageId);
+    setSplitContextMenu(null);
+  };
+
+  useEffect(() => {
+    if (!splitContextMenu) return;
+    const closeMenu = () => setSplitContextMenu(null);
+    document.addEventListener('click', closeMenu);
+    return () => document.removeEventListener('click', closeMenu);
+  }, [splitContextMenu]);
+
+  const handlePreviewSelectPage = useCallback((pageId: string) => {
+    setEpubSelectedPageId(pageId);
+    if (!splitEnabled) return;
+
+    const pageIndex = epubPages.findIndex((page) => page.id === pageId);
+    if (pageIndex >= 0) {
+      handleSplitPageClick(pageIndex);
+    }
+  }, [epubPages, setEpubSelectedPageId, splitEnabled, splitAssigned, splitSelectingStart]);
+
+  const splitSummary = splitRanges.length === 0
+    ? `全${epubPages.length}ページ / 分割範囲を選択してください`
+    : splitRanges.map((range, idx) => {
+        const suffixNumber = splitSuffixStart + idx;
+        const fileName = `${splitBaseName || projectName || 'output'}${splitSuffixSeparator}${String(suffixNumber).padStart(splitSuffixDigits, '0')}.epub`;
+        return `第${suffixNumber}話: ${range.endIndex - range.startIndex + 1}P (p${range.startIndex + 1}-${range.endIndex + 1}) / ${fileName}`;
+      }).join('\n');
 
   const { shouldRender, isClosing } = useModalAnimation(isOpen);
   if (!shouldRender) return null;
@@ -361,16 +529,104 @@ export function EpubMetadataModal({
                 <p>ページがありません</p>
               </div>
             ) : (
-              <EpubSpreadPreview
-                pages={epubPages}
-                currentSpread={epubCurrentSpread}
-                selectedPageId={epubSelectedPageId}
-                selectedPageIds={epubSelectedPageIds}
-                onSpreadChange={setEpubCurrentSpread}
-                onSelectPage={(pageId) => setEpubSelectedPageId(pageId)}
-                bindingDirection={pageDirection}
-                isPageBarVisible={true}
-              />
+              splitEnabled ? (
+                <div className="epub-split-thumbnail-mode">
+                  <div className="epub-split-preview-guide">
+                    <span>サムネイルで開始ページ、終了ページの順にクリック</span>
+                    <span>
+                      {splitSelectingStart !== null
+                        ? `開始: p${splitSelectingStart + 1} / 終了ページを選択`
+                        : '次の分割範囲の開始ページを選択'}
+                    </span>
+                  </div>
+                  <div className="epub-split-thumbnail-grid" aria-label="分割範囲サムネイル">
+                    {epubPages.map((page, index) => {
+                      const rangeIndex = getSplitRangeIndex(index);
+                      const isAssigned = rangeIndex >= 0;
+                      const isSelecting = splitSelectingStart === index;
+                      const isRangeCover = isAssigned && splitRanges[rangeIndex].startIndex === index;
+                      const thumbnailSrc = getSplitThumbnailSrc(page);
+                      return (
+                        <button
+                          key={page.id}
+                          type="button"
+                          className={`epub-split-thumbnail ${isAssigned ? 'assigned' : ''} ${isSelecting ? 'selecting' : ''} ${isRangeCover || page.isCover ? 'cover' : ''} ${epubSelectedPageId === page.id ? 'selected' : ''}`}
+                          onClick={() => handleSplitThumbnailClick(index)}
+                          onContextMenu={(e) => handleSplitThumbnailContextMenu(e, index)}
+                          title={`${index + 1}ページ`}
+                          style={isAssigned ? { ['--split-color' as string]: `var(--split-color-${rangeIndex % 8})` } : undefined}
+                        >
+                          <span className="epub-split-thumbnail-image">
+                            {thumbnailSrc ? (
+                              <img src={thumbnailSrc} alt="" loading="lazy" />
+                            ) : (
+                              <span className="epub-split-thumbnail-placeholder">{page.isBlank ? '白紙' : 'No Image'}</span>
+                            )}
+                          </span>
+                          <span className="epub-split-thumbnail-meta">
+                            <span>{index + 1}</span>
+                            <span className="epub-split-thumbnail-badges">
+                              {page.isCover ? <span>表紙</span> : isRangeCover && <span>先頭</span>}
+                              {page.isColophon && <span>奥付</span>}
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {splitContextMenu && (
+                    <div
+                      className="epub-context-menu"
+                      style={{ left: splitContextMenu.x, top: splitContextMenu.y }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {(() => {
+                        const menuPage = epubPages.find((page) => page.id === splitContextMenu.pageId);
+                        return (
+                          <>
+                            {!menuPage?.isCover ? (
+                              <button type="button" onClick={handleSplitContextSetCover}>表紙に設定</button>
+                            ) : (
+                              <button type="button" onClick={handleSplitContextClearCover}>表紙を解除</button>
+                            )}
+                            {!menuPage?.isColophon ? (
+                              <button type="button" onClick={handleSplitContextSetColophon}>奥付に設定</button>
+                            ) : (
+                              <button type="button" onClick={handleSplitContextClearColophon}>奥付を解除</button>
+                            )}
+                            <div className="epub-context-menu-separator" />
+                          </>
+                        );
+                      })()}
+                      {EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_OPTIONS.map((override) => (
+                        <button
+                          key={override}
+                          type="button"
+                          onClick={() => handleSplitContextProfileOverride(override)}
+                          className={
+                            epubPages.find((page) => page.id === splitContextMenu.pageId)?.imageProfileOverride === override
+                              ? 'selected'
+                              : ''
+                          }
+                        >
+                          ICC: {EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS[override]}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <EpubSpreadPreview
+                  pages={epubPages}
+                  currentSpread={epubCurrentSpread}
+                  selectedPageId={epubSelectedPageId}
+                  selectedPageIds={epubSelectedPageIds}
+                  onSpreadChange={setEpubCurrentSpread}
+                  onSelectPage={handlePreviewSelectPage}
+                  bindingDirection={pageDirection}
+                  isPageBarVisible={true}
+                />
+              )
             )}
           </div>
 
@@ -426,14 +682,14 @@ export function EpubMetadataModal({
                 value={imageColorPolicy}
                 onChange={(e) => setImageColorPolicy(e.target.value as EpubImageColorPolicy)}
               >
-                {(Object.keys(EPUB_IMAGE_COLOR_POLICY_LABELS) as EpubImageColorPolicy[]).map((policy) => (
+                {EPUB_IMAGE_COLOR_POLICY_OPTIONS.map((policy) => (
                   <option key={policy} value={policy}>
                     {EPUB_IMAGE_COLOR_POLICY_LABELS[policy]}
                   </option>
                 ))}
               </select>
               <div className="form-hint">
-                Autoは本文のグレースケールを維持し、カラー画像はsRGB JPEGに正規化します。
+                Autoは本文のグレースケールを維持し、カラー画像はsRGB JPEGに正規化します。Adobe RGB運用時は全体設定またはページ個別指定で選択してください。
               </div>
             </div>
             {selectedEpubPage && (
@@ -448,7 +704,7 @@ export function EpubMetadataModal({
                     )
                   }
                 >
-                  {(Object.keys(EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS) as EpubPageImageProfileOverride[]).map((override) => (
+                  {EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_OPTIONS.map((override) => (
                     <option key={override} value={override}>
                       {EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS[override]}
                     </option>
@@ -471,6 +727,76 @@ export function EpubMetadataModal({
                 </button>
               </div>
             </div>
+          </div>
+
+          <div className="form-section epub-split-settings">
+            <h3 className="section-heading">分割出力</h3>
+            <div className="form-group checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={splitEnabled}
+                  onChange={(e) => setSplitEnabled(e.target.checked)}
+                />
+                EPUB_maker方式で分割して出力
+              </label>
+            </div>
+            {splitEnabled && (
+              <>
+                <div className="epub-split-actions">
+                  <button className="btn-secondary btn-small" type="button" onClick={undoSplitRange} disabled={splitRanges.length === 0}>
+                    最後の分割を取り消し
+                  </button>
+                  <button className="btn-secondary btn-small" type="button" onClick={clearSplitRanges} disabled={splitRanges.length === 0 && splitSelectingStart === null}>
+                    すべてクリア
+                  </button>
+                </div>
+                <div className="form-row">
+                  <div className="form-group flex-grow">
+                    <label>ベース名</label>
+                    <input
+                      type="text"
+                      value={splitBaseName}
+                      onChange={(e) => setSplitBaseName(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>区切り</label>
+                    <input
+                      type="text"
+                      value={splitSuffixSeparator}
+                      onChange={(e) => setSplitSuffixSeparator(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>開始番号</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={9999}
+                      value={splitSuffixStart}
+                      onChange={(e) => setSplitSuffixStart(Number(e.target.value) || 0)}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>桁数</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={5}
+                      value={splitSuffixDigits}
+                      onChange={(e) => setSplitSuffixDigits(Math.max(1, Math.min(5, Number(e.target.value) || 1)))}
+                    />
+                  </div>
+                </div>
+                <div className="form-hint">
+                  開始ページ、終了ページの順にクリックすると1つのEPUB範囲になります。各範囲の先頭ページを表紙として出力します。
+                </div>
+                <pre className="epub-split-summary">{splitSummary}</pre>
+              </>
+            )}
           </div>
 
           {/* 書籍情報 */}

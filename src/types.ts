@@ -203,20 +203,43 @@ export const HYBRID_CSS_PROFILE_LABELS: Record<HybridCssProfile, string> = {
   legacy: '旧Hybrid CSS',
 };
 
-export type EpubImageColorPolicy = 'auto' | 'full_color_srgb' | 'no_icc' | 'preserve_original';
+export type EpubImageColorPolicy = 'auto' | 'full_color_srgb' | 'full_color_adobe_rgb' | 'adobe_rgb_dot_gain' | 'no_icc' | 'preserve_original';
+
+export const EPUB_IMAGE_COLOR_POLICY_OPTIONS: EpubImageColorPolicy[] = [
+  'auto',
+  'full_color_srgb',
+  'full_color_adobe_rgb',
+  'adobe_rgb_dot_gain',
+  'no_icc',
+  'preserve_original',
+];
 
 export const EPUB_IMAGE_COLOR_POLICY_LABELS: Record<EpubImageColorPolicy, string> = {
   auto: '自動（本文モノクロ＋カラーsRGB）',
   full_color_srgb: 'フルカラー（全ページsRGB）',
+  full_color_adobe_rgb: 'フルカラー（全ページAdobe RGB 1998）',
+  adobe_rgb_dot_gain: 'カラーAdobe RGB 1998＋本文Dot Gain',
   no_icc: '全ページICCなし',
   preserve_original: '元画像を維持',
 };
 
-export type EpubPageImageProfileOverride = 'auto' | 'srgb' | 'dot_gain' | 'no_icc' | 'preserve_original';
+export type EpubPageImageProfileOverride = 'auto' | 'srgb' | 'adobe_rgb' | 'adobe_rgb_dot_gain' | 'dot_gain' | 'no_icc' | 'preserve_original';
+
+export const EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_OPTIONS: EpubPageImageProfileOverride[] = [
+  'auto',
+  'srgb',
+  'adobe_rgb',
+  'adobe_rgb_dot_gain',
+  'dot_gain',
+  'no_icc',
+  'preserve_original',
+];
 
 export const EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS: Record<EpubPageImageProfileOverride, string> = {
   auto: '自動',
   srgb: 'sRGBを付与',
+  adobe_rgb: 'Adobe RGB 1998を付与',
+  adobe_rgb_dot_gain: 'Adobe RGB 1998 / Dot Gain自動',
   dot_gain: 'Dot Gainを付与',
   no_icc: 'ICCなし',
   preserve_original: '原本維持',
@@ -283,6 +306,20 @@ export interface EpubMetadata {
   imageColorPolicy?: EpubImageColorPolicy;
 }
 
+export interface EpubSplitRange {
+  startIndex: number;
+  endIndex: number;
+}
+
+export interface EpubSplitSettings {
+  enabled: boolean;
+  ranges: EpubSplitRange[];
+  baseName: string;
+  suffixStart: number;
+  suffixDigits: number;
+  suffixSeparator: string;
+}
+
 // EPUBページ情報
 export interface EpubPage {
   id: string;
@@ -299,6 +336,7 @@ export interface EpubPage {
 
 export interface EpubImageProfileSummary {
   rgbSrgbCount: number;
+  adobeRgbCount: number;
   grayscaleDotGainCount: number;
   grayscaleNoProfileCount: number;
   noIccCount: number;

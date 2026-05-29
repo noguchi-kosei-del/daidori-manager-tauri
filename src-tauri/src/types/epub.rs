@@ -27,6 +27,8 @@ pub enum EpubImageColorPolicy {
     #[default]
     Auto,
     FullColorSrgb,
+    FullColorAdobeRgb,
+    AdobeRgbDotGain,
     NoIcc,
     PreserveOriginal,
 }
@@ -37,6 +39,8 @@ pub enum EpubPageImageProfileOverride {
     #[default]
     Auto,
     Srgb,
+    AdobeRgb,
+    AdobeRgbDotGain,
     DotGain,
     NoIcc,
     PreserveOriginal,
@@ -276,6 +280,7 @@ pub struct EpubPage {
 #[serde(rename_all = "camelCase")]
 pub struct EpubImageProfileSummary {
     pub rgb_srgb_count: usize,
+    pub adobe_rgb_count: usize,
     pub grayscale_dot_gain_count: usize,
     pub grayscale_no_profile_count: usize,
     pub no_icc_count: usize,

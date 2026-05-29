@@ -88,9 +88,9 @@ fn validate_pages(metadata: &EpubMetadata, pages: &[EpubPage]) -> Result<(), Str
 
     // 奥付ページの確認
     let has_colophon = pages.iter().any(|p| p.is_colophon);
-    let allow_missing_colophon = metadata.output_format == EpubFormat::Hybrid
-        && (metadata.allow_missing_colophon
-            || metadata.hybrid_css_profile == crate::types::HybridCssProfile::Legacy);
+    let allow_missing_colophon = metadata.allow_missing_colophon
+        || (metadata.output_format == EpubFormat::Hybrid
+            && metadata.hybrid_css_profile == crate::types::HybridCssProfile::Legacy);
     if !has_colophon && !allow_missing_colophon {
         return Err("奥付ページを設定してください".to_string());
     }
