@@ -6208,6 +6208,40 @@ h3.section-heading {
   margin: var(--spacing-sm) 0;
 }
 
+.epub-split-title-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-sm);
+}
+
+.epub-split-title-row {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--spacing-sm);
+  align-items: end;
+  padding: var(--spacing-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius);
+  background: var(--color-bg-primary);
+}
+
+.epub-split-title-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+}
+
+.epub-split-title-label small {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 400;
+}
+
 .epub-split-summary {
   white-space: pre-wrap;
   margin: var(--spacing-sm) 0 0;

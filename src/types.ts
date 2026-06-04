@@ -315,6 +315,8 @@ export interface EpubSplitSettings {
   enabled: boolean;
   ranges: EpubSplitRange[];
   baseName: string;
+  titles?: string[];
+  titleFileAsList?: string[];
   suffixStart: number;
   suffixDigits: number;
   suffixSeparator: string;

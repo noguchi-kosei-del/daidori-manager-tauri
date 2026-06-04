@@ -87,6 +87,8 @@ export function EpubMetadataModal({
   const [splitRanges, setSplitRanges] = useState<{ startIndex: number; endIndex: number }[]>([]);
   const [splitSelectingStart, setSplitSelectingStart] = useState<number | null>(null);
   const [splitBaseName, setSplitBaseName] = useState('');
+  const [splitTitles, setSplitTitles] = useState<string[]>([]);
+  const [splitTitleFileAsList, setSplitTitleFileAsList] = useState<string[]>([]);
   const [splitSuffixStart, setSplitSuffixStart] = useState(1);
   const [splitSuffixDigits, setSplitSuffixDigits] = useState(3);
   const [splitSuffixSeparator, setSplitSuffixSeparator] = useState('_');
@@ -178,6 +180,31 @@ export function EpubMetadataModal({
     }
   };
 
+  useEffect(() => {
+    if (!splitEnabled) return;
+    const baseTitle = title.trim() || projectName || splitBaseName.trim() || 'output';
+    setSplitTitles((current) =>
+      splitRanges.map((_, index) => {
+        if (current[index]?.trim()) return current[index];
+        const suffixNumber = splitSuffixStart + index;
+        const suffix = String(suffixNumber).padStart(splitSuffixDigits, '0');
+        return `${baseTitle}${splitSuffixSeparator}${suffix}`;
+      })
+    );
+    setSplitTitleFileAsList((current) =>
+      splitRanges.map((_, index) => current[index] ?? '')
+    );
+  }, [
+    splitEnabled,
+    splitRanges,
+    splitSuffixStart,
+    splitSuffixDigits,
+    splitSuffixSeparator,
+    splitBaseName,
+    title,
+    projectName,
+  ]);
+
   // 形式変更時にビューポートサイズを更新
   const handleFormatChange = (format: EpubFormat) => {
     setOutputFormat(format);
@@ -243,6 +270,9 @@ export function EpubMetadataModal({
 
   // バリデーション
   const validate = (): string | null => {
+    if (splitEnabled && splitRanges.length > 0 && splitRanges.some((_, index) => !splitTitles[index]?.trim())) {
+      return '分割範囲ごとのプロジェクト名を入力してください';
+    }
     if (!title.trim()) return 'タイトルを入力してください';
     if (!publisher.trim()) return '出版社を入力してください';
     if (authors.length === 0 || !authors[0].name.trim()) {
@@ -318,6 +348,8 @@ export function EpubMetadataModal({
               enabled: true,
               ranges: splitRanges,
               baseName: splitBaseName.trim(),
+              titles: splitRanges.map((_, index) => splitTitles[index]?.trim() || title.trim()),
+              titleFileAsList: splitRanges.map((_, index) => splitTitleFileAsList[index]?.trim() || titleFileAs.trim()),
               suffixStart: splitSuffixStart,
               suffixDigits: splitSuffixDigits,
               suffixSeparator: splitSuffixSeparator,
@@ -369,6 +401,8 @@ export function EpubMetadataModal({
     const rangeIndex = getSplitRangeIndex(index);
     if (rangeIndex >= 0) {
       setSplitRanges((ranges) => ranges.filter((_, i) => i !== rangeIndex));
+      setSplitTitles((titles) => titles.filter((_, i) => i !== rangeIndex));
+      setSplitTitleFileAsList((titles) => titles.filter((_, i) => i !== rangeIndex));
       setSplitSelectingStart(null);
       return;
     }
@@ -397,12 +431,32 @@ export function EpubMetadataModal({
 
   const undoSplitRange = () => {
     setSplitRanges((ranges) => ranges.slice(0, -1));
+    setSplitTitles((titles) => titles.slice(0, -1));
+    setSplitTitleFileAsList((titles) => titles.slice(0, -1));
     setSplitSelectingStart(null);
   };
 
   const clearSplitRanges = () => {
     setSplitRanges([]);
+    setSplitTitles([]);
+    setSplitTitleFileAsList([]);
     setSplitSelectingStart(null);
+  };
+
+  const updateSplitTitle = (index: number, value: string) => {
+    setSplitTitles((current) => {
+      const next = [...current];
+      next[index] = value;
+      return next;
+    });
+  };
+
+  const updateSplitTitleFileAs = (index: number, value: string) => {
+    setSplitTitleFileAsList((current) => {
+      const next = [...current];
+      next[index] = value;
+      return next;
+    });
   };
 
   const getSplitRangeIndex = (pageIndex: number) =>
@@ -482,7 +536,8 @@ export function EpubMetadataModal({
     : splitRanges.map((range, idx) => {
         const suffixNumber = splitSuffixStart + idx;
         const fileName = `${splitBaseName || projectName || 'output'}${splitSuffixSeparator}${String(suffixNumber).padStart(splitSuffixDigits, '0')}.epub`;
-        return `第${suffixNumber}話: ${range.endIndex - range.startIndex + 1}P (p${range.startIndex + 1}-${range.endIndex + 1}) / ${fileName}`;
+        const volumeTitle = splitTitles[idx]?.trim() || title.trim() || projectName || 'output';
+        return `第${suffixNumber}話: ${volumeTitle} / ${range.endIndex - range.startIndex + 1}P (p${range.startIndex + 1}-${range.endIndex + 1}) / ${fileName}`;
       }).join('\n');
 
   const { shouldRender, isClosing } = useModalAnimation(isOpen);
@@ -832,6 +887,39 @@ export function EpubMetadataModal({
                 <div className="form-hint">
                   開始ページ、終了ページの順にクリックすると1つのEPUB範囲になります。各範囲の先頭ページを表紙として出力します。
                 </div>
+                {splitRanges.length > 0 && (
+                  <div className="epub-split-title-list">
+                    {splitRanges.map((range, index) => {
+                      const suffixNumber = splitSuffixStart + index;
+                      return (
+                        <div key={`${range.startIndex}-${range.endIndex}`} className="epub-split-title-row">
+                          <div className="epub-split-title-label">
+                            <span>分割 {suffixNumber}</span>
+                            <small>p{range.startIndex + 1}-p{range.endIndex + 1}</small>
+                          </div>
+                          <div className="form-group flex-grow">
+                            <label>プロジェクト名 *</label>
+                            <input
+                              type="text"
+                              value={splitTitles[index] ?? ''}
+                              onChange={(e) => updateSplitTitle(index, e.target.value)}
+                              placeholder="EPUB内の作品タイトル"
+                            />
+                          </div>
+                          <div className="form-group flex-grow">
+                            <label>プロジェクト名読み仮名</label>
+                            <input
+                              type="text"
+                              value={splitTitleFileAsList[index] ?? ''}
+                              onChange={(e) => updateSplitTitleFileAs(index, e.target.value)}
+                              placeholder="未入力なら共通設定を使用"
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 <pre className="epub-split-summary">{splitSummary}</pre>
               </>
             )}

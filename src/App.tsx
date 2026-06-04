@@ -2339,8 +2339,19 @@ function App() {
           }
 
           const volumeOutputPath = buildSplitOutputPath(outputPath, splitSettings, i);
+          const volumeTitle = splitSettings.titles?.[i]?.trim() || splitMetadata.title;
+          const volumeTitleFileAs =
+            splitSettings.titleFileAsList?.[i]?.trim() ||
+            splitMetadata.titleFileAs;
+          const volumeBookUuid = await invoke<string>('generate_book_uuid');
+          const volumeMetadata: EpubMetadata = {
+            ...splitMetadata,
+            title: volumeTitle,
+            titleFileAs: volumeTitleFileAs,
+            bookUuid: volumeBookUuid,
+          };
           const response = await invoke<EpubGenerateResponse>('generate_epub', {
-            metadata: splitMetadata,
+            metadata: volumeMetadata,
             pages: buildSplitVolumePages(volumePages),
             outputPath: volumeOutputPath,
             customCss: null,
