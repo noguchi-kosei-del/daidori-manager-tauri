@@ -370,6 +370,8 @@ export function EpubMetadataModal({
   const selectedEpubPage = epubSelectedPageId
     ? epubPages.find((p) => p.id === epubSelectedPageId) ?? null
     : null;
+  const validationError = validate();
+  const canGenerate = !isGenerating && totalPages > 0 && !validationError;
 
   const splitAssigned = useMemo(() => {
     const assigned = new Set<number>();
@@ -1259,13 +1261,10 @@ export function EpubMetadataModal({
         </div>
 
         <div className="modal-footer">
-          <button className="btn-secondary btn-small" onClick={onClose}>
-            キャンセル
-          </button>
           <button
             className="btn-primary btn-small"
             onClick={handleGenerate}
-            disabled={isGenerating || totalPages === 0}
+            disabled={!canGenerate}
           >
             {isGenerating ? 'EPUB生成中...' : 'EPUBを生成'}
           </button>

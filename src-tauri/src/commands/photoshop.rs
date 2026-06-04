@@ -5,6 +5,8 @@ use tauri::Manager;
 /// Photoshopのインストールパスを検索
 pub fn find_photoshop_path() -> Option<String> {
     let possible_paths = [
+        // Adobe Photoshop 2026
+        r"C:\Program Files\Adobe\Adobe Photoshop 2026\Photoshop.exe",
         // Adobe Photoshop 2025
         r"C:\Program Files\Adobe\Adobe Photoshop 2025\Photoshop.exe",
         // Adobe Photoshop 2024
@@ -24,6 +26,7 @@ pub fn find_photoshop_path() -> Option<String> {
         // Adobe Photoshop CC
         r"C:\Program Files\Adobe\Adobe Photoshop CC\Photoshop.exe",
         // 32bit versions
+        r"C:\Program Files (x86)\Adobe\Adobe Photoshop 2026\Photoshop.exe",
         r"C:\Program Files (x86)\Adobe\Adobe Photoshop 2025\Photoshop.exe",
         r"C:\Program Files (x86)\Adobe\Adobe Photoshop 2024\Photoshop.exe",
         r"C:\Program Files (x86)\Adobe\Adobe Photoshop 2023\Photoshop.exe",
@@ -34,7 +37,44 @@ pub fn find_photoshop_path() -> Option<String> {
             return Some(path.to_string());
         }
     }
-    None
+
+    find_photoshop_in_adobe_dirs()
+}
+
+fn find_photoshop_in_adobe_dirs() -> Option<String> {
+    let mut roots = Vec::new();
+
+    if let Ok(program_files) = std::env::var("ProgramFiles") {
+        roots.push(PathBuf::from(program_files).join("Adobe"));
+    }
+    if let Ok(program_files_x86) = std::env::var("ProgramFiles(x86)") {
+        roots.push(PathBuf::from(program_files_x86).join("Adobe"));
+    }
+
+    roots.push(PathBuf::from(r"C:\Program Files\Adobe"));
+    roots.push(PathBuf::from(r"C:\Program Files (x86)\Adobe"));
+
+    let mut candidates: Vec<PathBuf> = roots
+        .into_iter()
+        .filter_map(|root| fs::read_dir(root).ok())
+        .flat_map(|entries| entries.filter_map(Result::ok))
+        .filter_map(|entry| {
+            let path = entry.path();
+            let dir_name = path.file_name()?.to_string_lossy().to_lowercase();
+            if !dir_name.starts_with("adobe photoshop") {
+                return None;
+            }
+
+            let photoshop_path = path.join("Photoshop.exe");
+            photoshop_path.exists().then_some(photoshop_path)
+        })
+        .collect();
+
+    candidates.sort_by(|a, b| b.cmp(a));
+    candidates
+        .into_iter()
+        .next()
+        .map(|path| path.to_string_lossy().to_string())
 }
 
 /// リソースディレクトリからスクリプトパスを検索

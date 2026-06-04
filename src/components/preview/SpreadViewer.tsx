@@ -10,6 +10,8 @@ import { getValidationMessage } from '../../utils/validationMessage';
 const CLOSE_BUTTON_HIDE_DELAY = 3000;
 // ナビゲーションヒント表示時間（ミリ秒）
 const NAV_HINT_SHOW_DURATION = 3000;
+const WHEEL_NAVIGATION_INTERVAL = 180;
+const WHEEL_NAVIGATION_THRESHOLD = 12;
 
 export function SpreadViewer({
   pages,
@@ -44,6 +46,7 @@ export function SpreadViewer({
   const [isDragging, setIsDragging] = useState(false);
   const [dragHandlePosition, setDragHandlePosition] = useState(0);
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const lastWheelNavigationAtRef = useRef(0);
 
   // ページジャンプダイアログ
   const [showJumpDialog, setShowJumpDialog] = useState(false);
@@ -107,7 +110,22 @@ export function SpreadViewer({
     if (!container) return;
 
     const handleWheel = (e: WheelEvent) => {
-      if (!e.altKey) return;
+      if (!e.altKey) {
+        const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+        if (Math.abs(delta) < WHEEL_NAVIGATION_THRESHOLD || totalSpreads <= 1) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        const now = Date.now();
+        if (now - lastWheelNavigationAtRef.current < WHEEL_NAVIGATION_INTERVAL) return;
+        lastWheelNavigationAtRef.current = now;
+
+        const direction = delta > 0 ? 1 : -1;
+        setCurrentSpreadIndex(prev => Math.max(0, Math.min(totalSpreads - 1, prev + direction)));
+        return;
+      }
+
       e.preventDefault();
       e.stopPropagation();
 
@@ -136,7 +154,7 @@ export function SpreadViewer({
 
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
-  }, [zoom, onZoomChange]);
+  }, [zoom, onZoomChange, totalSpreads]);
 
   // 現在のスプレッド周辺のサムネイルをキュー
   useEffect(() => {

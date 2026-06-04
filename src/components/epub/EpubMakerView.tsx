@@ -1,7 +1,6 @@
 import { useEffect, type ReactNode } from 'react';
 import { useStore } from '../../store';
 import { EpubSpreadPreview } from './EpubSpreadPreview';
-import { EpubThumbnailBar } from './EpubThumbnailBar';
 import { NoPageIcon } from '../../icons';
 
 interface EpubMakerViewProps {
@@ -111,18 +110,6 @@ export function EpubMakerView({
             isPageBarVisible={isPageBarVisible}
             bindingDirection={bindingDirection}
           />
-          {!isViewerMode && (
-            <EpubThumbnailBar
-              pages={epubPages}
-              currentSpread={epubCurrentSpread}
-              selectedPageId={epubSelectedPageId}
-              selectedPageIds={epubSelectedPageIds}
-              onSelectPage={handleSelectPage}
-              onSpreadChange={handleSpreadChange}
-              onReplaceFile={onReplaceFile}
-              bindingDirection={bindingDirection}
-            />
-          )}
         </>
       )}
     </div>

@@ -153,19 +153,29 @@ export function ExportModal({
 
   // Photoshopインストールチェック
   useEffect(() => {
+    if (!isOpen) return;
+
+    let cancelled = false;
     const checkPhotoshop = async () => {
+      setPhotoshopInstalled(null);
       try {
         const installed = await invoke<boolean>('check_photoshop_installed');
-        setPhotoshopInstalled(installed);
+        if (!cancelled) {
+          setPhotoshopInstalled(installed);
+        }
       } catch (e) {
         console.error('Failed to check Photoshop:', e);
-        setPhotoshopInstalled(false);
+        if (!cancelled) {
+          setPhotoshopInstalled(false);
+        }
       }
     };
-    if (isOpen && photoshopInstalled === null) {
-      checkPhotoshop();
-    }
-  }, [isOpen, photoshopInstalled]);
+    checkPhotoshop();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   // PSD・JPEGファイルがあるかチェック（TIFF変換対象）
   const hasTiffConvertibleFiles = chapters.some(chapter =>

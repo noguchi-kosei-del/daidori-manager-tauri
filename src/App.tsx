@@ -88,7 +88,6 @@ import {
 
 
 const DRAWN_EXTRA_FOLDER_NAMES = new Set(['全書店', 'シーモア', 'Renta!', 'ebookjapan']);
-
 const getFolderName = (folderPath: string): string => {
   const cleaned = folderPath.replace(/[\\/]+$/, '');
   const parts = cleaned.split(/[\\/]/);
@@ -484,7 +483,8 @@ function App() {
     return saved === 'true';
   });
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [openDropdown, setOpenDropdown] = useState<'binding' | null>(null);
+  const [openDropdown, setOpenDropdown] = useState<'view' | 'binding' | null>(null);
+  const viewDropdownRef = useRef<HTMLDivElement>(null);
   const bindingDropdownRef = useRef<HTMLDivElement>(null);
   const [isSidebarFlipped, setIsSidebarFlipped] = useState(() => {
     const saved = localStorage.getItem('daidori_sidebar_flipped');
@@ -1495,7 +1495,9 @@ function App() {
   useEffect(() => {
     if (!openDropdown) return;
     const handleClick = (e: MouseEvent) => {
-      if (bindingDropdownRef.current && !bindingDropdownRef.current.contains(e.target as Node)) {
+      const refs = { view: viewDropdownRef, binding: bindingDropdownRef };
+      const ref = refs[openDropdown];
+      if (ref.current && !ref.current.contains(e.target as Node)) {
         setOpenDropdown(null);
       }
     };
@@ -2972,33 +2974,38 @@ function App() {
               </button>
 
               <div className="header-divider" />
-              {/* 表示モードトグル */}
-              <div className="view-mode-toggle-container" aria-label="表示モード">
+              {/* 表示モードドロップダウン */}
+              <div className="header-popup-container" ref={viewDropdownRef}>
                 <button
-                  type="button"
-                  className={`view-mode-toggle-btn ${previewMode === 'grid' ? 'active' : ''}`}
-                  onClick={() => handlePreviewModeChange('grid')}
-                  title="リスト表示"
+                  className={`header-popup-trigger ${openDropdown === 'view' ? 'open' : ''}`}
+                  onClick={() => setOpenDropdown(openDropdown === 'view' ? null : 'view')}
                 >
-                  <GridViewIcon size={14} />
+                  {previewMode === 'grid' ? <GridViewIcon size={14} /> : previewMode === 'spread' ? <BookOpenIcon size={14} /> : <BookIcon size={14} />}
+                  <span>{previewMode === 'grid' ? 'リスト' : previewMode === 'spread' ? '見開き' : 'EPUB'}</span>
+                  <svg className="header-popup-chevron" width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 4L5 6.5L7.5 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
                 </button>
-                <button
-                  type="button"
-                  className={`view-mode-toggle-btn ${previewMode === 'spread' ? 'active' : ''}`}
-                  onClick={() => handlePreviewModeChange('spread')}
-                  title="見開き表示"
-                >
-                  <BookOpenIcon size={14} />
-                </button>
-                <button
-                  type="button"
-                  className={`view-mode-toggle-btn ${previewMode === 'epub' ? 'active' : ''}`}
-                  onClick={() => handlePreviewModeChange('epub')}
-                  disabled={allPages.length === 0}
-                  title="EPUB生成モード"
-                >
-                  <BookIcon size={14} />
-                </button>
+                <div className={`header-popup-menu ${openDropdown === 'view' ? 'open' : ''}`}>
+                  <div className="header-popup-header">表示</div>
+                  <button className={`header-popup-item ${previewMode === 'grid' ? 'selected' : ''}`} onClick={() => handlePreviewModeChange('grid')}>
+                    <GridViewIcon size={16} />
+                    <span>リスト</span>
+                    {previewMode === 'grid' && <span className="header-popup-check"><CheckIcon2 /></span>}
+                  </button>
+                  <button className={`header-popup-item ${previewMode === 'spread' ? 'selected' : ''}`} onClick={() => handlePreviewModeChange('spread')}>
+                    <BookOpenIcon size={16} />
+                    <span>見開き</span>
+                    {previewMode === 'spread' && <span className="header-popup-check"><CheckIcon2 /></span>}
+                  </button>
+                  <button
+                    className={`header-popup-item ${previewMode === 'epub' ? 'selected' : ''}`}
+                    onClick={() => handlePreviewModeChange('epub')}
+                    disabled={allPages.length === 0}
+                  >
+                    <BookIcon size={16} />
+                    <span>EPUB</span>
+                    {previewMode === 'epub' && <span className="header-popup-check"><CheckIcon2 /></span>}
+                  </button>
+                </div>
               </div>
 
               <div className="header-divider" />
