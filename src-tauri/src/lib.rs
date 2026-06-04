@@ -37,7 +37,7 @@ use commands::export::export_pages;
 use commands::project::{save_project, load_project, validate_project_files, validate_pages};
 use commands::recent::{get_recent_files, add_recent_file};
 use commands::open_file::open_file_with_default_app;
-use commands::tiff::{check_photoshop_installed, run_photoshop_tiff_convert};
+use commands::tiff::{check_photoshop_installed, run_photoshop_tiff_convert, read_atn_actions};
 use commands::jpeg_native::run_native_jpeg_convert;
 use commands::epub::{generate_epub, generate_book_uuid, get_image_dimensions, create_epub_metadata, get_default_viewport, read_psd_guides};
 use commands::epubcheck::validate_epub_with_epubcheck;
@@ -140,6 +140,7 @@ pub fn run() {
             open_file_with_default_app,
             check_photoshop_installed,
             run_photoshop_tiff_convert,
+            read_atn_actions,
             run_native_jpeg_convert,
             generate_epub,
             generate_book_uuid,

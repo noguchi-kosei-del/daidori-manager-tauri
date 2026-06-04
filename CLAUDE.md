@@ -2391,3 +2391,80 @@ A3. **フロントエンド** ([src/App.tsx](src/App.tsx)): `loadProjectFromPath
 >   既存の `loadProjectFromPath` を使ってダブルクリックした `.daiw` を確実に復元（多重起動抑止の副次効果あり）
 > - 補足: CLAUDE.md v1.5.4 の「保存/読込 UI は削除済み」記述は実コードと乖離していた（v1.5.3 で再追加済み）点を本節で訂正。
 >   なお v1.5.5（分割 EPUB 関連: split range 編集・page role override・split EPUBCheck 結果表示）は本リポジトリにマージ済みだが CLAUDE.md には未文書化。
+
+---
+
+## TIFF変換の刷新: Photoshop 2026対応・アクション連携・背景ぼかし・サイズ統一・断ち切り比率対応（作業中, v1.5.6 上に追加）
+
+> ⚠️ バージョンファイル（package.json 等）は **`1.5.6` のまま未更新**（チェックポイントのため）。背景ぼかし機能は実装済みだがユーザー実機での最終確認は保留中。コア（比率クロップ・サイズ統一・自動保存）は実機検証済み。
+
+漫画原稿の TIFF 入稿向けに、TIFF 変換経路を「Photoshop アクション連携」「背景ぼかし」「サイズ統一（指定ピクセル）」「断ち切りの比率対応」へ拡張。サイズ違いの PSD でも断ち切り範囲が揃い、全ページを同一サイズに自動リサイズして自動保存できるようにした。
+
+### A. Photoshop インストールパス検出を 2026 対応＋動的スキャン（src-tauri/src/commands/photoshop.rs）
+
+- `find_photoshop_path` の固定リストに **Adobe Photoshop 2026** を追加。
+- 固定リストに無い場合のフォールバックとして `scan_adobe_dirs_for_photoshop()` を新設。`C:\Program Files\Adobe` と `C:\Program Files (x86)\Adobe` を走査し、`Adobe Photoshop*` フォルダ内の `Photoshop.exe` を検出。複数ヒット時はフォルダ名降順（=新しいバージョン優先）で採用。将来の新バージョンも自動検出される。
+- 症状: 2026 がインストール済みでも「Photoshopが見つかりません」になっていた（リストが 2025 まで）。
+
+### B. .atn（Photoshopアクションセット）解析コマンド（src-tauri/src/commands/tiff.rs）
+
+- 新規コマンド `read_atn_actions(path) -> AtnInfo { set_name, actions }`。`.atn` ファイルを解析し、**セット名**と**アクション名一覧**を返す（フロントのドロップダウン用）。
+- `parse_atn_set_name(path)`: ATN ヘッダ（`[4byte version][4byte 名前長(UTF-16単位数, BE, 終端null含む)][UTF-16BE 名前]`）からセット名を解析。
+- `parse_atn_action_names(bytes)`: 各アクションの 6バイトのゼロ（index2+shift1+command1+colorIndex2、ショートカット無しの一般ケース）に続く UnicodeString 名を境界走査で収集。
+- `filename_stem(path)`: 解析失敗時のフォールバック（拡張子なしファイル名）。
+- lib.rs の invoke_handler に `read_atn_actions` を登録。
+
+### C. TIFF グローバル設定にアクション項目を追加（src-tauri/src/types/tiff.rs）
+
+`TiffGlobalSettings` に以下を追加（`#[serde(rename_all = "camelCase")]` のため JS では camelCase）:
+- `run_action: bool`
+- `action_set_path: Option<String>`（選択した .atn パス。処理開始時に `app.load` で読み込む）
+- `action_set: Option<String>`（`action_set_path` から解析して補完）
+- `action_name: Option<String>`
+
+`run_photoshop_tiff_convert`（commands/tiff.rs）で、`run_action` 時に `action_set_path` から `parse_atn_set_name`（失敗時 `filename_stem`）でセット名を解析し `action_set` に補完してから設定 JSON を書き出す。
+
+### D. TIFF 変換 JSX（src-tauri/scripts/tiff_convert.jsx）の処理順刷新
+
+処理順を「テキスト/背景分離 → 色モード → **背景ぼかし(step9)** → 統合 → **断ち切りクロップ(step12)** → **Photoshopアクション(step12.5)** → **指定pxリサイズ(step13)** → アルファ除去 → 保存」に整理。
+
+- **アクション実行（step12.5, リサイズの前）**: `globalSettings.runAction && actionName` のとき、開始時に `app.load(.atn)` 済みのセットに対し `app.doAction(actionName, actionSet)`。最終サイズは後段のアプリリサイズで確定させるため、アクションはリサイズより前に実行する。
+- **アクションが保存・閉じるまで行う場合**: 実行前後の `app.documents.length` を比較し、ドキュメントが閉じられた（`docsAfter < docsBefore`）ら `actionClosedDoc=true` として、以降のアプリ側のリサイズ・保存をスキップし成功扱いで return（出力はアクションの保存先に従う）。
+- **断ち切りクロップを比率方式に対応**: `cropBounds.isProportional`（参照座標 + `refWidth/refHeight`）のとき、各画像の実サイズ比 `docW/refWidth, docH/refHeight` で座標をスケーリングしてクロップ。画像範囲にクランプ（はみ出し＝黒余白を防止）。旧 `isMargin`（固定px マージン）分岐も後方互換で残置。
+
+### E. 断ち切り(TIFF)を比率方式に修正（src/hooks/useExport.ts）
+
+- **重大バグ修正**: TIFF 経路だけ断ち切りが**参照ページの固定ピクセルのマージン**を全ページに適用していた（`regionToMargins` + `isMargin`）。サイズ違い PSD で断ち切り位置がズレ、黒余白／見切れの原因になっていた（ネイティブ JPEG 経路は元々比率スケーリング済み）。
+- `resolveTiffCropBounds` を**比率方式**に変更: `BleedRegion` の絶対座標（left/top/right/bottom）＋ `refWidth/refHeight` ＋ `isProportional: true` を渡し、JSX 側で各画像サイズ比でスケーリング。未使用化した `regionToMargins` の import を削除。
+
+### F. サイズ統一（指定ピクセルへ自動リサイズ）とアクションの排他（src/hooks/useExport.ts, src/components/modals/ExportModal.tsx）
+
+- `ExportOptions` に `tiffResizeEnabled / tiffTargetWidth / tiffTargetHeight` を追加。ExportModal の TIFF セクションに「サイズを統一（指定ピクセルに自動リサイズ＋自動保存）」チェック＋幅・高さ(px)入力（localStorage 永続化、既定 2250×3000）。
+- useExport で `useTiffResize` 時に `globalSettings.targetWidth/targetHeight` を渡す（JSX step13 が exact リサイズ）。
+- **アクションとの排他（重要）**: `runAction: !!(runAction && actionName) && !useTiffResize`。サイズ統一が有効なときは localStorage に `runAction=true` が残っていても**送信時に確実にアクションを無効化**する。これがないと、両方 ON 状態の復元時にアクションがドキュメントを閉じてアプリのリサイズ・保存が全スキップされる（「何も変わらない」不具合の真因だった）。UI 側でもサイズ統一 ON 時はアクションのチェックを disabled 表示。
+
+### G. 背景ぼかし（ガウス）を UI に露出（src/components/modals/ExportModal.tsx, src/hooks/useExport.ts）
+
+- `ExportOptions` に `tiffBlurEnabled / tiffBlurRadius / tiffBlurBackgroundOnly` を追加。ExportModal に「ぼかし（ガウス）を適用」チェック＋半径(px)＋「テキストを保護（背景のみぼかす）」トグル（localStorage 永続化）。
+- useExport の TIFF 設定で、`tiffBlurBackgroundOnly` のとき `globalSettings.separateTextAndBackground / reorganizeText` を true、各ファイルに `applyBlur / blurRadius` を付与。JSX 既存の「テキスト/背景分離 → 背景レイヤーにガウスぼかし」機構（step4/step9, COMIC-Bridge 由来）をそのまま利用。テキストグループ判定名は `#text#/text/写植/セリフ/テキスト/台詞`。
+- ぼかしは原寸（リサイズ前）で適用。
+
+### .atn の構造（調査メモ）
+
+実ファイル（"増渕さん.atn"）の解析で確認した ATN レイアウト:
+- `[4 version][UnicodeString setName][1 expanded][4 actionCount]`
+- 各 action: `[2 index][1 shift][1 command][2 colorIndex][UnicodeString name][1 expanded][4 itemCount][items...]`（ショートカット未設定だと先頭 6 バイトがゼロ）
+- UnicodeString = `[4byte 長さ(UTF-16単位数, 終端null含む)][UTF-16BE 文字列]`
+
+### 検証
+
+- `npx tsc --noEmit` 成功 / `cargo check` 成功 / `cargo clippy` 新規コードはクリーン（既存の pdf.rs/epub/native_jpeg の警告は本変更対象外で残置）。
+- 実機（Photoshop 2026）: 異サイズ PSD 5枚（7071×10000 / 4961×7016 / 4596×6500 / 6010×8500 / …）を TIFF 変換 → 比率クロップ（refW=7071 基準）→ 全枚 1280×1818 へリサイズ → `Desktop\Script_Output\台割\0001.tif`〜 へダイアログ無し自動保存（各 1.3〜1.8MB）を確認。
+- 背景ぼかしは未検証（ユーザー実機確認待ち）。
+
+> **構造変更まとめ**:
+> - 旧: TIFF だけ断ち切りが固定pxマージン → 異サイズで黒余白/見切れ ／ 新: 比率方式（参照座標+参照サイズを各画像サイズ比でスケーリング+クランプ）
+> - 旧: サイズ統一手段なし（TIFF 経路は target 未指定でリサイズ無し）／ 新: 指定px へ exact リサイズ＋自動保存
+> - 旧: Photoshop アクション実行手段なし ／ 新: .atn 選択＋アクション名ドロップダウン（Rust で .atn 解析）＋ doAction。保存・閉じる完結アクションはアプリ保存をスキップ
+> - 旧: サイズ統一とアクションが同時 ON だとアクションが doc を閉じてアプリ処理を全スキップ（「何も変わらない」）／ 新: サイズ統一 ON 時は送信時にアクションを強制無効化
+> - 旧: Photoshop 検出が 2025 まで ／ 新: 2026 追加＋Adobe フォルダ動的スキャンで将来版も自動検出

@@ -2,7 +2,6 @@ import { useState, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { Chapter, Page, ThumbnailResult } from '../types';
 import type { ExportOptions, BleedRegion, BleedSettings } from '../components/modals/ExportModal';
-import { regionToMargins } from '../components/modals/ExportModal';
 
 interface AllPageItem {
   page: Page;
@@ -130,7 +129,10 @@ export function buildProcessOptions(
   };
 }
 
-// TIFF(Photoshop)経路用: BleedRegion → cropBounds(margins)。none/未設定は null
+// TIFF(Photoshop)経路用: BleedRegion → cropBounds。none/未設定は null。
+// 参照ページの絶対座標(left/top/right/bottom)＋参照サイズ(refWidth/refHeight)を渡し、
+// JSX側で各画像の実サイズに対する比率でスケーリングしてクロップする（ネイティブJPEG経路と同じ比率方式）。
+// これによりサイズ違いのPSDでも断ち切り範囲が正しく揃う（旧マージン方式は固定pxで黒余白/見切れの原因だった）。
 function resolveTiffCropBounds(
   bleedSettings: BleedSettings | undefined,
   chapterType: string,
@@ -138,7 +140,15 @@ function resolveTiffCropBounds(
 ) {
   const region = resolveBleedRegion(bleedSettings, chapterType, chapterId);
   if (!region || region.tachikiriType === 'none') return null;
-  return { ...regionToMargins(region), isMargin: true };
+  return {
+    left: Math.max(0, Math.round(region.left)),
+    top: Math.max(0, Math.round(region.top)),
+    right: Math.max(0, Math.round(region.right)),
+    bottom: Math.max(0, Math.round(region.bottom)),
+    refWidth: Math.round(region.refWidth),
+    refHeight: Math.round(region.refHeight),
+    isProportional: true,
+  };
 }
 
 export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
@@ -149,7 +159,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
   const tachimiCompleteRef = useRef<((bleedSettings: BleedSettings | undefined) => void) | null>(null);
 
   const handleExport = useCallback(async (options: ExportOptions) => {
-    const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameMode, startNumber, digits, prefix, perChapterSettings, bleedSettings } = options;
+    const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameMode, startNumber, digits, prefix, perChapterSettings, bleedSettings, runAction, actionSetPath, actionName, tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight, tiffBlurEnabled, tiffBlurRadius, tiffBlurBackgroundOnly } = options;
 
     // TIFF変換モードの場合
     if (convertToTiff) {
@@ -198,9 +208,24 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
       }
 
       try {
+        const useTiffResize = !!(tiffResizeEnabled && tiffTargetWidth > 0 && tiffTargetHeight > 0);
+        const useTiffBlur = !!(tiffBlurEnabled && tiffBlurRadius > 0);
         const config = {
           globalSettings: {
             flattenImage: true,
+            // ぼかし「背景のみ」: テキスト/背景を分離して背景だけぼかす（テキストはシャープ維持）
+            separateTextAndBackground: useTiffBlur && tiffBlurBackgroundOnly,
+            reorganizeText: useTiffBlur && tiffBlurBackgroundOnly,
+            // サイズ統一: 指定ピクセルへ自動リサイズ（JSX step 13 が targetWidth/targetHeight を見て実行）
+            ...(useTiffResize ? { targetWidth: tiffTargetWidth, targetHeight: tiffTargetHeight } : {}),
+            // 処理の途中で実行するPhotoshopアクション（ぼかし・切り抜き等の加工。リサイズより前に実行）
+            // actionSetPath(.atnファイル) は Rust 側でセット名を解析して action_set に補完する
+            // ★サイズ統一(useTiffResize)が有効なときはアクションを強制無効化する。
+            //   アクションが保存・閉じるを行うとアプリのリサイズ・保存が全てスキップされるため
+            //   （localStorageに runAction=true が残っていても確実に無効化）。
+            runAction: !!(runAction && actionName) && !useTiffResize,
+            actionSetPath: actionSetPath ?? '',
+            actionName: actionName ?? '',
           },
           files: convertiblePages.map(p => {
             const cropBounds = resolveTiffCropBounds(bleedSettings, p.chapterType, p.chapterId);
@@ -208,6 +233,9 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
               path: p.path,
               outputPath: outputPath,
               outputName: p.outputName,
+              // ぼかし（背景ぼかし）。JSX step 9 が applyBlur/blurRadius を見て背景レイヤーに適用
+              applyBlur: useTiffBlur,
+              blurRadius: useTiffBlur ? tiffBlurRadius : 0,
               ...(cropBounds && { cropBounds }),
             };
           }),

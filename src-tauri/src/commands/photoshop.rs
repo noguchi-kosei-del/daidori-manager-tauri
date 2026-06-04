@@ -5,6 +5,8 @@ use tauri::Manager;
 /// Photoshopのインストールパスを検索
 pub fn find_photoshop_path() -> Option<String> {
     let possible_paths = [
+        // Adobe Photoshop 2026
+        r"C:\Program Files\Adobe\Adobe Photoshop 2026\Photoshop.exe",
         // Adobe Photoshop 2025
         r"C:\Program Files\Adobe\Adobe Photoshop 2025\Photoshop.exe",
         // Adobe Photoshop 2024
@@ -34,7 +36,51 @@ pub fn find_photoshop_path() -> Option<String> {
             return Some(path.to_string());
         }
     }
+
+    // 固定リストに無い場合（新バージョン等）は Adobe フォルダを動的スキャン。
+    // 例: "Adobe Photoshop 2026" のような新しいバージョンを自動検出する。
+    if let Some(found) = scan_adobe_dirs_for_photoshop() {
+        return Some(found);
+    }
+
     None
+}
+
+/// Adobe インストールフォルダを走査し、`Adobe Photoshop*` 配下の Photoshop.exe を探す。
+/// 複数見つかった場合はフォルダ名の降順（=新しいバージョン優先）で選ぶ。
+fn scan_adobe_dirs_for_photoshop() -> Option<String> {
+    let adobe_roots = [
+        r"C:\Program Files\Adobe",
+        r"C:\Program Files (x86)\Adobe",
+    ];
+
+    let mut candidates: Vec<(String, String)> = Vec::new(); // (フォルダ名, exeパス)
+
+    for root in &adobe_roots {
+        let entries = match fs::read_dir(root) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let dir_name = entry.file_name().to_string_lossy().to_string();
+            // "Adobe Photoshop" を含むフォルダのみ対象（Bridge/Acrobat 等は除外）
+            if !dir_name.to_lowercase().contains("photoshop") {
+                continue;
+            }
+            let exe = path.join("Photoshop.exe");
+            if exe.exists() {
+                candidates.push((dir_name, exe.to_string_lossy().to_string()));
+            }
+        }
+    }
+
+    // フォルダ名の降順でソート（"Adobe Photoshop 2026" > "... 2025"）して最新を優先
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.into_iter().next().map(|(_, exe)| exe)
 }
 
 /// リソースディレクトリからスクリプトパスを検索

@@ -90,6 +90,18 @@ pub struct TiffGlobalSettings {
     /// JPG出力を行うか
     #[serde(default)]
     pub output_jpg: bool,
+    /// 処理の最後にPhotoshopアクションを実行するか（サイズ統一など）
+    #[serde(default)]
+    pub run_action: bool,
+    /// 選択した .atn ファイルのフルパス（処理開始時に app.load で読み込む）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_set_path: Option<String>,
+    /// 実行するアクションのセット名（action_set_path から解析して補完）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_set: Option<String>,
+    /// 実行するアクション名
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_name: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -110,6 +122,10 @@ impl Default for TiffGlobalSettings {
             target_dpi_color: Some(350),
             proceed_as_tiff: true,
             output_jpg: false,
+            run_action: false,
+            action_set_path: None,
+            action_set: None,
+            action_name: None,
         }
     }
 }

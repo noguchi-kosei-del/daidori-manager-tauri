@@ -71,6 +71,19 @@ pub async fn run_photoshop_tiff_convert(
 
     // 設定JSONを作成（outputPathを最終出力ディレクトリに書き換え）
     let mut config_with_output = config;
+
+    // アクションセット(.atn)が指定されていれば、ヘッダからセット名を解析して action_set に補完。
+    // 解析失敗時はファイル名（拡張子なし）でフォールバック。
+    if config_with_output.global_settings.run_action {
+        if let Some(atn_path) = config_with_output.global_settings.action_set_path.clone() {
+            if !atn_path.is_empty() {
+                let set_name = parse_atn_set_name(&atn_path).or_else(|| filename_stem(&atn_path));
+                eprintln!("TIFF Convert - Action set '.atn': {} -> set name: {:?}", atn_path, set_name);
+                config_with_output.global_settings.action_set = set_name;
+            }
+        }
+    }
+
     let output_dir_fwd = output_dir.replace('\\', "/");
     let final_dir_fwd = final_output_dir.replace('\\', "/");
 
@@ -208,4 +221,123 @@ pub async fn run_photoshop_tiff_convert(
         }
         Err("Photoshopが出力ファイルを生成しませんでした。スクリプトが失敗した可能性があります。".to_string())
     }
+}
+
+/// .atn 解析結果（フロントのドロップダウン用）
+#[derive(serde::Serialize)]
+pub struct AtnInfo {
+    pub set_name: Option<String>,
+    pub actions: Vec<String>,
+}
+
+/// .atn ファイルからアクションセット名とアクション名一覧を読み取る。
+/// フロントエンドでアクション名をドロップダウン選択させるために使用する。
+#[tauri::command]
+pub fn read_atn_actions(path: String) -> Result<AtnInfo, String> {
+    let bytes = fs::read(&path).map_err(|e| format!(".atnの読み込みに失敗: {}", e))?;
+    let set_name = parse_atn_set_name(&path).or_else(|| filename_stem(&path));
+    let actions = parse_atn_action_names(&bytes);
+    Ok(AtnInfo { set_name, actions })
+}
+
+/// .atn 内のアクション名一覧を解析する。
+/// 各アクションはキーボードショートカット無しの場合 6バイトのゼロ（index/shift/command/colorIndex）
+/// に続いて UnicodeString 名が来る。この境界を走査して名前を収集する。
+fn parse_atn_action_names(bytes: &[u8]) -> Vec<String> {
+    let n = bytes.len();
+    let mut names: Vec<String> = Vec::new();
+    if n < 16 {
+        return names;
+    }
+    let mut i = 0usize;
+    while i + 10 < n {
+        // 6バイトのゼロ（アクションヘッダ: index2 + shift1 + command1 + colorIndex2）
+        if bytes[i] == 0
+            && bytes[i + 1] == 0
+            && bytes[i + 2] == 0
+            && bytes[i + 3] == 0
+            && bytes[i + 4] == 0
+            && bytes[i + 5] == 0
+        {
+            let len_off = i + 6;
+            let len = u32::from_be_bytes([
+                bytes[len_off],
+                bytes[len_off + 1],
+                bytes[len_off + 2],
+                bytes[len_off + 3],
+            ]) as usize;
+            if (2..=40).contains(&len) {
+                let start = len_off + 4;
+                let end = start + len * 2;
+                if end <= n {
+                    let mut units: Vec<u16> = Vec::with_capacity(len);
+                    let mut ok = true;
+                    for j in 0..len {
+                        let o = start + j * 2;
+                        let c = u16::from_be_bytes([bytes[o], bytes[o + 1]]);
+                        if j == len - 1 && c == 0 {
+                            // 末尾ヌルは許容
+                        } else if (32..65500).contains(&c) {
+                            units.push(c);
+                        } else {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if ok && units.len() >= 2 {
+                        let name = String::from_utf16_lossy(&units)
+                            .trim_end_matches('\u{0}')
+                            .trim()
+                            .to_string();
+                        if !name.is_empty() && !names.contains(&name) {
+                            names.push(name);
+                            i = end;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    names
+}
+
+/// Photoshop アクションセット(.atn)ファイルのヘッダからセット名を解析する。
+/// ATN形式: [4byte version][4byte 名前長(UTF-16単位数, BE, 終端null含む)][UTF-16BE 名前...]
+fn parse_atn_set_name(path: &str) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    if bytes.len() < 8 {
+        return None;
+    }
+    // 名前長（UTF-16 コードユニット数。末尾のヌル終端を含む）
+    let len = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+    if len == 0 || len > 1024 {
+        return None;
+    }
+    let start = 8usize;
+    let end = start + len * 2;
+    if end > bytes.len() {
+        return None;
+    }
+    let mut units: Vec<u16> = Vec::with_capacity(len);
+    let mut i = start;
+    while i + 1 < end {
+        units.push(u16::from_be_bytes([bytes[i], bytes[i + 1]]));
+        i += 2;
+    }
+    let s = String::from_utf16_lossy(&units);
+    let trimmed = s.trim_end_matches('\u{0}').trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+/// ファイルパスから拡張子を除いたファイル名を取得（.atn セット名のフォールバック用）
+fn filename_stem(path: &str) -> Option<String> {
+    Path::new(path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
 }
