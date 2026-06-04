@@ -2391,3 +2391,66 @@ A3. **フロントエンド** ([src/App.tsx](src/App.tsx)): `loadProjectFromPath
 >   既存の `loadProjectFromPath` を使ってダブルクリックした `.daiw` を確実に復元（多重起動抑止の副次効果あり）
 > - 補足: CLAUDE.md v1.5.4 の「保存/読込 UI は削除済み」記述は実コードと乖離していた（v1.5.3 で再追加済み）点を本節で訂正。
 >   なお v1.5.5（分割 EPUB 関連: split range 編集・page role override・split EPUBCheck 結果表示）は本リポジトリにマージ済みだが CLAUDE.md には未文書化。
+
+---
+
+## v1.5.8: EPUB生成モードの画面統合と `.daiw` 専用アイコン設定
+
+EPUB生成をモーダル表示から画面モード切替に変更し、MojiQ の「指示入れ / 校正チェック」切替に近い形で、上部の表示モードトグルから EPUB 生成画面へ移動できるようにした。あわせて `.daiw` プロジェクトファイルの専用アイコン登録、EPUB分割出力UIの移植、ツールバー整理を行った。
+
+### A. `.daiw` プロジェクトアイコン設定
+
+A1. **プロジェクト専用 ICO を追加**:
+- `logo/daidori_project_icon.png` から `src-tauri/icons/daidori_project.ico` を生成。
+- 配布時に参照できるよう `src-tauri/resources/daidori-project.ico` を追加。
+
+A2. **Tauri / NSIS 設定** ([src-tauri/tauri.conf.json](src-tauri/tauri.conf.json), [src-tauri/nsis/installer-hooks.nsh](src-tauri/nsis/installer-hooks.nsh)):
+- `resources/daidori-project.ico` を bundle resources に追加。
+- `.daiw` file association に `mimeType: application/x-daiwari-project` を追加。
+- NSIS installer hook で `HKCR\DaiwariProject\DefaultIcon` を `daidori-project.ico` に上書きし、Explorer 上で `.daiw` がアプリ本体アイコンではなくプロジェクト専用アイコンになるよう修正。
+
+### B. EPUB生成をモーダルから表示モードへ変更
+
+B1. **表示モードトグル化** ([src/App.tsx](src/App.tsx)):
+- 旧: ツールバーの「EPUB生成」ボタンで `EpubMetadataModal` をモーダル表示。
+- 新: 上部の表示モードトグルに `リスト / 見開き / EPUB` を並べ、EPUBを選ぶと `previewMode: 'epub'` に切り替える。
+- EPUBモードへ入る時に `loadEpubFromDaidori()` を実行し、右サイドバーを展開する。
+- `toolbar-content` から「EPUB生成」ボタンを削除し、PDF生成 / JPEG/TIF生成だけを残した。
+
+B2. **右サイドバーに EPUB 設定を埋め込み** ([src/components/modals/EpubMetadataModal.tsx](src/components/modals/EpubMetadataModal.tsx), [src/styles.css](src/styles.css)):
+- `EpubMetadataModal` に `embedded` prop を追加。
+- EPUBモード中は右サイドバーへ EPUB 出力設定 / 書籍情報 / UUID / 生成情報 / ライセンス / 生成ボタンを表示。
+- 生成処理は既存の `handleEpubGenerate` をそのまま使用し、単体出力・分割出力・EPUBCheck 結果表示の経路を維持。
+
+B3. **EPUBモード時の左サイドバー非表示**:
+- EPUB生成モードでは左のチャプター編集サイドバーをレンダーしない。
+- 中央は EPUB プレビュー、右は EPUB 設定に集中する構成に変更。
+
+### C. EPUB分割出力UIの移植
+
+C1. **分割出力チェック時の中央表示切替** ([src/components/epub/EpubMakerView.tsx](src/components/epub/EpubMakerView.tsx), [src/components/modals/EpubMetadataModal.tsx](src/components/modals/EpubMetadataModal.tsx)):
+- 右サイドバーの「分割出力」を ON にすると、中央プレビューが分割範囲選択サムネイル一覧に切り替わる。
+- 旧モーダル左ペインにあった範囲作成 / 解除 / 表紙・奥付指定 / ICC指定メニューを `createPortal` で中央ビューへ移植。
+- 分割設定値、範囲、各巻タイトル、読み仮名、ファイル名サフィックスは右パネル側の状態として維持。
+
+C2. **通常見開き表示の復帰**:
+- EPUBモード専用の余計な見開き幅制御を削除し、従来の `.epub-spread-page img { max-height: 80vh; max-width: 46vw; }` ベースの表示へ戻した。
+- ページごとの左右余白や左右ページの分離が発生しないよう、見開き画像まわりの追加上書きを撤去。
+
+### D. カラーモードサマリー配置調整
+
+D1. **`color-mode-summary-container.expanded` の位置調整** ([src/styles.css](src/styles.css)):
+- EPUBモードでも見開き表示と同じようにプレビュー枠上端へ貼り付くよう、EPUB専用の margin / sticky top を調整。
+- 右パネル埋め込み化後も表示領域外にはみ出さないようにしつつ、上部に余計な余白が出ない配置へ修正。
+
+### 検証
+
+- `npm run build` 成功。
+- ブラウザ確認:
+  - EPUBモード時に左サイドバーが表示されない。
+  - 分割出力チェック時に中央表示が分割サムネイル選択へ切り替わる。
+  - EPUBモードの通常見開き表示を従来表示へ戻した。
+
+### バージョン同期
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を **`1.5.8`** に更新。

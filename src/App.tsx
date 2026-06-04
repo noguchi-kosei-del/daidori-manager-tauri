@@ -469,7 +469,6 @@ function App() {
     epubSelectedPageIds,
   } = useStore();
 
-  const [isEpubModalOpen, setIsEpubModalOpen] = useState(false);
   const [previewMode, setPreviewMode] = useState<'grid' | 'spread' | 'epub'>('grid');
   const [isViewerMode, setIsViewerMode] = useState(false);
   const [spreadZoom, setSpreadZoom] = useState(100);
@@ -485,8 +484,7 @@ function App() {
     return saved === 'true';
   });
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [openDropdown, setOpenDropdown] = useState<'view' | 'binding' | null>(null);
-  const viewDropdownRef = useRef<HTMLDivElement>(null);
+  const [openDropdown, setOpenDropdown] = useState<'binding' | null>(null);
   const bindingDropdownRef = useRef<HTMLDivElement>(null);
   const [isSidebarFlipped, setIsSidebarFlipped] = useState(() => {
     const saved = localStorage.getItem('daidori_sidebar_flipped');
@@ -1401,7 +1399,19 @@ function App() {
     });
   }, [chapters, detectTachimiExe, projectName, setExportResultDialog, startTachimiBleed]);
 
-  // ツールバー右側のアクションボタン（エクスポート・EPUB生成・チャプターPDF）
+  const handlePreviewModeChange = useCallback((mode: 'grid' | 'spread' | 'epub') => {
+    if (mode === 'epub') {
+      loadEpubFromDaidori();
+      setIsInfoSidebarCollapsed(false);
+    }
+    if (mode === 'grid') {
+      setIsViewerMode(false);
+    }
+    setPreviewMode(mode);
+    setOpenDropdown(null);
+  }, [loadEpubFromDaidori]);
+
+  // ツールバー右側のアクションボタン（PDF生成・JPEG/TIF生成）
   const toolbarActionButtons = (
     <>
       <button
@@ -1413,16 +1423,6 @@ function App() {
       >
         <PdfIcon size={16} />
         <span className="preview-fab-label">PDF生成</span>
-      </button>
-      <button
-        type="button"
-        className="preview-fab preview-fab-secondary preview-fab-toolbar"
-        onClick={() => { if (!blockIfCmyk('epub')) setIsEpubModalOpen(true); }}
-        disabled={allPages.length === 0}
-        title="EPUBを生成"
-      >
-        <BookIcon size={16} />
-        <span className="preview-fab-label">EPUB生成</span>
       </button>
       <button
         type="button"
@@ -1495,9 +1495,7 @@ function App() {
   useEffect(() => {
     if (!openDropdown) return;
     const handleClick = (e: MouseEvent) => {
-      const refs = { view: viewDropdownRef, binding: bindingDropdownRef };
-      const ref = refs[openDropdown];
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+      if (bindingDropdownRef.current && !bindingDropdownRef.current.contains(e.target as Node)) {
         setOpenDropdown(null);
       }
     };
@@ -2411,7 +2409,6 @@ function App() {
           outputDir: outputs[0],
           isError: hasCheckIssue,
         });
-        setIsEpubModalOpen(false);
         return;
       }
 
@@ -2458,7 +2455,6 @@ function App() {
           outputDir: response.outputPath || outputPath,
           isError: epubCheckFailed,
         });
-        setIsEpubModalOpen(false);
       } else {
         setExportResultDialog({
           show: true,
@@ -2976,34 +2972,33 @@ function App() {
               </button>
 
               <div className="header-divider" />
-              {/* 表示モードドロップダウン */}
-              <div className="header-popup-container" ref={viewDropdownRef}>
+              {/* 表示モードトグル */}
+              <div className="view-mode-toggle-container" aria-label="表示モード">
                 <button
-                  className={`header-popup-trigger ${openDropdown === 'view' ? 'open' : ''}`}
-                  onClick={() => setOpenDropdown(openDropdown === 'view' ? null : 'view')}
+                  type="button"
+                  className={`view-mode-toggle-btn ${previewMode === 'grid' ? 'active' : ''}`}
+                  onClick={() => handlePreviewModeChange('grid')}
+                  title="リスト表示"
                 >
-                  {previewMode === 'grid' ? <GridViewIcon size={14} /> : previewMode === 'spread' ? <BookOpenIcon size={14} /> : <BookIcon size={14} />}
-                  <span>{previewMode === 'grid' ? 'リスト' : previewMode === 'spread' ? '見開き' : 'EPUB'}</span>
-                  <svg className="header-popup-chevron" width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 4L5 6.5L7.5 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  <GridViewIcon size={14} />
                 </button>
-                <div className={`header-popup-menu ${openDropdown === 'view' ? 'open' : ''}`}>
-                  <div className="header-popup-header">表示</div>
-                  <button className={`header-popup-item ${previewMode === 'grid' ? 'selected' : ''}`} onClick={() => { setPreviewMode('grid'); setOpenDropdown(null); }}>
-                    <GridViewIcon size={16} />
-                    <span>リスト</span>
-                    {previewMode === 'grid' && <span className="header-popup-check"><CheckIcon2 /></span>}
-                  </button>
-                  <button className={`header-popup-item ${previewMode === 'spread' ? 'selected' : ''}`} onClick={() => { setPreviewMode('spread'); setOpenDropdown(null); }}>
-                    <BookOpenIcon size={16} />
-                    <span>見開き</span>
-                    {previewMode === 'spread' && <span className="header-popup-check"><CheckIcon2 /></span>}
-                  </button>
-                  <button className={`header-popup-item ${previewMode === 'epub' ? 'selected' : ''}`} onClick={() => { loadEpubFromDaidori(); setPreviewMode('epub'); setOpenDropdown(null); }}>
-                    <BookIcon size={16} />
-                    <span>EPUB</span>
-                    {previewMode === 'epub' && <span className="header-popup-check"><CheckIcon2 /></span>}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  className={`view-mode-toggle-btn ${previewMode === 'spread' ? 'active' : ''}`}
+                  onClick={() => handlePreviewModeChange('spread')}
+                  title="見開き表示"
+                >
+                  <BookOpenIcon size={14} />
+                </button>
+                <button
+                  type="button"
+                  className={`view-mode-toggle-btn ${previewMode === 'epub' ? 'active' : ''}`}
+                  onClick={() => handlePreviewModeChange('epub')}
+                  disabled={allPages.length === 0}
+                  title="EPUB生成モード"
+                >
+                  <BookIcon size={14} />
+                </button>
               </div>
 
               <div className="header-divider" />
@@ -3163,6 +3158,7 @@ function App() {
 
           {/* モードに応じたコンテンツ表示 */}
           <div className="preview-container">
+            {previewMode !== 'epub' && (
             <aside className={`sidebar ${isSidebarCollapsed ? 'collapsed' : ''}`}>
               <div className="sidebar-header">
                 <button
@@ -3318,6 +3314,7 @@ function App() {
                 </button>
               </div>
             </aside>
+            )}
 
             {previewMode === 'epub' ? (
               <EpubMakerView
@@ -3614,19 +3611,31 @@ function App() {
             </div>
             )}
 
-            {/* 右側: 情報サイドバー（選択中ページのプレビュー＋メタデータ） */}
-            <aside className={`sidebar sidebar-right ${isInfoSidebarCollapsed ? 'collapsed' : ''}`}>
+            {/* 右側: 情報サイドバー / EPUB生成設定 */}
+            <aside className={`sidebar sidebar-right ${previewMode === 'epub' ? 'epub-settings-sidebar' : ''} ${isInfoSidebarCollapsed ? 'collapsed' : ''}`}>
               <div className="sidebar-header">
                 <button
                   className="sidebar-toggle-btn"
                   onClick={() => setIsInfoSidebarCollapsed(!isInfoSidebarCollapsed)}
-                  title={isInfoSidebarCollapsed ? '情報パネルを展開' : '情報パネルを折り畳む'}
+                  title={isInfoSidebarCollapsed ? (previewMode === 'epub' ? 'EPUB設定を展開' : '情報パネルを展開') : (previewMode === 'epub' ? 'EPUB設定を折り畳む' : '情報パネルを折り畳む')}
                 >
                   {isInfoSidebarCollapsed ? '«' : '»'}
                 </button>
               </div>
               <div className="sidebar-content">
-                {selectedPageInfo ? (
+                {previewMode === 'epub' ? (
+                  <EpubMetadataModal
+                    isOpen={true}
+                    embedded
+                    onClose={() => handlePreviewModeChange('grid')}
+                    onGenerate={async (metadata, outputPath, splitSettings) => {
+                      if (blockIfCmyk('epub')) return;
+                      await handleEpubGenerate(metadata, outputPath, splitSettings);
+                    }}
+                    chapters={chapters}
+                    projectName={projectName}
+                  />
+                ) : selectedPageInfo ? (
                   <div className="info-panel">
                     {selectedPageInfo.page.thumbnailStatus === 'ready' && selectedPageInfo.page.thumbnailCachePath ? (
                       <div className="info-thumbnail">
@@ -3843,14 +3852,6 @@ function App() {
         );
       })()}
 
-      <EpubMetadataModal
-        isOpen={isEpubModalOpen}
-        onClose={() => setIsEpubModalOpen(false)}
-        onGenerate={handleEpubGenerate}
-        chapters={chapters}
-        projectName={projectName}
-      />
-
       {/* 自動更新ダイアログ */}
       <UpdateDialog
         state={autoUpdate.state}
@@ -3922,7 +3923,7 @@ function App() {
                   className="btn-epub btn-small"
                   onClick={() => {
                     closeExportResultDialog();
-                    if (!blockIfCmyk('epub')) setIsEpubModalOpen(true);
+                    handlePreviewModeChange('epub');
                   }}
                 >
                   <BookIcon size={14} />

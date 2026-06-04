@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Daiwari Manager",
-  "version": "1.5.7",
+  "version": "1.5.8",
   "identifier": "com.daidori.manager",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -55,6 +55,7 @@
       "scripts/",
       "resources/kadokawa_css/",
       "resources/hybrid_legacy_css/",
+      "resources/daidori-project.ico",
       "binaries/pdfium.dll"
     ],
     "fileAssociations": [
@@ -62,13 +63,15 @@
         "ext": ["daiw"],
         "name": "DaiwariProject",
         "description": "台割マネージャー プロジェクトファイル",
-        "role": "Editor"
+        "role": "Editor",
+        "mimeType": "application/x-daiwari-project"
       }
     ],
     "windows": {
       "nsis": {
         "languages": ["Japanese"],
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "installerHooks": "nsis/installer-hooks.nsh"
       }
     }
   }

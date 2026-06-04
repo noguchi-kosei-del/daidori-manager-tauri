@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { save } from '@tauri-apps/plugin-dialog';
@@ -35,9 +36,10 @@ import { useModalAnimation } from '../../hooks';
 interface EpubMetadataModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onGenerate: (metadata: EpubMetadata, outputPath: string, splitSettings?: EpubSplitSettings) => void;
+  onGenerate: (metadata: EpubMetadata, outputPath: string, splitSettings?: EpubSplitSettings) => void | Promise<void>;
   chapters: Chapter[];
   projectName: string;
+  embedded?: boolean;
 }
 
 const PUBLISHER_OPTIONS = [
@@ -51,6 +53,7 @@ export function EpubMetadataModal({
   onGenerate,
   chapters,
   projectName,
+  embedded = false,
 }: EpubMetadataModalProps) {
   // 基本情報
   const [title, setTitle] = useState('');
@@ -596,10 +599,100 @@ export function EpubMetadataModal({
     );
   };
 
-  return (
-    <div className={`modal-overlay ${isClosing ? 'closing' : ''}`} onClick={isGenerating ? undefined : onClose}>
+  const renderSplitPreviewContent = () => (
+    <div className="epub-split-thumbnail-mode">
+      <div className="epub-split-preview-guide">
+        <span>未分割サムネイルをクリックして範囲作成、分割済みサムネイルをクリックして解除</span>
+        <span>
+          {splitSelectingStart !== null
+            ? `開始: p${splitSelectingStart + 1} / 終了ページを選択`
+            : '次の分割範囲の開始ページを選択'}
+        </span>
+      </div>
+      <div className="epub-split-thumbnail-grid" aria-label="分割範囲サムネイル">
+        {epubPages.map((page, index) => {
+          const rangeIndex = getSplitRangeIndex(index);
+          const isAssigned = rangeIndex >= 0;
+          const isSelecting = splitSelectingStart === index;
+          const splitRole = splitPageRoles.get(index);
+          const isRangeCover = splitRole?.cover ?? false;
+          const isRangeColophon = splitRole?.colophon ?? false;
+          const thumbnailSrc = getSplitThumbnailSrc(page);
+          return (
+            <button
+              key={page.id}
+              type="button"
+              className={`epub-split-thumbnail ${isAssigned ? 'assigned' : ''} ${isSelecting ? 'selecting' : ''} ${isRangeCover || page.isCover ? 'cover' : ''} ${isRangeColophon || page.isColophon ? 'colophon' : ''} ${epubSelectedPageId === page.id ? 'selected' : ''}`}
+              onClick={() => handleSplitThumbnailClick(index)}
+              onContextMenu={(e) => handleSplitThumbnailContextMenu(e, index)}
+              title={`${index + 1}ページ`}
+              style={isAssigned ? { ['--split-color' as string]: `var(--split-color-${rangeIndex % 8})` } : undefined}
+            >
+              {isAssigned && <span className="epub-split-remove-hint">クリックで解除</span>}
+              <span className="epub-split-thumbnail-image">
+                {thumbnailSrc ? (
+                  <img src={thumbnailSrc} alt="" loading="lazy" />
+                ) : (
+                  <span className="epub-split-thumbnail-placeholder">{page.isBlank ? '白紙' : 'No Image'}</span>
+                )}
+              </span>
+              <span className="epub-split-thumbnail-meta">
+                <span>{index + 1}</span>
+                <span className="epub-split-thumbnail-badges">
+                  {(page.isCover || isRangeCover) && <span className="cover">表紙</span>}
+                  {(page.isColophon || isRangeColophon) && <span className="colophon">奥付</span>}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {splitContextMenu && (
+        <div
+          className="epub-context-menu"
+          style={{ left: splitContextMenu.x, top: splitContextMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {(() => {
+            const menuPage = epubPages.find((page) => page.id === splitContextMenu.pageId);
+            return (
+              <>
+                {!menuPage?.isCover ? (
+                  <button type="button" onClick={handleSplitContextSetCover}>表紙に設定</button>
+                ) : (
+                  <button type="button" onClick={handleSplitContextClearCover}>表紙を解除</button>
+                )}
+                {!menuPage?.isColophon ? (
+                  <button type="button" onClick={handleSplitContextSetColophon}>奥付に設定</button>
+                ) : (
+                  <button type="button" onClick={handleSplitContextClearColophon}>奥付を解除</button>
+                )}
+                <div className="epub-context-menu-separator" />
+              </>
+            );
+          })()}
+          {EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_OPTIONS.map((override) => (
+            <button
+              key={override}
+              type="button"
+              onClick={() => handleSplitContextProfileOverride(override)}
+              className={
+                epubPages.find((page) => page.id === splitContextMenu.pageId)?.imageProfileOverride === override
+                  ? 'selected'
+                  : ''
+              }
+            >
+              ICC: {EPUB_PAGE_IMAGE_PROFILE_OVERRIDE_LABELS[override]}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const modalContent = (
       <div
-        className={`modal-content epub-modal ${isClosing ? 'closing' : ''}`}
+        className={`modal-content epub-modal ${embedded ? 'embedded' : ''} ${!embedded && isClosing ? 'closing' : ''}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
@@ -612,6 +705,7 @@ export function EpubMetadataModal({
 
         <div className="epub-modal-split">
           {/* 左ペイン: EPUB見開きプレビュー + サムネイルバー */}
+          {!embedded && (
           <div className="epub-preview-pane">
             {epubPages.length === 0 ? (
               <div className="spread-viewer-empty">
@@ -722,6 +816,7 @@ export function EpubMetadataModal({
               )
             )}
           </div>
+          )}
 
           {/* 右ペイン: メタデータフォーム */}
           <div className="modal-body epub-modal-body">
@@ -1176,6 +1271,28 @@ export function EpubMetadataModal({
           </button>
         </div>
       </div>
+  );
+
+  const embeddedSplitPreviewHost =
+    embedded && splitEnabled && typeof document !== 'undefined'
+      ? document.getElementById('epub-split-preview-host')
+      : null;
+  const embeddedSplitPreview = embeddedSplitPreviewHost
+    ? createPortal(renderSplitPreviewContent(), embeddedSplitPreviewHost)
+    : null;
+
+  if (embedded) {
+    return (
+      <>
+        <div className="epub-settings-panel">{modalContent}</div>
+        {embeddedSplitPreview}
+      </>
+    );
+  }
+
+  return (
+    <div className={`modal-overlay ${isClosing ? 'closing' : ''}`} onClick={isGenerating ? undefined : onClose}>
+      {modalContent}
     </div>
   );
 }

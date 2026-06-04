@@ -86,8 +86,9 @@ export function EpubMakerView({
   };
 
   return (
-    <div className="preview-area">
+    <div className="preview-area epub-mode-preview">
       {topBar}
+      <div id="epub-split-preview-host" className="epub-split-preview-host" />
       {epubPages.length === 0 ? (
         <div className="spread-viewer-empty">
           <NoPageIcon size={48} />
