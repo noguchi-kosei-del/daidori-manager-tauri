@@ -4620,10 +4620,12 @@ body.viewer-mode .spread-page-info {
 /* 閲覧モード時のEPUB表示（全画面化） */
 body.viewer-mode .epub-spread-preview {
   background: #000;
+  padding-bottom: 0;
 }
 body.viewer-mode .epub-spread-container {
   height: 100vh;
   background: #000;
+  padding: 0;
 }
 body.viewer-mode .epub-spread-pages {
   max-height: 100%;
@@ -5374,14 +5376,20 @@ body.light-mode .epub-preview-info {
   background: var(--color-bg-primary);
   position: relative;
   outline: none;
+  overflow: hidden;
+  padding-bottom: 32px;
+  box-sizing: border-box;
 }
 
 .epub-spread-container {
   flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   transform-origin: center center;
+  padding: var(--spacing-md) var(--spacing-xl);
+  box-sizing: border-box;
 }
 
 .epub-spread-pages {
@@ -5536,6 +5544,12 @@ body.light-mode .epub-preview-info {
   justify-content: center;
   height: 100%;
   color: var(--color-text-muted);
+}
+
+.epub-spread-preview .spread-nav-bar {
+  bottom: 12px;
+  left: clamp(24px, 10%, 96px);
+  right: clamp(24px, 10%, 96px);
 }
 
 /* EPUB サムネイルバー */

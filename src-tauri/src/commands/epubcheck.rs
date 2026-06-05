@@ -9,6 +9,12 @@ use std::time::Instant;
 use tauri::{AppHandle, Manager};
 use zip::ZipArchive;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 const EPUBCHECK_VERSION: &str = "5.3.0";
 const EPUBCHECK_DOWNLOAD_URL: &str =
     "https://github.com/w3c/epubcheck/releases/download/v5.3.0/epubcheck-5.3.0.zip";
@@ -67,13 +73,16 @@ impl EpubCheckRunner {
     fn run(&self, epub_path: &str) -> io::Result<Output> {
         match self {
             EpubCheckRunner::Command(path) => {
-                Command::new(path).args(["--json", "-", epub_path]).output()
+                let mut command = Command::new(path);
+                configure_hidden_command(&mut command);
+                command.args(["--json", "-", epub_path]).output()
             }
             EpubCheckRunner::Jar {
                 java_path,
                 jar_path,
             } => {
                 let mut command = Command::new(java_path);
+                configure_hidden_command(&mut command);
                 if let Some(jar_dir) = jar_path.parent() {
                     command.current_dir(jar_dir);
                 }
@@ -87,6 +96,13 @@ impl EpubCheckRunner {
                     .output()
             }
         }
+    }
+}
+
+fn configure_hidden_command(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
     }
 }
 
