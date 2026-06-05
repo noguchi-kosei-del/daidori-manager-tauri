@@ -519,8 +519,7 @@ async fn prepare_pages_for_pdf(
                 match read_image_dimensions(p) {
                     Some((w, h)) if w == tw && h == th => Ok(()),
                     _ => {
-                        let img = image::open(p)
-                            .map_err(|e| format!("{}: {}", p.display(), e))?;
+                        let img = image::open(p).map_err(|e| format!("{}: {}", p.display(), e))?;
                         let resized = img.resize_exact(tw, th, FilterType::Triangle);
                         let rgb = resized.to_rgb8();
                         write_jpeg_baseline_to_file(
@@ -672,7 +671,8 @@ fn generate_tachimi_merged_pdf_job(
 
     let mut files = Vec::new();
     let mut results: Vec<TachimiPdfJobItemResult> = Vec::new();
-    for (global_index, (chapter_index, page_index, chapter, page)) in staged_pages.iter().enumerate()
+    for (global_index, (chapter_index, page_index, chapter, page)) in
+        staged_pages.iter().enumerate()
     {
         let page_no = global_index + 1;
 

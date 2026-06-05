@@ -83,7 +83,9 @@ fn validate_pages(metadata: &EpubMetadata, pages: &[EpubPage]) -> Result<(), Str
 
     // 白紙ページのみではEPUB生成不可（基準サイズが算出できないため）
     if pages.iter().all(|p| p.is_blank) {
-        return Err("白紙ページのみではEPUBを生成できません。画像ページを追加してください".to_string());
+        return Err(
+            "白紙ページのみではEPUBを生成できません。画像ページを追加してください".to_string(),
+        );
     }
 
     // 奥付ページの確認

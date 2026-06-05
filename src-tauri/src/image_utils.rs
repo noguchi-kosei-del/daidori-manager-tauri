@@ -1,6 +1,6 @@
-use std::io::Cursor;
-use image::{DynamicImage, ImageFormat};
 use crate::constants::{MAX_IMAGE_DIMENSION, MAX_PIXEL_COUNT, THUMBNAIL_SIZE};
+use image::{DynamicImage, ImageFormat};
+use std::io::Cursor;
 
 // 画像サイズ検証（DoS防止）
 pub fn validate_dimensions(width: u32, height: u32) -> Result<(), String> {

@@ -2491,3 +2491,73 @@ D1. **`color-mode-summary-container.expanded` の位置調整** ([src/styles.css
 ### バージョン同期
 
 `package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を **`1.5.8`** に更新。
+
+---
+
+## v1.6.0: フォルダ形式プロジェクト保存、台割TIF出力、EPUB/UI改善
+
+### A. プロジェクト保存をフォルダ形式へ変更
+
+OPUS のプロジェクト保存方式を参考に、`.daiw` 単体保存から、プロジェクトフォルダ内へ
+プロジェクトファイルとリンクファイルコピーをまとめる方式へ変更した。
+
+A1. **保存先構造** ([src-tauri/src/commands/project.rs](src-tauri/src/commands/project.rs)):
+- `作品.daiw` を指定した場合、実際には `作品/作品.daiw` を作成。
+- 参照画像は `作品/リンクファイル/` にコピー。
+- 保存する `.daiw` 内の `absolute_path` / `relative_path` / `file_name` / `file_size` / `modified_time` は
+  コピー後のファイル情報へ更新。
+- 同一ソースファイルは重複コピーせず、同名ファイルは連番で衝突回避。
+- 書き込みは一時ファイル経由のアトミック保存を維持。
+
+A2. **読み込み時のポータブル化**:
+- `.daiw` を開いたフォルダを `base_path` として再設定。
+- `relative_path` が存在する場合は、古い絶対パスよりプロジェクトフォルダ内のコピーを優先。
+- プロジェクトフォルダごと移動・共有してもリンクファイルを復元しやすくした。
+
+A3. **フロントエンド保存結果** ([src/App.tsx](src/App.tsx)):
+- `save_project` の戻り値を `ProjectSaveResult` に変更し、実際の `.daiw` パスとプロジェクトフォルダを受け取る。
+- 最近使ったファイルと現在のプロジェクトパスは、生成された `作品/作品.daiw` を指すよう更新。
+- 保存完了ダイアログにプロジェクトフォルダとコピー件数を表示。
+
+### B. 台割TIF出力とリネーム保存条件
+
+B1. **台割TIFの既定出力先** ([src/components/modals/ExportModal.tsx](src/components/modals/ExportModal.tsx), [src/hooks/useExport.ts](src/hooks/useExport.ts)):
+- エクスポートの既定出力先を `Desktop/Script_Output/台割TIF` に変更。
+- チャプターごと設定 + TIFのみのコピー時は、チャプター名を付けた連番ファイル名へリネームし、
+  サブフォルダを作らず `台割TIF` に集約。
+- TIFF変換経路では PSD/JPEG を Photoshop で `.tif` に変換し、変換対象外ページも同じ出力先に `.tif` として生成。
+
+B2. **「リネームして保存」必須化**:
+- 「TIFFに変換」の下に「リネームして保存」チェックボックスを常時表示。
+- チェックが入っていない場合は生成ボタンを無効化。
+- UIは既存の `JPEGに変換` / `TIFFに変換` と同じチェックボックスレイアウト・間隔に統一。
+- `useExport` 側にも防御処理を追加し、未チェック状態で TIFF 出力が呼ばれてもエラーにする。
+
+### C. EPUB生成画面と情報表示の調整
+
+C1. **EPUB生成サイドバー幅調整** ([src/styles.css](src/styles.css)):
+- EPUB生成モードの右サイドバーを少し狭くし、プレビュー領域を広く使えるようにした。
+
+C2. **格納サイズバッジ追加** ([src/App.tsx](src/App.tsx), [src/styles.css](src/styles.css)):
+- `1280x1818px` の画像サイズを「格納サイズ」と判定。
+- `color-mode-summary-container expanded` 内に緑基調のバッジとして表示。
+- 通常の例外サイズと区別し、ホバー時の対象ハイライトにも対応。
+
+### D. 終了確認・未保存確認の改善
+
+D1. **終了確認ダイアログの表示調整** ([src/styles.css](src/styles.css)):
+- 「保存して終了」が改行されないよう、未保存確認ダイアログの横幅とボタン幅を拡大。
+
+D2. **未保存確認条件の調整** ([src/App.tsx](src/App.tsx)):
+- チャプターをすべて削除して空になった状態で「開く」を押した場合は、不要な未保存確認を出さない。
+- 一方で、未保存プロジェクトにチャプターが残っている状態でアプリを終了しようとした場合は、
+  警告ダイアログを必ず表示する。
+
+### 検証
+
+- `npm run build` 成功。
+- `cargo check` 成功。
+
+### バージョン同期
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を **`1.6.0`** に更新。

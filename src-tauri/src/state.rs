@@ -1,5 +1,5 @@
-use std::sync::Mutex;
 use crate::cache::ThumbnailMemoryCache;
+use std::sync::Mutex;
 
 // アプリケーション状態（メモリキャッシュを保持）
 pub struct AppState {

@@ -1,27 +1,198 @@
+use crate::types::{
+    FileValidationResult, PageCheckInput, PageCheckResult, ProjectFile, SavedFileReference,
+};
+use rayon::prelude::*;
+use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
-use std::path::Path;
-use rayon::prelude::*;
-use crate::types::{ProjectFile, SavedFileReference, FileValidationResult, PageCheckInput, PageCheckResult};
+use std::path::{Path, PathBuf};
 
-// プロジェクトを保存（アトミック書き込み: 一時ファイル→リネーム）
-#[tauri::command]
-pub async fn save_project(file_path: String, project: ProjectFile) -> Result<(), String> {
-    let path = Path::new(&file_path);
+const PROJECT_LINKS_DIR_NAME: &str = "リンクファイル";
+const PROJECT_EXTENSION: &str = "daiw";
 
-    // 親ディレクトリが存在することを確認
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("ディレクトリ作成エラー: {}", e))?;
+#[derive(Debug, Serialize)]
+pub struct ProjectSaveResult {
+    pub file_path: String,
+    pub project_dir: String,
+    pub copied_files: usize,
+}
+
+fn safe_file_name(name: &str, fallback: &str) -> String {
+    let sanitized: String = name
+        .chars()
+        .map(|c| {
+            if matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let trimmed = sanitized.trim().trim_matches('.').to_string();
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn ensure_project_extension(path: &Path) -> PathBuf {
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case(PROJECT_EXTENSION))
+        .unwrap_or(false)
+    {
+        path.to_path_buf()
+    } else {
+        path.with_extension(PROJECT_EXTENSION)
+    }
+}
+
+fn project_bundle_paths(requested_path: &str) -> Result<(PathBuf, PathBuf), String> {
+    let project_file_candidate = ensure_project_extension(Path::new(requested_path));
+    let stem = project_file_candidate
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| safe_file_name(s, "project"))
+        .ok_or_else(|| "プロジェクトファイル名を取得できません".to_string())?;
+    let parent = project_file_candidate
+        .parent()
+        .ok_or_else(|| "プロジェクト保存先の親フォルダを取得できません".to_string())?;
+
+    let project_dir = if parent
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|name| name.eq_ignore_ascii_case(&stem))
+        .unwrap_or(false)
+    {
+        parent.to_path_buf()
+    } else {
+        parent.join(&stem)
+    };
+    let project_file = project_dir.join(format!("{}.{}", stem, PROJECT_EXTENSION));
+    Ok((project_dir, project_file))
+}
+
+fn relative_path(path: &Path, base: &Path) -> String {
+    path.strip_prefix(base)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn unique_file_name(name: &str, used: &mut HashSet<String>) -> String {
+    let safe = safe_file_name(name, "file");
+    let path = Path::new(&safe);
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+    let mut candidate = safe.clone();
+    let mut counter = 1;
+
+    while used.contains(&candidate.to_lowercase()) {
+        candidate = if ext.is_empty() {
+            format!("{}({})", stem, counter)
+        } else {
+            format!("{}({}).{}", stem, counter, ext)
+        };
+        counter += 1;
+    }
+    used.insert(candidate.to_lowercase());
+    candidate
+}
+
+fn metadata_millis(metadata: &fs::Metadata) -> u64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn copy_linked_files_into_bundle(
+    project: &mut ProjectFile,
+    project_dir: &Path,
+) -> Result<usize, String> {
+    let links_dir = project_dir.join(PROJECT_LINKS_DIR_NAME);
+    fs::create_dir_all(&links_dir)
+        .map_err(|e| format!("リンクファイルフォルダ作成エラー: {}", e))?;
+
+    let mut used_names = HashSet::new();
+    let mut path_map: HashMap<String, PathBuf> = HashMap::new();
+    let mut copied_count = 0;
+
+    for chapter in &mut project.chapters {
+        for page in &mut chapter.pages {
+            let Some(file_ref) = page.file.as_mut() else {
+                continue;
+            };
+
+            let source = Path::new(&file_ref.absolute_path);
+            if !source.exists() {
+                continue;
+            }
+
+            let source_key = fs::canonicalize(source)
+                .unwrap_or_else(|_| source.to_path_buf())
+                .to_string_lossy()
+                .to_string();
+
+            let dest = if let Some(mapped) = path_map.get(&source_key) {
+                mapped.clone()
+            } else {
+                let source_name = source
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .or_else(|| {
+                        (!file_ref.file_name.is_empty()).then_some(file_ref.file_name.as_str())
+                    })
+                    .unwrap_or("file");
+                let dest_name = unique_file_name(source_name, &mut used_names);
+                let dest = links_dir.join(dest_name);
+
+                let source_canonical = fs::canonicalize(source).ok();
+                let dest_canonical = fs::canonicalize(&dest).ok();
+                if source_canonical.as_ref() != dest_canonical.as_ref() {
+                    fs::copy(source, &dest).map_err(|e| {
+                        format!(
+                            "リンクファイルのコピーに失敗しました: {} -> {} ({})",
+                            source.display(),
+                            dest.display(),
+                            e
+                        )
+                    })?;
+                    copied_count += 1;
+                }
+
+                path_map.insert(source_key, dest.clone());
+                dest
+            };
+
+            if let Ok(metadata) = fs::metadata(&dest) {
+                file_ref.file_size = metadata.len();
+                file_ref.modified_time = metadata_millis(&metadata);
+            }
+            file_ref.absolute_path = dest.to_string_lossy().to_string();
+            file_ref.relative_path = relative_path(&dest, project_dir);
+            file_ref.file_name = dest
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&file_ref.file_name)
+                .to_string();
+        }
     }
 
-    // JSONとしてシリアライズ
-    let json = serde_json::to_string_pretty(&project)
-        .map_err(|e| format!("JSONシリアライズエラー: {}", e))?;
+    Ok(copied_count)
+}
 
-    // 一時ファイルに書き込み→sync→リネーム（クラッシュ時のデータ破損を防止）
-    let temp_path = format!("{}.tmp", file_path);
-    let mut file = fs::File::create(&temp_path)
-        .map_err(|e| format!("一時ファイル作成エラー: {}", e))?;
+fn write_project_file_atomic(path: &Path, project: &ProjectFile) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(project)
+        .map_err(|e| format!("JSONシリアライズエラー: {}", e))?;
+    let temp_path = path.with_extension(format!("{}.tmp", PROJECT_EXTENSION));
+    let mut file =
+        fs::File::create(&temp_path).map_err(|e| format!("一時ファイル作成エラー: {}", e))?;
     file.write_all(json.as_bytes()).map_err(|e| {
         let _ = fs::remove_file(&temp_path);
         format!("書き込みエラー: {}", e)
@@ -31,12 +202,38 @@ pub async fn save_project(file_path: String, project: ProjectFile) -> Result<(),
         format!("同期エラー: {}", e)
     })?;
     drop(file);
+
+    if path.exists() {
+        fs::remove_file(path).map_err(|e| {
+            let _ = fs::remove_file(&temp_path);
+            format!("既存プロジェクトファイル削除エラー: {}", e)
+        })?;
+    }
     fs::rename(&temp_path, path).map_err(|e| {
         let _ = fs::remove_file(&temp_path);
         format!("リネームエラー: {}", e)
-    })?;
+    })
+}
 
-    Ok(())
+// プロジェクトをフォルダ形式で保存（.daiw + リンクファイルコピー）
+#[tauri::command]
+pub async fn save_project(
+    file_path: String,
+    mut project: ProjectFile,
+) -> Result<ProjectSaveResult, String> {
+    let (project_dir, project_file) = project_bundle_paths(&file_path)?;
+    fs::create_dir_all(&project_dir)
+        .map_err(|e| format!("プロジェクトフォルダ作成エラー: {}", e))?;
+
+    project.base_path = project_dir.to_string_lossy().to_string();
+    let copied_files = copy_linked_files_into_bundle(&mut project, &project_dir)?;
+    write_project_file_atomic(&project_file, &project)?;
+
+    Ok(ProjectSaveResult {
+        file_path: project_file.to_string_lossy().to_string(),
+        project_dir: project_dir.to_string_lossy().to_string(),
+        copied_files,
+    })
 }
 
 // プロジェクトを読み込み
@@ -49,8 +246,33 @@ pub async fn load_project(file_path: String) -> Result<ProjectFile, String> {
     }
 
     let content = fs::read_to_string(path).map_err(|e| format!("ファイル読み込みエラー: {}", e))?;
-    let project: ProjectFile = serde_json::from_str(&content)
-        .map_err(|e| format!("JSON解析エラー: {}", e))?;
+    let mut project: ProjectFile =
+        serde_json::from_str(&content).map_err(|e| format!("JSON解析エラー: {}", e))?;
+    let current_base = path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
+    project.base_path = current_base.to_string_lossy().to_string();
+
+    for chapter in &mut project.chapters {
+        for page in &mut chapter.pages {
+            if let Some(file_ref) = page.file.as_mut() {
+                let absolute = Path::new(&file_ref.absolute_path);
+                let saved_relative = Path::new(&file_ref.relative_path);
+                let relative = current_base.join(saved_relative);
+                if !saved_relative.is_absolute() && relative.exists() {
+                    file_ref.absolute_path = relative.to_string_lossy().to_string();
+                    if let Ok(metadata) = fs::metadata(&relative) {
+                        file_ref.file_size = metadata.len();
+                        file_ref.modified_time = metadata_millis(&metadata);
+                    }
+                } else if !absolute.exists() && relative.exists() {
+                    file_ref.absolute_path = relative.to_string_lossy().to_string();
+                    if let Ok(metadata) = fs::metadata(&relative) {
+                        file_ref.file_size = metadata.len();
+                        file_ref.modified_time = metadata_millis(&metadata);
+                    }
+                }
+            }
+        }
+    }
 
     Ok(project)
 }
@@ -70,7 +292,11 @@ fn validate_file_reference(
         if let Ok(metadata) = fs::metadata(absolute) {
             let current_time = metadata
                 .modified()
-                .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64)
+                .map(|t| {
+                    t.duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64
+                })
                 .unwrap_or(0);
 
             if current_time != file_ref.modified_time {
@@ -248,10 +474,16 @@ fn read_image_header(path: &Path) -> Option<ImageHeaderInfo> {
     let decoder = reader.into_decoder().ok()?;
     let (width, height) = decoder.dimensions();
     let mut color_mode = match decoder.color_type() {
-        image::ColorType::L8 | image::ColorType::L16 |
-        image::ColorType::La8 | image::ColorType::La16 => "Grayscale",
-        image::ColorType::Rgb8 | image::ColorType::Rgb16 | image::ColorType::Rgb32F |
-        image::ColorType::Rgba8 | image::ColorType::Rgba16 | image::ColorType::Rgba32F => "RGB",
+        image::ColorType::L8
+        | image::ColorType::L16
+        | image::ColorType::La8
+        | image::ColorType::La16 => "Grayscale",
+        image::ColorType::Rgb8
+        | image::ColorType::Rgb16
+        | image::ColorType::Rgb32F
+        | image::ColorType::Rgba8
+        | image::ColorType::Rgba16
+        | image::ColorType::Rgba32F => "RGB",
         _ => "RGB",
     }
     .to_string();
@@ -387,7 +619,12 @@ fn check_one_page(page: &PageCheckInput) -> PageCheckResult {
         match read_psd_header(path) {
             Some(info) => {
                 let dpi = read_psd_dpi(path);
-                (Some(info.width), Some(info.height), Some(info.color_mode), dpi)
+                (
+                    Some(info.width),
+                    Some(info.height),
+                    Some(info.color_mode),
+                    dpi,
+                )
             }
             None => {
                 if status == "ok" {
@@ -398,9 +635,12 @@ fn check_one_page(page: &PageCheckInput) -> PageCheckResult {
         }
     } else {
         match read_image_header(path) {
-            Some(info) => {
-                (Some(info.width), Some(info.height), Some(info.color_mode), None)
-            }
+            Some(info) => (
+                Some(info.width),
+                Some(info.height),
+                Some(info.color_mode),
+                None,
+            ),
             None => {
                 if status == "ok" {
                     status = "meta_error".to_string();
@@ -424,10 +664,7 @@ fn check_one_page(page: &PageCheckInput) -> PageCheckResult {
 #[tauri::command]
 pub async fn validate_pages(pages: Vec<PageCheckInput>) -> Result<Vec<PageCheckResult>, String> {
     tokio::task::spawn_blocking(move || {
-        let results: Vec<PageCheckResult> = pages
-            .par_iter()
-            .map(check_one_page)
-            .collect();
+        let results: Vec<PageCheckResult> = pages.par_iter().map(check_one_page).collect();
         Ok(results)
     })
     .await

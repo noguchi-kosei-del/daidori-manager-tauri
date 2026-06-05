@@ -5,6 +5,6 @@ use serde::{Deserialize, Serialize};
 pub struct ExportPage {
     pub source_path: Option<String>,
     pub output_name: String,
-    pub page_type: String,  // "file", "cover", "blank", "intermission", "colophon"
-    pub subfolder: Option<String>,  // チャプターごとのサブフォルダ名
+    pub page_type: String, // "file", "cover", "blank", "intermission", "colophon"
+    pub subfolder: Option<String>, // チャプターごとのサブフォルダ名
 }

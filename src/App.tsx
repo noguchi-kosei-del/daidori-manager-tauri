@@ -172,6 +172,12 @@ type RustProjectFile = {
   ui_state?: RustSavedUiState;
 };
 
+type ProjectSaveResult = {
+  file_path: string;
+  project_dir: string;
+  copied_files: number;
+};
+
 const PROJECT_FILE_EXTENSION = 'daiw';
 const DEFAULT_PROJECT_NAME = '新規プロジェクト';
 
@@ -379,7 +385,11 @@ type ImageSizeGroupInfo = {
   dpiLabel: string;
   physicalLabel: string;
   isException: boolean;
+  isStorageSize: boolean;
 };
+
+const STORAGE_IMAGE_WIDTH = 1280;
+const STORAGE_IMAGE_HEIGHT = 1818;
 
 const getImageSizeGroupInfo = (page: Page): ImageSizeGroupInfo | null => {
   const width = page.imageWidth;
@@ -392,6 +402,7 @@ const getImageSizeGroupInfo = (page: Page): ImageSizeGroupInfo | null => {
   let paperLabel = '例外サイズ';
   let physicalLabel = '実寸不明';
   let isException = true;
+  const isStorageSize = width === STORAGE_IMAGE_WIDTH && height === STORAGE_IMAGE_HEIGHT;
 
   if (dpi && dpi > 0) {
     const { wMm, hMm } = pixelsToMm(width, height, dpi);
@@ -405,13 +416,19 @@ const getImageSizeGroupInfo = (page: Page): ImageSizeGroupInfo | null => {
     }
   }
 
+  if (isStorageSize) {
+    paperLabel = '格納サイズ';
+    isException = false;
+  }
+
   return {
-    key: isException ? 'exception-size' : `${paperLabel}|${pixelLabel}|${dpiLabel}`,
+    key: isStorageSize ? `storage-size|${pixelLabel}` : isException ? 'exception-size' : `${paperLabel}|${pixelLabel}|${dpiLabel}`,
     paperLabel,
     pixelLabel,
     dpiLabel,
     physicalLabel,
     isException,
+    isStorageSize,
   };
 };
 
@@ -587,6 +604,8 @@ function App() {
   const isProjectDirty = lastSavedSnapshot === null
     ? chapters.length > 0
     : projectStateSnapshot !== lastSavedSnapshot;
+  const hasUnsavedProjectContent = currentProjectPath === null && chapters.length > 0;
+  const shouldConfirmUnsavedChanges = chapters.length > 0 && (isProjectDirty || hasUnsavedProjectContent);
 
   useEffect(() => {
     if (lastSavedSnapshot === null) {
@@ -608,7 +627,7 @@ function App() {
       try {
         const win = getCurrentWindow();
         const fn = await win.onCloseRequested((event) => {
-          if (isProjectDirty) {
+          if (shouldConfirmUnsavedChanges) {
             event.preventDefault();
             setShowCloseConfirmDialog(true);
           }
@@ -626,7 +645,7 @@ function App() {
       mounted = false;
       unlisten?.();
     };
-  }, [isProjectDirty]);
+  }, [shouldConfirmUnsavedChanges]);
 
   const handleConfirmClose = async () => {
     setShowCloseConfirmDialog(false);
@@ -717,6 +736,7 @@ function App() {
       dpiLabel: string;
       physicalLabel: string;
       isException: boolean;
+      isStorageSize: boolean;
       files: {
         id: string;
         name: string;
@@ -940,7 +960,7 @@ function App() {
               {imageSizeGroups.map((group) => (
                 <div
                   key={group.key}
-                  className={`image-size-badge ${hoveredImageSizeKey === group.key ? 'active' : ''} ${group.isException ? 'image-size-badge-exception' : ''}`}
+                  className={`image-size-badge ${hoveredImageSizeKey === group.key ? 'active' : ''} ${group.isException ? 'image-size-badge-exception' : ''} ${group.isStorageSize ? 'image-size-badge-storage' : ''}`}
                   onMouseEnter={() => handleImageSizeBadgeEnter(group.key)}
                   onMouseLeave={scheduleHoverClose}
                 >
@@ -1039,12 +1059,12 @@ function App() {
   }, [setExportResultDialog]);
 
   const confirmDiscardUnsavedChanges = useCallback(async () => {
-    if (!isProjectDirty) return true;
+    if (!shouldConfirmUnsavedChanges) return true;
     return await ask(
       '未保存の変更があります。保存せずに続行しますか？',
       { title: '未保存の変更', kind: 'warning' }
     );
-  }, [isProjectDirty]);
+  }, [shouldConfirmUnsavedChanges]);
 
   const saveProjectToPath = useCallback(async (targetPath: string): Promise<boolean> => {
     const filePath = ensureProjectExtension(targetPath);
@@ -1059,14 +1079,17 @@ function App() {
     );
 
     try {
-      await invoke('save_project', { filePath, project: projectFile });
-      await invoke('add_recent_file', { path: filePath, name: projectFile.name }).catch((error) => {
+      const result = await invoke<ProjectSaveResult>('save_project', { filePath, project: projectFile });
+      await invoke('add_recent_file', { path: result.file_path, name: projectFile.name }).catch((error) => {
         console.warn('最近使ったファイルへの追加に失敗:', error);
       });
-      setCurrentProjectPath(filePath);
+      setCurrentProjectPath(result.file_path);
       setProjectCreatedAt(projectFile.created_at);
       setLastSavedSnapshot(projectStateSnapshot);
-      showProjectResult('プロジェクトを保存しました', `${filePath} に保存しました。`);
+      showProjectResult(
+        'プロジェクトを保存しました',
+        `${result.project_dir} に保存しました。\nリンクファイル: ${result.copied_files}件`
+      );
       return true;
     } catch (error) {
       const message = typeof error === 'string' ? error : error instanceof Error ? error.message : '保存に失敗しました。';

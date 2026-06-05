@@ -1,10 +1,10 @@
+use crate::constants::THUMBNAIL_SIZE;
+use crate::image_utils::{create_thumbnail, validate_dimensions};
+use image::DynamicImage;
+use memmap2::Mmap;
 use std::fs;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
-use image::DynamicImage;
-use memmap2::Mmap;
-use crate::image_utils::{create_thumbnail, validate_dimensions};
-use crate::constants::THUMBNAIL_SIZE;
 
 // PSDファイルから埋め込みサムネイルを高速抽出
 fn extract_psd_embedded_thumbnail(data: &[u8]) -> Option<Vec<u8>> {
@@ -54,7 +54,11 @@ fn extract_psd_embedded_thumbnail(data: &[u8]) -> Option<Vec<u8>> {
         // パスカル文字列（名前）をスキップ
         let mut name_len = [0u8; 1];
         cursor.read_exact(&mut name_len).ok()?;
-        let skip_len = if name_len[0] % 2 == 0 { name_len[0] as i64 + 1 } else { name_len[0] as i64 };
+        let skip_len = if name_len[0] % 2 == 0 {
+            name_len[0] as i64 + 1
+        } else {
+            name_len[0] as i64
+        };
         if let Err(e) = cursor.seek(SeekFrom::Current(skip_len)) {
             eprintln!("PSD thumbnail: seek error (name skip): {}", e);
             break;
@@ -90,7 +94,11 @@ fn extract_psd_embedded_thumbnail(data: &[u8]) -> Option<Vec<u8>> {
         }
 
         // 次のリソースへ（偶数バウンダリにアライン）
-        let padded_size = if resource_size % 2 == 0 { resource_size } else { resource_size + 1 };
+        let padded_size = if resource_size % 2 == 0 {
+            resource_size
+        } else {
+            resource_size + 1
+        };
         if let Err(e) = cursor.seek(SeekFrom::Current(padded_size as i64)) {
             eprintln!("PSD thumbnail: seek error (next resource): {}", e);
             break;
@@ -125,8 +133,8 @@ pub fn generate_psd_thumbnail(path: &Path) -> Result<Vec<u8>, String> {
     }
 
     // 2. フルコンポジットで高品質なサムネイルを生成（全データアクセスが必要）
-    let psd_file = psd::Psd::from_bytes(&mmap)
-        .map_err(|e| format!("PSD読み込みエラー: {:?}", e))?;
+    let psd_file =
+        psd::Psd::from_bytes(&mmap).map_err(|e| format!("PSD読み込みエラー: {:?}", e))?;
 
     let width = psd_file.width();
     let height = psd_file.height();
@@ -136,8 +144,7 @@ pub fn generate_psd_thumbnail(path: &Path) -> Result<Vec<u8>, String> {
     let rgba = psd_file.rgba();
 
     let img = DynamicImage::ImageRgba8(
-        image::RgbaImage::from_raw(width, height, rgba)
-            .ok_or("画像データの変換に失敗")?
+        image::RgbaImage::from_raw(width, height, rgba).ok_or("画像データの変換に失敗")?,
     );
 
     create_thumbnail(img)

@@ -1,8 +1,8 @@
-use std::fs;
-use std::path::Path;
-use crate::types::FileInfo;
 use crate::constants::SUPPORTED_EXTENSIONS;
 use crate::image_utils::get_file_type;
+use crate::types::FileInfo;
+use std::fs;
+use std::path::Path;
 
 #[tauri::command]
 pub fn get_folder_contents(folder_path: String) -> Result<Vec<FileInfo>, String> {
@@ -45,12 +45,20 @@ pub fn get_folder_contents(folder_path: String) -> Result<Vec<FileInfo>, String>
 
         let modified_time = metadata
             .modified()
-            .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64)
+            .map(|t| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64
+            })
             .unwrap_or(0);
 
         files.push(FileInfo {
             path: entry_path.to_string_lossy().to_string(),
-            name: entry_path.file_name().unwrap_or_default().to_string_lossy().to_string(),
+            name: entry_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
             size: metadata.len(),
             modified_time,
             file_type: file_type.to_string(),

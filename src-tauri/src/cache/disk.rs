@@ -15,7 +15,11 @@ impl ThumbnailCache {
 
         // キャッシュディレクトリ作成（エラー時はログ出力）
         if let Err(e) = fs::create_dir_all(&cache_dir) {
-            eprintln!("キャッシュディレクトリ作成失敗: {} - {}", cache_dir.display(), e);
+            eprintln!(
+                "キャッシュディレクトリ作成失敗: {} - {}",
+                cache_dir.display(),
+                e
+            );
         }
 
         Self { cache_dir }

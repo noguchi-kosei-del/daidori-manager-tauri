@@ -1,19 +1,20 @@
+use crate::image_utils::validate_dimensions;
+use crate::types::ExportPage;
+use image::codecs::jpeg::JpegEncoder;
+use image::DynamicImage;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use image::codecs::jpeg::JpegEncoder;
-use image::DynamicImage;
-use rayon::prelude::*;
-use crate::types::ExportPage;
-use crate::image_utils::validate_dimensions;
 
 // PSDヘッダからサイズを取得（先頭26バイトのみ読み取り）
 fn get_psd_dimensions(path: &Path) -> Result<(u32, u32), String> {
     let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
     let mut header = [0u8; 26];
-    file.read_exact(&mut header).map_err(|e| format!("PSDヘッダ読み取りエラー: {}", e))?;
+    file.read_exact(&mut header)
+        .map_err(|e| format!("PSDヘッダ読み取りエラー: {}", e))?;
     if &header[0..4] != b"8BPS" {
         return Err("無効なPSDファイル".to_string());
     }
@@ -55,7 +56,9 @@ fn create_blank_image(width: u32, height: u32, output_path: &Path) -> Result<(),
         "jpg" | "jpeg" => {
             let mut file = fs::File::create(output_path).map_err(|e| e.to_string())?;
             let encoder = JpegEncoder::new_with_quality(&mut file, 95);
-            dynamic_img.write_with_encoder(encoder).map_err(|e| e.to_string())?;
+            dynamic_img
+                .write_with_encoder(encoder)
+                .map_err(|e| e.to_string())?;
         }
         _ => {
             dynamic_img.save(output_path).map_err(|e| e.to_string())?;
@@ -66,10 +69,26 @@ fn create_blank_image(width: u32, height: u32, output_path: &Path) -> Result<(),
 
 // エクスポートタスク（並列実行用）
 enum ExportTask {
-    CopyFile { source: PathBuf, dest: PathBuf },
-    ConvertToJpg { source: PathBuf, dest: PathBuf, quality: u8 },
-    GenerateBlank { width: u32, height: u32, dest: PathBuf },
-    GenerateBlankJpg { width: u32, height: u32, dest: PathBuf, quality: u8 },
+    CopyFile {
+        source: PathBuf,
+        dest: PathBuf,
+    },
+    ConvertToJpg {
+        source: PathBuf,
+        dest: PathBuf,
+        quality: u8,
+    },
+    GenerateBlank {
+        width: u32,
+        height: u32,
+        dest: PathBuf,
+    },
+    GenerateBlankJpg {
+        width: u32,
+        height: u32,
+        dest: PathBuf,
+        quality: u8,
+    },
 }
 
 #[tauri::command]
@@ -88,7 +107,14 @@ pub async fn export_pages(
 
     // spawn_blockingで同期I/Oをオフロード（UIスレッドをブロックしない）
     tokio::task::spawn_blocking(move || {
-        export_pages_sync(&output_path, &pages, should_move, should_convert, quality, blank_fmt.as_deref())
+        export_pages_sync(
+            &output_path,
+            &pages,
+            should_move,
+            should_convert,
+            quality,
+            blank_fmt.as_deref(),
+        )
     })
     .await
     .map_err(|e| format!("タスクエラー: {}", e))?
@@ -182,7 +208,8 @@ fn export_pages_sync(
                                 quality,
                             });
                         } else {
-                            let dest = page_output_dir.join(format!("{}.{}", page.output_name, source_ext));
+                            let dest = page_output_dir
+                                .join(format!("{}.{}", page.output_name, source_ext));
                             tasks.push(ExportTask::CopyFile {
                                 source: source.to_path_buf(),
                                 dest,
@@ -208,7 +235,9 @@ fn export_pages_sync(
                             let prev_source = Path::new(prev_path);
                             if let Some(e) = prev_source.extension().and_then(|e| e.to_str()) {
                                 let e_lower = e.to_lowercase();
-                                if e_lower != "psd" { ext = e_lower; }
+                                if e_lower != "psd" {
+                                    ext = e_lower;
+                                }
                             }
                             break;
                         }
@@ -224,7 +253,9 @@ fn export_pages_sync(
                                 let next_source = Path::new(next_path);
                                 if let Some(e) = next_source.extension().and_then(|e| e.to_str()) {
                                     let e_lower = e.to_lowercase();
-                                    if e_lower != "psd" { ext = e_lower; }
+                                    if e_lower != "psd" {
+                                        ext = e_lower;
+                                    }
                                 }
                                 break;
                             }
@@ -243,9 +274,18 @@ fn export_pages_sync(
                 let dest = page_output_dir.join(format!("{}.{}", page.output_name, final_ext));
 
                 if final_ext == "jpg" || final_ext == "jpeg" {
-                    tasks.push(ExportTask::GenerateBlankJpg { width: size.0, height: size.1, dest, quality });
+                    tasks.push(ExportTask::GenerateBlankJpg {
+                        width: size.0,
+                        height: size.1,
+                        dest,
+                        quality,
+                    });
                 } else {
-                    tasks.push(ExportTask::GenerateBlank { width: size.0, height: size.1, dest });
+                    tasks.push(ExportTask::GenerateBlank {
+                        width: size.0,
+                        height: size.1,
+                        dest,
+                    });
                 }
             }
             _ => {}
@@ -259,31 +299,40 @@ fn export_pages_sync(
 
     tasks.par_iter().for_each(|task| {
         let result = match task {
-            ExportTask::CopyFile { source, dest } => {
-                fs::copy(source, dest).map(|_| ()).map_err(|e| e.to_string())
-            }
-            ExportTask::ConvertToJpg { source, dest, quality } => {
-                (|| {
-                    let img = image::open(source).map_err(|e| e.to_string())?;
-                    let mut file = fs::File::create(dest).map_err(|e| e.to_string())?;
-                    let encoder = JpegEncoder::new_with_quality(&mut file, *quality);
-                    img.write_with_encoder(encoder).map_err(|e| e.to_string())?;
-                    Ok(())
-                })()
-            }
-            ExportTask::GenerateBlank { width, height, dest } => {
-                create_blank_image(*width, *height, dest)
-            }
-            ExportTask::GenerateBlankJpg { width, height, dest, quality } => {
-                (|| {
-                    let img = image::RgbImage::from_pixel(*width, *height, image::Rgb([255, 255, 255]));
-                    let dynamic_img = DynamicImage::ImageRgb8(img);
-                    let mut file = fs::File::create(dest).map_err(|e| e.to_string())?;
-                    let encoder = JpegEncoder::new_with_quality(&mut file, *quality);
-                    dynamic_img.write_with_encoder(encoder).map_err(|e| e.to_string())?;
-                    Ok(())
-                })()
-            }
+            ExportTask::CopyFile { source, dest } => fs::copy(source, dest)
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            ExportTask::ConvertToJpg {
+                source,
+                dest,
+                quality,
+            } => (|| {
+                let img = image::open(source).map_err(|e| e.to_string())?;
+                let mut file = fs::File::create(dest).map_err(|e| e.to_string())?;
+                let encoder = JpegEncoder::new_with_quality(&mut file, *quality);
+                img.write_with_encoder(encoder).map_err(|e| e.to_string())?;
+                Ok(())
+            })(),
+            ExportTask::GenerateBlank {
+                width,
+                height,
+                dest,
+            } => create_blank_image(*width, *height, dest),
+            ExportTask::GenerateBlankJpg {
+                width,
+                height,
+                dest,
+                quality,
+            } => (|| {
+                let img = image::RgbImage::from_pixel(*width, *height, image::Rgb([255, 255, 255]));
+                let dynamic_img = DynamicImage::ImageRgb8(img);
+                let mut file = fs::File::create(dest).map_err(|e| e.to_string())?;
+                let encoder = JpegEncoder::new_with_quality(&mut file, *quality);
+                dynamic_img
+                    .write_with_encoder(encoder)
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            })(),
         };
         if let Err(e) = result {
             errors.lock().unwrap().push(e);

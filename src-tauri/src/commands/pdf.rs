@@ -34,13 +34,7 @@ struct ProgressPayload {
     pdf_name: String,
 }
 
-fn emit_progress(
-    app: &AppHandle,
-    phase: &str,
-    current: usize,
-    total: usize,
-    pdf_name: &str,
-) {
+fn emit_progress(app: &AppHandle, phase: &str, current: usize, total: usize, pdf_name: &str) {
     let _ = app.emit(
         "pdf-rasterize-progress",
         ProgressPayload {
@@ -85,8 +79,9 @@ fn local_pdfium_cache_path() -> Option<PathBuf> {
 ///   4. 編集企画_AT業務推進\DTP制作部\Daiwari Manager\（旧運用想定）
 ///   5. 編集企画_AT業務推進\DTP制作部\daidori-manager\（英字運用想定）
 fn shared_pdfium_candidates() -> Vec<PathBuf> {
-    let sony_daiwari =
-        PathBuf::from(r"G:\共有ドライブ\ソニーからのデータ受領\編集企画_AT業務推進\DTP制作部\Daiwari PDF");
+    let sony_daiwari = PathBuf::from(
+        r"G:\共有ドライブ\ソニーからのデータ受領\編集企画_AT業務推進\DTP制作部\Daiwari PDF",
+    );
     let direct_dtp = PathBuf::from(r"G:\共有ドライブ\編集企画_AT業務推進\DTP制作部");
     vec![
         sony_daiwari.join("bin").join("pdfium.dll"),
@@ -218,10 +213,7 @@ fn create_pdfium(app: Option<&AppHandle>) -> Result<Pdfium, String> {
             return Pdfium::bind_to_system_library()
                 .map(Pdfium::new)
                 .map_err(|sys_err| {
-                    format!(
-                        "{}\nシステムライブラリも未検出: {:?}",
-                        fetch_err, sys_err
-                    )
+                    format!("{}\nシステムライブラリも未検出: {:?}", fetch_err, sys_err)
                 });
         }
     }

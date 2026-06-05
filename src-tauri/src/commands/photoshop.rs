@@ -97,9 +97,24 @@ pub fn find_script_path(
     let resource_script = resource_path.join("scripts").join(script_name);
     let resource_root_script = resource_path.join(script_name);
 
-    eprintln!("{} - Checking dev script: {} (exists: {})", log_prefix, dev_script.display(), dev_script.exists());
-    eprintln!("{} - Checking resource script: {} (exists: {})", log_prefix, resource_script.display(), resource_script.exists());
-    eprintln!("{} - Checking resource root script: {} (exists: {})", log_prefix, resource_root_script.display(), resource_root_script.exists());
+    eprintln!(
+        "{} - Checking dev script: {} (exists: {})",
+        log_prefix,
+        dev_script.display(),
+        dev_script.exists()
+    );
+    eprintln!(
+        "{} - Checking resource script: {} (exists: {})",
+        log_prefix,
+        resource_script.display(),
+        resource_script.exists()
+    );
+    eprintln!(
+        "{} - Checking resource root script: {} (exists: {})",
+        log_prefix,
+        resource_root_script.display(),
+        resource_root_script.exists()
+    );
 
     let script_path_str = if dev_script.exists() {
         dev_script.to_string_lossy().to_string()
@@ -148,10 +163,7 @@ pub fn create_unique_output_dir(output_dir: &str, log_prefix: &str) -> Result<St
 }
 
 /// スクリプトをtempにコピー（UTF-8 BOM付き）
-pub fn copy_script_with_bom(
-    script_path: &str,
-    temp_script_name: &str,
-) -> Result<PathBuf, String> {
+pub fn copy_script_with_bom(script_path: &str, temp_script_name: &str) -> Result<PathBuf, String> {
     use std::io::Write;
 
     let temp_dir = std::env::temp_dir();
@@ -163,21 +175,24 @@ pub fn copy_script_with_bom(
     // UTF-8 BOM + スクリプト内容を書き出し
     let mut script_file = fs::File::create(&temp_script)
         .map_err(|e| format!("スクリプトファイルの作成に失敗: {}", e))?;
-    script_file.write_all(&[0xEF, 0xBB, 0xBF])  // UTF-8 BOM
+    script_file
+        .write_all(&[0xEF, 0xBB, 0xBF]) // UTF-8 BOM
         .map_err(|e| format!("BOM書き込みに失敗: {}", e))?;
-    script_file.write_all(script_content.as_bytes())
+    script_file
+        .write_all(script_content.as_bytes())
         .map_err(|e| format!("スクリプト書き込みに失敗: {}", e))?;
     drop(script_file);
 
     // コピー後の存在確認
     if !temp_script.exists() {
-        return Err(format!("スクリプトのコピー後にファイルが見つかりません: {}", temp_script.display()));
+        return Err(format!(
+            "スクリプトのコピー後にファイルが見つかりません: {}",
+            temp_script.display()
+        ));
     }
 
     // コピーしたファイルの内容確認
-    let copied_size = fs::metadata(&temp_script)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let copied_size = fs::metadata(&temp_script).map(|m| m.len()).unwrap_or(0);
     if copied_size == 0 {
         return Err("スクリプトファイルが空です".to_string());
     }
@@ -187,12 +202,16 @@ pub fn copy_script_with_bom(
 
 /// tempスクリプトのフルパスを取得（8.3形式を回避、\\?\プレフィックスを削除）
 pub fn get_script_run_path(temp_script: &Path) -> String {
-    let script_to_run = temp_script.canonicalize()
+    let script_to_run = temp_script
+        .canonicalize()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| temp_script.to_string_lossy().to_string());
 
     // \\?\ プレフィックスを削除
-    script_to_run.strip_prefix(r"\\?\").unwrap_or(&script_to_run).to_string()
+    script_to_run
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&script_to_run)
+        .to_string()
 }
 
 /// 設定JSONをファイルに書き込み（UTF-8 BOM付き）
@@ -202,14 +221,16 @@ pub fn write_settings_json<T: serde::Serialize>(
 ) -> Result<(), String> {
     use std::io::Write;
 
-    let settings_json = serde_json::to_string_pretty(config)
-        .map_err(|e| format!("JSON変換に失敗: {}", e))?;
+    let settings_json =
+        serde_json::to_string_pretty(config).map_err(|e| format!("JSON変換に失敗: {}", e))?;
 
-    let mut settings_file = fs::File::create(settings_path)
-        .map_err(|e| format!("設定ファイルの作成に失敗: {}", e))?;
-    settings_file.write_all(&[0xEF, 0xBB, 0xBF])
+    let mut settings_file =
+        fs::File::create(settings_path).map_err(|e| format!("設定ファイルの作成に失敗: {}", e))?;
+    settings_file
+        .write_all(&[0xEF, 0xBB, 0xBF])
         .map_err(|e| format!("BOM書き込みに失敗: {}", e))?;
-    settings_file.write_all(settings_json.as_bytes())
+    settings_file
+        .write_all(settings_json.as_bytes())
         .map_err(|e| format!("設定の書き込みに失敗: {}", e))?;
 
     Ok(())

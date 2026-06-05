@@ -1,8 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 
 pub struct ThumbnailMemoryCache {
-    cache: HashMap<String, String>,  // cache_key -> base64 data URL
-    order: VecDeque<String>,         // LRU順序
+    cache: HashMap<String, String>, // cache_key -> base64 data URL
+    order: VecDeque<String>,        // LRU順序
     max_size: usize,
 }
 

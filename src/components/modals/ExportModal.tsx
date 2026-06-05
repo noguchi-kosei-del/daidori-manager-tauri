@@ -90,6 +90,7 @@ export interface ExportOptions {
   convertToJpg: boolean;  // JPEGに変換するか（Photoshop不要・Rust/MozJPEG）
   jpgQuality: number;  // MozJPEG品質（70-100）
   convertToTiff: boolean;  // PhotoshopでTIFFに変換するか
+  renameTiffAndSave: boolean;  // TIFF変換時にリネームして保存するか
   resizeMode: ResizeMode;  // リサイズモード（none/percent/fixed）
   resizePercent: number;   // %指定時の倍率（1-100）
   renameMode: 'unified' | 'perChapter';
@@ -122,6 +123,7 @@ export function ExportModal({
   const [convertToJpg, setConvertToJpg] = useState(false);
   const [jpgQuality, setJpgQuality] = useState(95);
   const [convertToTiff, setConvertToTiff] = useState(false);
+  const [renameTiffAndSave, setRenameTiffAndSave] = useState(false);
   const [resizeMode, setResizeMode] = useState<ResizeMode>('none');
   const [resizePercent, setResizePercent] = useState(50);
   const [photoshopInstalled, setPhotoshopInstalled] = useState<boolean | null>(null);
@@ -140,7 +142,7 @@ export function ExportModal({
     const initDefaultPath = async () => {
       try {
         const desktop = await desktopDir();
-        const defaultPath = await join(desktop, 'Script_Output', '台割');
+        const defaultPath = await join(desktop, 'Script_Output', '台割TIF');
         setOutputPath(defaultPath);
       } catch (e) {
         console.error('Failed to get desktop path:', e);
@@ -179,7 +181,7 @@ export function ExportModal({
 
   // PSD・JPEGファイルがあるかチェック（TIFF変換対象）
   const hasTiffConvertibleFiles = chapters.some(chapter =>
-    chapter.pages.some(page => page.fileType === 'psd' || page.fileType === 'jpg')
+    chapter.pages.some(page => page.fileType === 'psd' || page.fileType === 'jpg' || page.fileType === 'jpeg')
   );
 
   // 画像ファイルページがあるか（JPEG変換対象。Photoshop不要）
@@ -220,7 +222,7 @@ export function ExportModal({
   const handleExport = async () => {
     if (!outputPath) return;
     setIsExporting(true);
-    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, resizeMode, resizePercent, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode });
+    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, resizeMode, resizePercent, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode });
     setIsExporting(false);
     onClose();
   };
@@ -301,6 +303,7 @@ export function ExportModal({
                   setConvertToJpg(e.target.checked);
                   if (e.target.checked) {
                     setConvertToTiff(false);
+                    setRenameTiffAndSave(false);
                   }
                 }}
               />
@@ -376,6 +379,14 @@ export function ExportModal({
               {photoshopInstalled && !hasTiffConvertibleFiles && (
                 <span className="option-note"> - 変換可能なファイルがありません</span>
               )}
+            </label>
+            <label className="checkbox-label tiff-rename-checkbox">
+              <input
+                type="checkbox"
+                checked={renameTiffAndSave}
+                onChange={(e) => setRenameTiffAndSave(e.target.checked)}
+              />
+              リネームして保存
             </label>
             {convertToTiff && (
               <div className="tiff-options">
@@ -615,7 +626,7 @@ export function ExportModal({
           <button
             className="btn-primary btn-small"
             onClick={handleExport}
-            disabled={!outputPath || isExporting}
+            disabled={!outputPath || isExporting || !renameTiffAndSave}
           >
             {isExporting ? '生成中...' : '生成'}
           </button>

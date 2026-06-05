@@ -1,11 +1,11 @@
-mod file;
+mod epub;
 mod export;
+mod file;
 mod project;
 mod tiff;
-mod epub;
 
-pub use file::FileInfo;
+pub use epub::*;
 pub use export::ExportPage;
+pub use file::FileInfo;
 pub use project::*;
 pub use tiff::*;
-pub use epub::*;

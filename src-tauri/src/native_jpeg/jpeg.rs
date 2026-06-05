@@ -40,8 +40,8 @@ pub fn write_jpeg_mozjpeg_to_file<P: AsRef<Path>>(
     quality: f32,
     path: P,
 ) -> Result<(), String> {
-    let jpeg_data = encode_jpeg_mozjpeg(rgb_data, width, height, quality)
-        .ok_or("MozJPEGエンコードに失敗")?;
+    let jpeg_data =
+        encode_jpeg_mozjpeg(rgb_data, width, height, quality).ok_or("MozJPEGエンコードに失敗")?;
 
     let mut file = File::create(path).map_err(|e| format!("ファイル作成に失敗: {}", e))?;
     file.write_all(&jpeg_data)

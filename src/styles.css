@@ -510,13 +510,13 @@ body.sidebar-flipped .sidebar-right {
 }
 
 .epub-settings-sidebar:not(.collapsed) {
-  width: 430px;
-  min-width: 430px;
+  width: 400px;
+  min-width: 400px;
 }
 
 .epub-settings-sidebar:not(.collapsed) .sidebar-content {
-  width: 430px;
-  min-width: 430px;
+  width: 400px;
+  min-width: 400px;
   padding: 0;
 }
 
@@ -963,6 +963,38 @@ body.viewer-mode .hamburger-overlay {
   background: rgba(220, 38, 38, 0.22);
   border-color: #ef4444;
   color: #fecaca;
+}
+.image-size-badge-storage {
+  background: rgba(22, 163, 74, 0.14);
+  border-color: #16a34a;
+  color: #86efac;
+}
+.image-size-badge-storage .image-size-paper {
+  color: #86efac;
+}
+.image-size-badge-storage .color-mode-count {
+  background: #16a34a;
+  color: #ffffff;
+}
+.image-size-badge-storage:hover,
+.image-size-badge-storage.active {
+  background: rgba(22, 163, 74, 0.24);
+  border-color: #22c55e;
+  color: #bbf7d0;
+}
+body.light-mode .image-size-badge-storage {
+  background: rgba(22, 163, 74, 0.10);
+  border-color: #16a34a;
+  color: #15803d;
+}
+body.light-mode .image-size-badge-storage .image-size-paper {
+  color: #15803d;
+}
+body.light-mode .image-size-badge-storage:hover,
+body.light-mode .image-size-badge-storage.active {
+  background: rgba(22, 163, 74, 0.18);
+  border-color: #15803d;
+  color: #166534;
 }
 .image-size-badge-tooltip {
   min-width: 260px;
@@ -2003,6 +2035,9 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
   font-size: var(--font-size-sm);
   color: var(--color-text-primary);
   margin-bottom: var(--spacing-xs);
+}
+.tiff-rename-checkbox {
+  margin-top: var(--spacing-lg);
 }
 .tiff-options .radio-group {
   margin-bottom: var(--spacing-sm);
@@ -3951,7 +3986,7 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
 /* ==================== 未保存確認ダイアログ ==================== */
 
 .unsaved-dialog {
-  max-width: 400px;
+  max-width: 520px;
   text-align: center;
 }
 
@@ -3967,7 +4002,15 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
 
 .unsaved-dialog .modal-footer {
   justify-content: center;
-  gap: var(--spacing-sm);
+  gap: var(--spacing-md);
+  flex-wrap: nowrap;
+}
+
+.unsaved-dialog .modal-footer .btn-primary,
+.unsaved-dialog .modal-footer .btn-secondary,
+.unsaved-dialog .modal-footer .btn-danger {
+  min-width: 140px;
+  white-space: nowrap;
 }
 
 /* ==================== 欠落ファイルダイアログ ==================== */

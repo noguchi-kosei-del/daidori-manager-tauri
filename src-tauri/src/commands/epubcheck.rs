@@ -66,9 +66,9 @@ impl EpubCheckRunner {
 
     fn run(&self, epub_path: &str) -> io::Result<Output> {
         match self {
-            EpubCheckRunner::Command(path) => Command::new(path)
-                .args(["--json", "-", epub_path])
-                .output(),
+            EpubCheckRunner::Command(path) => {
+                Command::new(path).args(["--json", "-", epub_path]).output()
+            }
             EpubCheckRunner::Jar {
                 java_path,
                 jar_path,
@@ -104,7 +104,10 @@ pub async fn validate_epub_with_epubcheck(
         .map_err(|e| format!("Task failed: {}", e))?
 }
 
-fn validate_epub_sync(app_handle: &AppHandle, epub_path: String) -> Result<EpubCheckResult, String> {
+fn validate_epub_sync(
+    app_handle: &AppHandle,
+    epub_path: String,
+) -> Result<EpubCheckResult, String> {
     let started = Instant::now();
     let mut setup_errors = Vec::new();
     let managed_tools = match ensure_managed_tools(app_handle) {
@@ -154,8 +157,11 @@ fn ensure_managed_tools(app_handle: &AppHandle) -> Result<ManagedTools, String> 
         .join("epubcheck")
         .join(format!("epubcheck-{}", EPUBCHECK_VERSION));
 
-    let java_path = find_java_executable(&java_dir)
-        .unwrap_or_else(|| java_dir.join("bin").join(if cfg!(windows) { "java.exe" } else { "java" }));
+    let java_path = find_java_executable(&java_dir).unwrap_or_else(|| {
+        java_dir
+            .join("bin")
+            .join(if cfg!(windows) { "java.exe" } else { "java" })
+    });
     let jar_path = epubcheck_dir.join("epubcheck.jar");
 
     if !java_path.exists() {
@@ -167,10 +173,12 @@ fn ensure_managed_tools(app_handle: &AppHandle) -> Result<ManagedTools, String> 
             .map_err(|e| format!("EPUBCheckの準備に失敗しました: {}", e))?;
     }
 
-    let java_path = find_java_executable(&java_dir)
-        .ok_or_else(|| "Javaランタイムを展開しましたが java.exe が見つかりませんでした".to_string())?;
-    let jar_path = find_epubcheck_jar(&epubcheck_dir)
-        .ok_or_else(|| "EPUBCheckを展開しましたが epubcheck.jar が見つかりませんでした".to_string())?;
+    let java_path = find_java_executable(&java_dir).ok_or_else(|| {
+        "Javaランタイムを展開しましたが java.exe が見つかりませんでした".to_string()
+    })?;
+    let jar_path = find_epubcheck_jar(&epubcheck_dir).ok_or_else(|| {
+        "EPUBCheckを展開しましたが epubcheck.jar が見つかりませんでした".to_string()
+    })?;
 
     Ok(ManagedTools {
         java_path,
@@ -178,7 +186,11 @@ fn ensure_managed_tools(app_handle: &AppHandle) -> Result<ManagedTools, String> 
     })
 }
 
-fn download_and_extract_zip(url: &str, destination: &Path, strip_single_root: bool) -> Result<(), String> {
+fn download_and_extract_zip(
+    url: &str,
+    destination: &Path,
+    strip_single_root: bool,
+) -> Result<(), String> {
     let temp_destination = destination.with_extension("download");
     if temp_destination.exists() {
         fs::remove_dir_all(&temp_destination).map_err(|e| e.to_string())?;
@@ -202,7 +214,11 @@ fn download_and_extract_zip(url: &str, destination: &Path, strip_single_root: bo
     Ok(())
 }
 
-fn extract_zip_bytes(bytes: &[u8], destination: &Path, strip_single_root: bool) -> Result<(), String> {
+fn extract_zip_bytes(
+    bytes: &[u8],
+    destination: &Path,
+    strip_single_root: bool,
+) -> Result<(), String> {
     let reader = Cursor::new(bytes);
     let mut archive = ZipArchive::new(reader).map_err(|e| e.to_string())?;
     let root_prefix = if strip_single_root {
@@ -239,7 +255,9 @@ fn extract_zip_bytes(bytes: &[u8], destination: &Path, strip_single_root: bool) 
     Ok(())
 }
 
-fn find_single_zip_root(archive: &mut ZipArchive<Cursor<&[u8]>>) -> Result<Option<PathBuf>, String> {
+fn find_single_zip_root(
+    archive: &mut ZipArchive<Cursor<&[u8]>>,
+) -> Result<Option<PathBuf>, String> {
     let mut root: Option<PathBuf> = None;
     for index in 0..archive.len() {
         let file = archive.by_index(index).map_err(|e| e.to_string())?;
@@ -319,7 +337,9 @@ fn find_java_executable(root: &Path) -> Option<PathBuf> {
 }
 
 fn find_epubcheck_jar(root: &Path) -> Option<PathBuf> {
-    collect_file_by_name(root, "epubcheck.jar", 5).into_iter().next()
+    collect_file_by_name(root, "epubcheck.jar", 5)
+        .into_iter()
+        .next()
 }
 
 fn find_legacy_resource_epubcheck_jars(app_handle: &AppHandle) -> Vec<PathBuf> {
@@ -378,10 +398,7 @@ fn unavailable_result(checked_path: String, elapsed_ms: u128, details: String) -
         "EPUBCheckの準備または実行ができませんでした。ネットワーク接続を確認してから再度お試しください。"
             .to_string()
     } else {
-        format!(
-            "EPUBCheckの準備または実行ができませんでした。\n{}",
-            details
-        )
+        format!("EPUBCheckの準備または実行ができませんでした。\n{}", details)
     };
 
     EpubCheckResult {
@@ -431,8 +448,8 @@ fn parse_epubcheck_output(
         stdout.clone()
     };
 
-    let parsed = serde_json::from_str::<Value>(&stdout)
-        .or_else(|_| serde_json::from_str::<Value>(&stderr));
+    let parsed =
+        serde_json::from_str::<Value>(&stdout).or_else(|_| serde_json::from_str::<Value>(&stderr));
 
     let Ok(report) = parsed else {
         let message = stderr
@@ -455,7 +472,10 @@ fn parse_epubcheck_output(
             info_count: 0,
             messages: Vec::new(),
             raw_output: Some(raw_output),
-            error: Some(format!("EPUBCheckの結果を解析できませんでした。\n{}", message)),
+            error: Some(format!(
+                "EPUBCheckの結果を解析できませんでした。\n{}",
+                message
+            )),
         };
     };
 
@@ -483,8 +503,9 @@ fn parse_epubcheck_output(
         .filter(|message| matches!(message.severity.as_str(), "INFO" | "HINT"))
         .count();
 
-    let checker_version =
-        checker.and_then(|checker| get_string(checker, &["version", "epubcheckVersion", "checkerVersion"]));
+    let checker_version = checker.and_then(|checker| {
+        get_string(checker, &["version", "epubcheckVersion", "checkerVersion"])
+    });
 
     EpubCheckResult {
         available: true,
@@ -508,8 +529,8 @@ fn parse_message(value: &Value) -> EpubCheckMessage {
         .map(|severity| severity.to_uppercase())
         .unwrap_or_else(|| "INFO".to_string());
     let code = get_string(value, &["ID", "id", "code", "messageId", "subMessage"]);
-    let message = get_string(value, &["message", "text", "description"])
-        .unwrap_or_else(|| value.to_string());
+    let message =
+        get_string(value, &["message", "text", "description"]).unwrap_or_else(|| value.to_string());
 
     let location = value
         .get("locations")

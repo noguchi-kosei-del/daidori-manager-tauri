@@ -317,8 +317,7 @@ fn load_psd_with_layers(path: &Path) -> Result<DynamicImage, String> {
     let height = psd.height();
     let rgba = psd.rgba();
 
-    let img: RgbaImage =
-        ImageBuffer::from_raw(width, height, rgba).ok_or("PSD画像の変換に失敗")?;
+    let img: RgbaImage = ImageBuffer::from_raw(width, height, rgba).ok_or("PSD画像の変換に失敗")?;
 
     Ok(DynamicImage::ImageRgba8(img))
 }

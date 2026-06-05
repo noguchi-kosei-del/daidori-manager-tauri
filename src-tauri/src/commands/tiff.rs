@@ -1,16 +1,12 @@
+use super::photoshop::{
+    copy_script_with_bom, create_unique_output_dir, find_photoshop_path, find_script_path,
+    get_script_run_path, write_settings_json,
+};
+use crate::types::{TiffConvertConfig, TiffConvertResponse, TiffResultsWrapper};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use tauri::Manager;
-use crate::types::{TiffConvertConfig, TiffConvertResponse, TiffResultsWrapper};
-use super::photoshop::{
-    find_photoshop_path,
-    find_script_path,
-    create_unique_output_dir,
-    copy_script_with_bom,
-    get_script_run_path,
-    write_settings_json,
-};
 
 /// Photoshopがインストールされているかチェック
 #[tauri::command]
@@ -26,8 +22,9 @@ pub async fn run_photoshop_tiff_convert(
     output_dir: String,
     jpg_output_dir: Option<String>,
 ) -> Result<TiffConvertResponse, String> {
-    let ps_path = find_photoshop_path()
-        .ok_or_else(|| "Photoshopが見つかりません。Adobe Photoshopをインストールしてください。".to_string())?;
+    let ps_path = find_photoshop_path().ok_or_else(|| {
+        "Photoshopが見つかりません。Adobe Photoshopをインストールしてください。".to_string()
+    })?;
 
     // スクリプトパスを取得
     let script_path_str = find_script_path(&app_handle, "tiff_convert.jsx", "TIFF Convert")?;
@@ -76,10 +73,13 @@ pub async fn run_photoshop_tiff_convert(
 
     for file_config in &mut config_with_output.files {
         // outputPathを書き換え
-        file_config.output_path = file_config.output_path.replace(&output_dir_fwd, &final_dir_fwd);
+        file_config.output_path = file_config
+            .output_path
+            .replace(&output_dir_fwd, &final_dir_fwd);
 
         // jpgOutputPathも書き換え
-        if let (Some(ref orig_jpg), Some(ref final_jpg)) = (&jpg_output_dir, &final_jpg_output_dir) {
+        if let (Some(ref orig_jpg), Some(ref final_jpg)) = (&jpg_output_dir, &final_jpg_output_dir)
+        {
             if let Some(ref mut jpg_path) = file_config.jpg_output_path {
                 let orig_fwd = orig_jpg.replace('\\', "/");
                 let final_fwd = final_jpg.replace('\\', "/");
@@ -109,16 +109,18 @@ pub async fn run_photoshop_tiff_convert(
     // 結果をポーリング（ハートビートベース）
     let file_count = config_with_output.files.len().max(1);
     let poll_interval_ms: u64 = 500;
-    let initial_timeout_secs: u64 = 600;  // 10分（PS起動 + 最初のファイル）
-    let final_timeout_secs: u64 = 120;    // 2分（最後のファイル後）
+    let initial_timeout_secs: u64 = 600; // 10分（PS起動 + 最初のファイル）
+    let final_timeout_secs: u64 = 120; // 2分（最後のファイル後）
     let progress_path = temp_dir.join("daidori_tiff_progress.txt");
     let _ = fs::remove_file(&progress_path);
     let mut last_progress = String::new();
     let mut polls_since_progress: u64 = 0;
     let mut all_done = false;
 
-    eprintln!("TIFF Convert - Heartbeat: {}s initial, no timeout during processing, {} files",
-        initial_timeout_secs, file_count);
+    eprintln!(
+        "TIFF Convert - Heartbeat: {}s initial, no timeout during processing, {} files",
+        initial_timeout_secs, file_count
+    );
 
     loop {
         // 結果ファイルをチェック
@@ -155,12 +157,15 @@ pub async fn run_photoshop_tiff_convert(
         } else if all_done {
             (final_timeout_secs * 1000) / poll_interval_ms
         } else {
-            (1800 * 1000) / poll_interval_ms  // 処理中は最大30分
+            (1800 * 1000) / poll_interval_ms // 処理中は最大30分
         };
 
         if polls_since_progress >= timeout_polls {
             if last_progress.is_empty() {
-                eprintln!("TIFF Convert timed out (Photoshopからの応答なし: {}秒)", initial_timeout_secs);
+                eprintln!(
+                    "TIFF Convert timed out (Photoshopからの応答なし: {}秒)",
+                    initial_timeout_secs
+                );
             } else {
                 eprintln!("TIFF Convert timed out (結果ファイルが書き込まれませんでした)");
             }
@@ -170,9 +175,15 @@ pub async fn run_photoshop_tiff_convert(
         tokio::time::sleep(std::time::Duration::from_millis(poll_interval_ms)).await;
 
         if polls_since_progress > 0 && polls_since_progress.is_multiple_of(60) {
-            eprintln!("Still waiting for Photoshop TIFF convert... ({}s since last progress, {})",
+            eprintln!(
+                "Still waiting for Photoshop TIFF convert... ({}s since last progress, {})",
                 polls_since_progress * poll_interval_ms / 1000,
-                if last_progress.is_empty() { "waiting for start" } else { &last_progress });
+                if last_progress.is_empty() {
+                    "waiting for start"
+                } else {
+                    &last_progress
+                }
+            );
         }
     }
 
@@ -180,8 +191,8 @@ pub async fn run_photoshop_tiff_convert(
 
     // 結果を読み取り
     if output_path.exists() {
-        let results_json = fs::read_to_string(&output_path)
-            .map_err(|e| format!("結果の読み取りに失敗: {}", e))?;
+        let results_json =
+            fs::read_to_string(&output_path).map_err(|e| format!("結果の読み取りに失敗: {}", e))?;
 
         let wrapper: TiffResultsWrapper = serde_json::from_str(&results_json)
             .map_err(|e| format!("結果のパースに失敗: {}. JSON: {}", e, results_json))?;
@@ -206,6 +217,9 @@ pub async fn run_photoshop_tiff_convert(
         if let Some(window) = app_handle.get_webview_window("main") {
             let _ = window.set_focus();
         }
-        Err("Photoshopが出力ファイルを生成しませんでした。スクリプトが失敗した可能性があります。".to_string())
+        Err(
+            "Photoshopが出力ファイルを生成しませんでした。スクリプトが失敗した可能性があります。"
+                .to_string(),
+        )
     }
 }

@@ -77,8 +77,8 @@ fn resize_dims(w: u32, h: u32, options: &ProcessOptions) -> Option<(u32, u32)> {
             }
         }
         "fixed" => {
-            let scale = (TARGET_RESIZE_WIDTH as f32 / w as f32)
-                .min(TARGET_RESIZE_HEIGHT as f32 / h as f32);
+            let scale =
+                (TARGET_RESIZE_WIDTH as f32 / w as f32).min(TARGET_RESIZE_HEIGHT as f32 / h as f32);
             let nw = (w as f32 * scale).round() as u32;
             let nh = (h as f32 * scale).round() as u32;
             if nw == 0 || nh == 0 {
@@ -108,8 +108,7 @@ pub fn fit_within_pdf_bbox(w: u32, h: u32) -> (u32, u32) {
     if w == 0 || h == 0 {
         return (w, h);
     }
-    let scale =
-        (TARGET_RESIZE_WIDTH as f32 / w as f32).min(TARGET_RESIZE_HEIGHT as f32 / h as f32);
+    let scale = (TARGET_RESIZE_WIDTH as f32 / w as f32).min(TARGET_RESIZE_HEIGHT as f32 / h as f32);
     if scale >= 1.0 {
         // 既に枠内なら拡大しない（解像度を上げてもファイルが大きくなるだけ）
         return (w, h);

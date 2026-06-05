@@ -58,7 +58,7 @@ pub struct ProjectFile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileValidationResult {
     pub page_id: String,
-    pub status: String,  // "found", "missing", "moved", "modified"
+    pub status: String, // "found", "missing", "moved", "modified"
     pub original_path: String,
     pub resolved_path: Option<String>,
     pub suggested_path: Option<String>,
@@ -77,7 +77,7 @@ pub struct PageCheckInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageCheckResult {
     pub page_id: String,
-    pub status: String,  // "ok", "missing", "modified", "meta_error"
+    pub status: String, // "ok", "missing", "modified", "meta_error"
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub color_mode: Option<String>, // "RGB" | "Grayscale" | "CMYK" | "Bitmap" | "Indexed" | "Multichannel" | "Duotone" | "Lab"

@@ -141,6 +141,43 @@ function resolveTiffCropBounds(
   return { ...regionToMargins(region), isMargin: true };
 }
 
+function sanitizeOutputNamePart(name: string): string {
+  return (name.trim() || 'chapter').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').replace(/[. ]+$/g, '');
+}
+
+function isTiffFileType(fileType?: string): boolean {
+  return fileType === 'tif' || fileType === 'tiff';
+}
+
+function removeTiffExtension(fileName: string): string {
+  return fileName.replace(/\.tiff?$/i, '');
+}
+
+function makeUniqueFileName(fileName: string, usedNames: Set<string>): string {
+  const dotIndex = fileName.lastIndexOf('.');
+  const stem = dotIndex >= 0 ? fileName.slice(0, dotIndex) : fileName;
+  const ext = dotIndex >= 0 ? fileName.slice(dotIndex) : '';
+  let candidate = fileName;
+  let counter = 2;
+
+  while (usedNames.has(candidate.toLowerCase())) {
+    candidate = `${stem}_${counter}${ext}`;
+    counter += 1;
+  }
+
+  usedNames.add(candidate.toLowerCase());
+  return candidate;
+}
+
+function buildChapterTiffFileName(
+  chapterName: string,
+  rawBaseName: string,
+  usedNames: Set<string>
+): string {
+  const chapterPrefix = sanitizeOutputNamePart(chapterName);
+  return makeUniqueFileName(`${chapterPrefix}_${rawBaseName}.tif`, usedNames);
+}
+
 export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [bleedEditorState, setBleedEditorState] = useState<BleedEditorState>(INITIAL_BLEED_STATE);
@@ -149,21 +186,32 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
   const tachimiCompleteRef = useRef<((bleedSettings: BleedSettings | undefined) => void) | null>(null);
 
   const handleExport = useCallback(async (options: ExportOptions) => {
-    const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameMode, startNumber, digits, prefix, perChapterSettings, bleedSettings } = options;
+    const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, renameMode, startNumber, digits, prefix, perChapterSettings, bleedSettings } = options;
 
     // TIFF変換モードの場合
     if (convertToTiff) {
+      if (!renameTiffAndSave) {
+        setExportResultDialog({
+          show: true,
+          title: 'TIFF変換エラー',
+          message: '「リネームして保存」にチェックを入れてください。',
+          isError: true,
+        });
+        return;
+      }
+
       // PSD・JPEGファイルを抽出（Photoshopで開いてTIFFに変換）
       // EPUB_maker連携用にページ情報も保持
-      const convertibleTypes = ['psd', 'jpg'];
+      const convertibleTypes = ['psd', 'jpg', 'jpeg'];
       const convertiblePages: { path: string; outputName: string; pageType: string; chapterType: string; chapterId: string; chapterName?: string; label?: string }[] = [];
+      const usedTiffOutputNames = new Set<string>();
 
       if (renameMode === 'unified') {
         allPages.forEach((item, index) => {
           if (item.page.fileType && convertibleTypes.includes(item.page.fileType) && item.page.filePath) {
             convertiblePages.push({
               path: item.page.filePath,
-              outputName: `${prefix}${String(startNumber + index).padStart(digits, '0')}.tif`,
+              outputName: makeUniqueFileName(`${prefix}${String(startNumber + index).padStart(digits, '0')}.tif`, usedTiffOutputNames),
               pageType: item.page.pageType,
               chapterType: item.chapter.type,
               chapterId: item.chapter.id,
@@ -180,7 +228,11 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
             if (page.fileType && convertibleTypes.includes(page.fileType) && page.filePath) {
               convertiblePages.push({
                 path: page.filePath,
-                outputName: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}.tif`,
+                outputName: buildChapterTiffFileName(
+                  chapter.name,
+                  `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}`,
+                  usedTiffOutputNames
+                ),
                 pageType: page.pageType,
                 chapterType: chapter.type,
                 chapterId: chapter.id,
@@ -244,9 +296,13 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
         if (renameMode === 'unified') {
           allPages.forEach((item, index) => {
             if (!item.page.fileType || !convertibleTypes.includes(item.page.fileType)) {
+              const outputFileName = makeUniqueFileName(
+                `${prefix}${String(startNumber + index).padStart(digits, '0')}.tif`,
+                usedTiffOutputNames
+              );
               nonConvertiblePages.push({
                 source_path: item.page.filePath || null,
-                output_name: `${prefix}${String(startNumber + index).padStart(digits, '0')}`,
+                output_name: removeTiffExtension(outputFileName),
                 page_type: item.page.pageType,
               });
             }
@@ -257,9 +313,14 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
             if (settings.enabled === false) continue;
             chapter.pages.forEach((page, pageIndex) => {
               if (!page.fileType || !convertibleTypes.includes(page.fileType)) {
+                const outputFileName = buildChapterTiffFileName(
+                  chapter.name,
+                  `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}`,
+                  usedTiffOutputNames
+                );
                 nonConvertiblePages.push({
                   source_path: page.filePath || null,
-                  output_name: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}`,
+                  output_name: removeTiffExtension(outputFileName),
                   page_type: page.pageType,
                 });
               }
@@ -453,6 +514,12 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
     // 通常のエクスポート処理
     // エクスポートページを生成（EPUB_maker連携用にchapterName, labelも保持）
     let exportPages: { source_path: string | null; output_name: string; page_type: string; subfolder?: string; chapter_name?: string; label?: string; file_type?: string }[] = [];
+    const filePages = allPages.filter((item) => item.page.filePath && item.page.fileType);
+    const shouldFlattenTiffCopy =
+      renameMode === 'perChapter' &&
+      filePages.length > 0 &&
+      filePages.every((item) => isTiffFileType(item.page.fileType));
+    const usedFlatTiffCopyNames = new Set<string>();
 
     if (renameMode === 'unified') {
       // 一括設定: 全ページを通し番号でリネーム
@@ -471,11 +538,15 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
         // 無効なチャプターはスキップ
         if (settings.enabled === false) continue;
         chapter.pages.forEach((page, pageIndex) => {
+          const rawOutputName = `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}`;
+          const outputName = shouldFlattenTiffCopy
+            ? removeTiffExtension(buildChapterTiffFileName(chapter.name, rawOutputName, usedFlatTiffCopyNames))
+            : rawOutputName;
           exportPages.push({
             source_path: page.filePath || null,
-            output_name: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}`,
+            output_name: outputName,
             page_type: page.pageType,
-            subfolder: chapter.name, // チャプター名をサブフォルダとして使用
+            subfolder: shouldFlattenTiffCopy ? undefined : chapter.name, // チャプター名をサブフォルダとして使用
             chapter_name: chapter.name,
             label: page.label,
             file_type: page.fileType,

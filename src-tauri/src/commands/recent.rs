@@ -1,6 +1,6 @@
+use crate::types::RecentFile;
 use std::fs;
 use std::path::{Path, PathBuf};
-use crate::types::RecentFile;
 
 // 設定ディレクトリを取得
 fn get_config_path() -> Result<PathBuf, String> {
@@ -41,7 +41,8 @@ pub async fn add_recent_file(path: String, name: String) -> Result<(), String> {
     let recent_path = config_path.join("recent_files.json");
 
     let mut recent = if recent_path.exists() {
-        let content = fs::read_to_string(&recent_path).map_err(|e| format!("読み込みエラー: {}", e))?;
+        let content =
+            fs::read_to_string(&recent_path).map_err(|e| format!("読み込みエラー: {}", e))?;
         serde_json::from_str::<Vec<RecentFile>>(&content).unwrap_or_else(|e| {
             eprintln!("Warning: recent_files.json parse error: {}", e);
             Vec::new()
@@ -54,11 +55,14 @@ pub async fn add_recent_file(path: String, name: String) -> Result<(), String> {
     recent.retain(|r| r.path != path);
 
     // 先頭に追加
-    recent.insert(0, RecentFile {
-        path: path.clone(),
-        name,
-        opened_at: chrono::Utc::now().to_rfc3339(),
-    });
+    recent.insert(
+        0,
+        RecentFile {
+            path: path.clone(),
+            name,
+            opened_at: chrono::Utc::now().to_rfc3339(),
+        },
+    );
 
     // 最大10件まで保持
     recent.truncate(10);
@@ -67,7 +71,8 @@ pub async fn add_recent_file(path: String, name: String) -> Result<(), String> {
     fs::create_dir_all(&config_path).map_err(|e| format!("ディレクトリ作成エラー: {}", e))?;
 
     // 保存
-    let json = serde_json::to_string_pretty(&recent).map_err(|e| format!("JSONシリアライズエラー: {}", e))?;
+    let json = serde_json::to_string_pretty(&recent)
+        .map_err(|e| format!("JSONシリアライズエラー: {}", e))?;
     fs::write(&recent_path, json).map_err(|e| format!("ファイル書き込みエラー: {}", e))?;
 
     Ok(())
