@@ -14,7 +14,8 @@ interface UseKeyboardShortcutsOptions {
   selectedPageIds: string[];
   chapters: Chapter[];
   allPages: PageWithContext[];
-  previewMode: 'grid' | 'spread' | 'epub';
+  // 見開き／EPUBプレビューなど、閲覧モード・左右キーナビが有効なビューか
+  allowViewer: boolean;
 
   // アクション
   removePage: (chapterId: string, pageId: string) => void;
@@ -39,7 +40,7 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
     selectedPageIds,
     chapters,
     allPages,
-    previewMode,
+    allowViewer,
     removePage,
     removeSelectedPages,
     selectChapter,
@@ -70,10 +71,10 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
         return;
       }
 
-      // F1: 閲覧モード切替（見開き・EPUB表示時）
+      // F1: 閲覧モード切替（見開き・EPUBプレビュー時）
       if (e.key === 'F1') {
         e.preventDefault();
-        if (previewMode === 'spread' || previewMode === 'epub') {
+        if (allowViewer) {
           setIsViewerMode(prev => !prev);
         }
         return;
@@ -127,8 +128,7 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
 
       // 矢印キーでナビゲーション（見開き・EPUBモードでは左右キーはSpreadViewerが処理）
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-        if ((previewMode === 'spread' || previewMode === 'epub') &&
-            (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        if (allowViewer && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
           return;
         }
         e.preventDefault();
@@ -179,7 +179,7 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
     selectedPageIds,
     chapters,
     allPages,
-    previewMode,
+    allowViewer,
     removePage,
     removeSelectedPages,
     selectChapter,

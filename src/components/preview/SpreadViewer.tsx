@@ -5,6 +5,7 @@ import { queueThumbnail } from '../../hooks';
 import { CloseIcon, NoPageIcon, AlertTriangleIcon, ReplaceIcon } from '../../icons';
 import { useStore } from '../../store';
 import { getValidationMessage } from '../../utils/validationMessage';
+import { ViewerOverlay } from './ViewerOverlay';
 
 // 閉じるボタン自動非表示の遅延時間（ミリ秒）
 const CLOSE_BUTTON_HIDE_DELAY = 3000;
@@ -25,6 +26,9 @@ export function SpreadViewer({
   zoom = 100,
   onZoomChange,
   bindingDirection = 'rtl',
+  onBindingChange,
+  onEnterViewerMode,
+  onTogglePageBar,
 }: {
   pages: { page: Page; chapter: Chapter; globalIndex: number }[];
   selectedPageId?: string | null;
@@ -37,6 +41,9 @@ export function SpreadViewer({
   zoom?: number;
   onZoomChange?: (zoom: number) => void;
   bindingDirection?: 'rtl' | 'ltr';
+  onBindingChange?: (d: 'rtl' | 'ltr') => void;
+  onEnterViewerMode?: () => void;
+  onTogglePageBar?: () => void;
 }) {
   const isRTL = bindingDirection === 'rtl';
   const trackRef = useRef<HTMLDivElement>(null);
@@ -96,6 +103,15 @@ export function SpreadViewer({
       setCurrentSpreadIndex(totalSpreads - 1);
     }
   }, [totalSpreads, currentSpreadIndex]);
+
+  // 外部からの選択（整えるバーのファイル名ジャンプ等）に追従して該当スプレッドへ移動
+  useEffect(() => {
+    if (!selectedPageId) return;
+    const idx = spreads.findIndex(
+      (s) => s.left?.page.id === selectedPageId || s.right?.page.id === selectedPageId
+    );
+    if (idx >= 0) setCurrentSpreadIndex(idx);
+  }, [selectedPageId, spreads]);
 
   const currentSpread = spreads[currentSpreadIndex];
 
@@ -492,7 +508,21 @@ export function SpreadViewer({
   }
 
   return (
-    <div className="spread-viewer-container">
+    <div className="spread-viewer-container viewer-canvas">
+      {/* ビューア操作オーバーレイ（ホバーで出現） */}
+      {onBindingChange && onZoomChange && onEnterViewerMode && onTogglePageBar && (
+        <ViewerOverlay
+          bindingDirection={bindingDirection}
+          onBindingChange={onBindingChange}
+          zoom={zoom}
+          onZoomChange={onZoomChange}
+          onEnterViewerMode={onEnterViewerMode}
+          canEnterViewerMode={pages.length > 0}
+          isPageBarVisible={isPageBarVisible}
+          onTogglePageBar={onTogglePageBar}
+          isViewerMode={isViewerMode}
+        />
+      )}
       {/* 現在のスプレッドのみ表示 */}
       <div className="spread-viewer-current">
         {currentSpread && (

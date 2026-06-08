@@ -17,7 +17,6 @@ import {
   EpubPageImageProfileOverride,
   EpubSplitSettings,
   EPUB_IMAGE_COLOR_POLICY_OPTIONS,
-  EPUB_FORMAT_LABELS,
   EPUB_FORMAT_VIEWPORTS,
   HYBRID_CSS_PROFILE_LABELS,
   EPUB_IMAGE_COLOR_POLICY_LABELS,
@@ -46,6 +45,13 @@ const PUBLISHER_OPTIONS = [
   { name: 'CLLENN', fileAs: 'シレン' },
   { name: 'DEEPER-ZERO', fileAs: 'ディーパーゼロ' },
 ];
+
+// 出力形式の用途ベースの言い換え（専門名は括弧で補足）
+const FORMAT_FRIENDLY: Record<EpubFormat, string> = {
+  kadokawa: '電子書店向け（標準・電書協準拠）',
+  hybrid: '幅広い端末対応（Hybrid）',
+  oebps: 'シンプル（OEBPS）',
+};
 
 export function EpubMetadataModal({
   isOpen,
@@ -372,6 +378,13 @@ export function EpubMetadataModal({
     : null;
   const validationError = validate();
   const canGenerate = !isGenerating && totalPages > 0 && !validationError;
+
+  // 未入力の必須項目（固定生成バーのチェックリスト用）
+  const missingRequired: string[] = [];
+  if (!title.trim()) missingRequired.push('タイトル');
+  if (authors.length === 0 || !authors[0].name.trim()) missingRequired.push('著者名');
+  if (!outputPath) missingRequired.push('出力先');
+  if (splitEnabled && splitRanges.length === 0) missingRequired.push('分割範囲');
 
   const splitAssigned = useMemo(() => {
     const assigned = new Set<number>();
@@ -822,6 +835,11 @@ export function EpubMetadataModal({
 
           {/* 右ペイン: メタデータフォーム */}
           <div className="modal-body epub-modal-body">
+          {/* 生成サマリ */}
+          <div className="epub-summary-banner">
+            <span className="output-summary-chip">{chapters.length}チャプター / {totalPages}ページ</span>
+            <span className="output-summary-chip">{FORMAT_FRIENDLY[outputFormat]}</span>
+          </div>
           {/* 出力設定 */}
           <div className="form-section">
             <h3 className="section-heading">出力設定</h3>
@@ -831,13 +849,15 @@ export function EpubMetadataModal({
                 value={outputFormat}
                 onChange={(e) => handleFormatChange(e.target.value as EpubFormat)}
               >
-                {(Object.keys(EPUB_FORMAT_LABELS) as EpubFormat[]).map((fmt) => (
+                {(Object.keys(FORMAT_FRIENDLY) as EpubFormat[]).map((fmt) => (
                   <option key={fmt} value={fmt}>
-                    {EPUB_FORMAT_LABELS[fmt]}
+                    {FORMAT_FRIENDLY[fmt]}
                   </option>
                 ))}
               </select>
             </div>
+            <details className="epub-advanced">
+              <summary>色・互換の詳細（ふだんは変更不要）</summary>
             {outputFormat === 'hybrid' && (
               <>
                 <div className="form-group">
@@ -902,6 +922,7 @@ export function EpubMetadataModal({
                 </select>
               </div>
             )}
+            </details>
             <div className="form-group">
               <label>出力先</label>
               <div className="input-with-button">
@@ -928,7 +949,7 @@ export function EpubMetadataModal({
                   checked={splitEnabled}
                   onChange={(e) => setSplitEnabled(e.target.checked)}
                 />
-                EPUB_maker方式で分割して出力
+                話ごとに分けて出力
               </label>
             </div>
             {splitEnabled && (
@@ -1131,8 +1152,8 @@ export function EpubMetadataModal({
           </div>
 
           {/* レイアウト設定 */}
-          <div className="form-section">
-            <h3>レイアウト設定</h3>
+          <details className="form-section epub-advanced">
+            <summary>レイアウト（綴じ方向・表示サイズ／ふだんは変更不要）</summary>
             <div className="form-row">
               <div className="form-group">
                 <label>ページ綴じ方向</label>
@@ -1189,13 +1210,13 @@ export function EpubMetadataModal({
                 />
               </div>
             </div>
-          </div>
+          </details>
 
           {/* 識別子 */}
-          <div className="form-section">
-            <h3 className="section-heading">識別子</h3>
+          <details className="form-section epub-advanced">
+            <summary>識別子（UUID・通常そのまま）</summary>
             <div className="form-group">
-              <label>UUID</label>
+              <label>本の識別番号（UUID）</label>
               <div className="input-with-button">
                 <input
                   type="text"
@@ -1214,29 +1235,10 @@ export function EpubMetadataModal({
                 電子書店での識別に使用されます。同じ本の更新版では同じUUIDを使用してください。
               </div>
             </div>
-          </div>
+          </details>
 
-          {/* プレビュー情報 */}
-          <div className="form-section epub-preview-info">
-            <h3>生成情報</h3>
-            <div className="epub-stats">
-              <div className="epub-stat">
-                <span className="stat-label">チャプター数</span>
-                <span className="stat-value">{chapters.length}</span>
-              </div>
-              <div className="epub-stat">
-                <span className="stat-label">総ページ数</span>
-                <span className="stat-value">{totalPages}</span>
-              </div>
-              <div className="epub-stat">
-                <span className="stat-label">形式</span>
-                <span className="stat-value">{EPUB_FORMAT_LABELS[outputFormat]}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="form-section epub-license-info">
-            <h3>使用ツール・ライセンス</h3>
+          <details className="form-section epub-license-info epub-advanced">
+            <summary>ライセンス情報</summary>
             <p>
               EPUB生成後の検証には、W3C/DAISY Consortium が管理する EPUBCheck を使用します。
             </p>
@@ -1256,13 +1258,18 @@ export function EpubMetadataModal({
                 </p>
               </div>
             </details>
-          </div>
+          </details>
           </div>
         </div>
 
-        <div className="modal-footer">
+        <div className="modal-footer epub-generate-footer">
+          {missingRequired.length > 0 && (
+            <div className="epub-missing-required">
+              未入力: {missingRequired.join(' / ')}
+            </div>
+          )}
           <button
-            className="btn-primary btn-small"
+            className="btn-primary epub-generate-btn"
             onClick={handleGenerate}
             disabled={!canGenerate}
           >

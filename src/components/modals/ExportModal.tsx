@@ -3,7 +3,7 @@ import { save } from '@tauri-apps/plugin-dialog';
 import { desktopDir, join } from '@tauri-apps/api/path';
 import { invoke } from '@tauri-apps/api/core';
 import { Chapter, CHAPTER_TYPE_LABELS, CHAPTER_TYPE_COLORS } from '../../types';
-import { ExportIcon } from '../../icons';
+import { ExportIcon, FolderIcon, CopyIcon, PencilIcon, ReplaceIcon } from '../../icons';
 import { useModalAnimation } from '../../hooks';
 
 // チャプターごとのリネーム設定
@@ -112,18 +112,22 @@ export function ExportModal({
   onClose,
   onExport,
   chapters,
+  embedded = false,
 }: {
   isOpen: boolean;
   onClose: () => void;
   onExport: (options: ExportOptions) => void;
   chapters: Chapter[];
+  embedded?: boolean;
 }) {
   const [outputPath, setOutputPath] = useState('');
   const [exportMode, setExportMode] = useState<'copy' | 'move'>('copy');
-  const [convertToJpg, setConvertToJpg] = useState(false);
+  // 出力形式: そのままコピー(変換なし) / JPEG変換 / TIFF変換 の3択
+  const [outputFormat, setOutputFormat] = useState<'copy' | 'jpg' | 'tiff'>('copy');
+  const convertToJpg = outputFormat === 'jpg';
+  const convertToTiff = outputFormat === 'tiff';
+  const renameTiffAndSave = true; // リネーム設定は常時適用（旧「リネームして保存」チェックは廃止）
   const [jpgQuality, setJpgQuality] = useState(95);
-  const [convertToTiff, setConvertToTiff] = useState(false);
-  const [renameTiffAndSave, setRenameTiffAndSave] = useState(false);
   const [resizeMode, setResizeMode] = useState<ResizeMode>('none');
   const [resizePercent, setResizePercent] = useState(50);
   const [photoshopInstalled, setPhotoshopInstalled] = useState<boolean | null>(null);
@@ -209,6 +213,11 @@ export function ExportModal({
     }
   }, [chapters]);
 
+  // 変換系（JPEG/TIFF）では原本のコピー/移動は成立しないため、コピー固定に戻す
+  useEffect(() => {
+    if (outputFormat !== 'copy') setExportMode('copy');
+  }, [outputFormat]);
+
   const handleSelectFolder = async () => {
     const selected = await save({
       title: '出力先を選択',
@@ -224,7 +233,7 @@ export function ExportModal({
     setIsExporting(true);
     await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, resizeMode, resizePercent, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode });
     setIsExporting(false);
-    onClose();
+    if (!embedded) onClose();
   };
 
   const updateChapterSetting = (chapterId: string, key: keyof ChapterRenameSettings, value: number | string | boolean) => {
@@ -239,165 +248,141 @@ export function ExportModal({
   const previewName2 = `${prefix}${String(startNumber + 1).padStart(digits, '0')}.jpg`;
 
   const { shouldRender, isClosing } = useModalAnimation(isOpen);
-  if (!shouldRender) return null;
+  if (!embedded && !shouldRender) return null;
 
-  return (
-    <div className={`modal-overlay ${isClosing ? 'closing' : ''}`} onClick={onClose}>
-      <div className={`modal-content export-modal ${isClosing ? 'closing' : ''}`} onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <h2>
-            <ExportIcon size={18} />
-            エクスポート
-          </h2>
-        </div>
+  const inner = (
+    <>
+        {!embedded && (
+          <div className="modal-header">
+            <h2>
+              <ExportIcon size={18} />
+              エクスポート
+            </h2>
+          </div>
+        )}
         <div className="modal-body">
-          <div className="form-group">
-            <label className="section-heading">出力先フォルダ</label>
-            <div className="input-with-button">
-              <input
-                type="text"
-                value={outputPath}
-                onChange={(e) => setOutputPath(e.target.value)}
-                placeholder="フォルダを選択..."
-                readOnly
-              />
-              <button className="btn-secondary btn-small" onClick={handleSelectFolder}>
-                参照
+          {/* 出力形式: 中サイズカードで選ぶ（全幅） */}
+          <div className="form-group export-fullrow export-format-group">
+            <label className="section-heading"><ExportIcon size={15} />出力形式</label>
+            <div className="export-format-cards">
+              <button
+                type="button"
+                className={`export-format-card ${outputFormat === 'copy' ? 'selected' : ''}`}
+                onClick={() => setOutputFormat('copy')}
+              >
+                <span className="export-fmt-badge copy">原本</span>
+                <span className="export-format-card-title">そのままコピー</span>
+                <span className="export-format-card-sub">変換なし・形式を維持してリネーム</span>
+              </button>
+              <button
+                type="button"
+                className={`export-format-card ${outputFormat === 'jpg' ? 'selected' : ''} ${!hasFilePages ? 'disabled' : ''}`}
+                disabled={!hasFilePages}
+                onClick={() => setOutputFormat('jpg')}
+              >
+                <span className="export-fmt-badge jpg">JPG</span>
+                <span className="export-format-card-title">JPEGに変換</span>
+                <span className="export-format-card-sub">MozJPEGで高画質変換</span>
+              </button>
+              <button
+                type="button"
+                className={`export-format-card ${outputFormat === 'tiff' ? 'selected' : ''} ${!hasTiffConvertibleFiles || !photoshopInstalled ? 'disabled' : ''}`}
+                disabled={!hasTiffConvertibleFiles || !photoshopInstalled}
+                onClick={() => setOutputFormat('tiff')}
+              >
+                <span className="export-fmt-badge tif">TIFF</span>
+                <span className="export-format-card-title">TIFFに変換</span>
+                <span className="export-format-card-sub">
+                  {!photoshopInstalled && photoshopInstalled !== null
+                    ? 'Photoshopが見つかりません'
+                    : photoshopInstalled && !hasTiffConvertibleFiles
+                      ? '変換可能なファイルがありません'
+                      : 'LZW圧縮・レイヤー統合'}
+                </span>
               </button>
             </div>
           </div>
 
-          <div className="form-group">
-            <label className="section-heading">出力方法</label>
-            <div className="radio-group">
-              <label className="radio-label">
-                <input
-                  type="radio"
-                  name="exportMode"
-                  checked={exportMode === 'copy'}
-                  onChange={() => setExportMode('copy')}
-                />
-                コピー
-                <span className="radio-description">元ファイルを残す</span>
-              </label>
-              <label className="radio-label">
-                <input
-                  type="radio"
-                  name="exportMode"
-                  checked={exportMode === 'move'}
-                  onChange={() => setExportMode('move')}
-                />
-                移動
-                <span className="radio-description">元ファイルを整理</span>
-              </label>
-            </div>
-          </div>
-
-          <div className="form-group">
-            <label className={`checkbox-label ${!hasFilePages ? 'disabled' : ''}`}>
-              <input
-                type="checkbox"
-                checked={convertToJpg}
-                disabled={!hasFilePages}
-                onChange={(e) => {
-                  setConvertToJpg(e.target.checked);
-                  if (e.target.checked) {
-                    setConvertToTiff(false);
-                    setRenameTiffAndSave(false);
-                  }
-                }}
-              />
-              JPEGに変換（Photoshop不要）
-              <span className="option-note">
-                {' '}- PSD/JPEG/PNG/TIFF をMozJPEGで変換
-              </span>
-            </label>
+          <div className="export-grid">
+          <div className="export-col">
             {convertToJpg && (
-              <div className="quality-slider">
-                <label>品質: {jpgQuality}%</label>
-                <input
-                  type="range"
-                  min="70"
-                  max="100"
-                  value={jpgQuality}
-                  onChange={(e) => setJpgQuality(parseInt(e.target.value))}
-                />
-                <div className="quality-labels">
-                  <span>小さめ</span>
-                  <span>高画質</span>
-                </div>
-              </div>
-            )}
-            {convertToJpg && (
-              <div className="resize-settings">
-                <label className="resize-label">リサイズ</label>
-                <select
-                  className="select-full"
-                  value={resizeMode}
-                  onChange={(e) => setResizeMode(e.target.value as ResizeMode)}
-                >
-                  <option value="none">なし（原寸）</option>
-                  <option value="percent">%指定</option>
-                  <option value="fixed">デフォルト（2250×3000）</option>
-                </select>
-                {resizeMode === 'percent' && (
-                  <div className="resize-percent-row">
-                    <input
-                      type="number"
-                      min={1}
-                      max={100}
-                      value={resizePercent}
-                      onChange={(e) => {
-                        const v = parseInt(e.target.value, 10);
-                        setResizePercent(Number.isNaN(v) ? 1 : Math.min(100, Math.max(1, v)));
-                      }}
-                    />
-                    <span>%</span>
+              <div className="form-group">
+                <div className="quality-slider">
+                  <label>品質: {jpgQuality}%</label>
+                  <input
+                    type="range"
+                    min="70"
+                    max="100"
+                    value={jpgQuality}
+                    onChange={(e) => setJpgQuality(parseInt(e.target.value))}
+                  />
+                  <div className="quality-labels">
+                    <span>小さめ</span>
+                    <span>高画質</span>
                   </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="form-group">
-            <label className={`checkbox-label ${!hasTiffConvertibleFiles || !photoshopInstalled ? 'disabled' : ''}`}>
-              <input
-                type="checkbox"
-                checked={convertToTiff}
-                disabled={!hasTiffConvertibleFiles || !photoshopInstalled}
-                onChange={(e) => {
-                  setConvertToTiff(e.target.checked);
-                  if (e.target.checked) {
-                    setConvertToJpg(false);
-                  }
-                }}
-              />
-              TIFFに変換（対応ファイル：PSD・JPEG）
-              {!photoshopInstalled && photoshopInstalled !== null && (
-                <span className="option-note"> - Photoshopが見つかりません</span>
-              )}
-              {photoshopInstalled && !hasTiffConvertibleFiles && (
-                <span className="option-note"> - 変換可能なファイルがありません</span>
-              )}
-            </label>
-            <label className="checkbox-label tiff-rename-checkbox">
-              <input
-                type="checkbox"
-                checked={renameTiffAndSave}
-                onChange={(e) => setRenameTiffAndSave(e.target.checked)}
-              />
-              リネームして保存
-            </label>
-            {convertToTiff && (
-              <div className="tiff-options">
-                <div className="tiff-note">
-                  ※ LZW圧縮、レイヤー統合で出力（カラーモードは元ファイルを維持）
+                </div>
+                <div className="resize-settings">
+                  <label className="resize-label">リサイズ</label>
+                  <select
+                    className="select-full"
+                    value={resizeMode}
+                    onChange={(e) => setResizeMode(e.target.value as ResizeMode)}
+                  >
+                    <option value="none">なし（原寸）</option>
+                    <option value="percent">%指定</option>
+                    <option value="fixed">デフォルト（2250×3000）</option>
+                  </select>
+                  {resizeMode === 'percent' && (
+                    <div className="resize-percent-row">
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={resizePercent}
+                        onChange={(e) => {
+                          const v = parseInt(e.target.value, 10);
+                          setResizePercent(Number.isNaN(v) ? 1 : Math.min(100, Math.max(1, v)));
+                        }}
+                      />
+                      <span>%</span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
-          </div>
 
-          {(convertToTiff || convertToJpg) && (
+          {/* コピー/移動は「そのままコピー（変換なし）」のときだけ意味を持つ */}
+          {outputFormat === 'copy' && (
+            <div className="form-group">
+              <label className="section-heading"><CopyIcon size={15} />出力方法</label>
+              <div className="radio-group">
+                <label className="radio-label">
+                  <input
+                    type="radio"
+                    name="exportMode"
+                    checked={exportMode === 'copy'}
+                    onChange={() => setExportMode('copy')}
+                  />
+                  <span className="radio-ico"><CopyIcon size={16} /></span>
+                  コピー
+                  <span className="radio-description">元ファイルを残す</span>
+                </label>
+                <label className="radio-label">
+                  <input
+                    type="radio"
+                    name="exportMode"
+                    checked={exportMode === 'move'}
+                    onChange={() => setExportMode('move')}
+                  />
+                  <span className="radio-ico"><ReplaceIcon size={16} /></span>
+                  移動
+                  <span className="radio-description">元ファイルを整理</span>
+                </label>
+              </div>
+            </div>
+          )}
+
+          {!embedded && (convertToTiff || convertToJpg) && (
             <div className="form-group">
               <label>断ち切り設定</label>
               <div className="radio-group">
@@ -424,9 +409,18 @@ export function ExportModal({
               </div>
             </div>
           )}
+          {embedded && (convertToTiff || convertToJpg) && (
+            <div className="form-group">
+              <div className="tiff-note">
+                ※ 断ち切りは「断ち切り」タブで設定した内容が適用されます
+              </div>
+            </div>
+          )}
+          </div>
 
+          <div className="export-col">
           <div className="form-section">
-            <h3 className="section-heading">リネーム設定</h3>
+            <h3 className="section-heading"><PencilIcon size={15} />リネーム設定</h3>
             <div className="form-group">
               <div className="radio-group">
                 <label className="radio-label">
@@ -618,11 +612,31 @@ export function ExportModal({
               </div>
             )}
           </div>
+          </div>
+          </div>
+          {/* 出力先フォルダは最後（生成ボタンの直前）に */}
+          <div className="form-group export-fullrow export-dest-row">
+            <label className="section-heading"><FolderIcon size={15} />出力先フォルダ</label>
+            <div className="input-with-button">
+              <input
+                type="text"
+                value={outputPath}
+                onChange={(e) => setOutputPath(e.target.value)}
+                placeholder="フォルダを選択..."
+                readOnly
+              />
+              <button className="btn-secondary btn-small" onClick={handleSelectFolder}>
+                参照
+              </button>
+            </div>
+          </div>
         </div>
         <div className="modal-footer">
-          <button className="btn-secondary btn-small" onClick={onClose}>
-            キャンセル
-          </button>
+          {!embedded && (
+            <button className="btn-secondary btn-small" onClick={onClose}>
+              キャンセル
+            </button>
+          )}
           <button
             className="btn-primary btn-small"
             onClick={handleExport}
@@ -631,6 +645,17 @@ export function ExportModal({
             {isExporting ? '生成中...' : '生成'}
           </button>
         </div>
+    </>
+  );
+
+  if (embedded) {
+    return <div className="export-modal export-modal-embedded">{inner}</div>;
+  }
+
+  return (
+    <div className={`modal-overlay ${isClosing ? 'closing' : ''}`} onClick={onClose}>
+      <div className={`modal-content export-modal ${isClosing ? 'closing' : ''}`} onClick={(e) => e.stopPropagation()}>
+        {inner}
       </div>
     </div>
   );

@@ -45,27 +45,20 @@ import {
   PlusCircleIcon,
   SunIcon,
   MoonIcon,
-  ExportIcon,
-  MonitorIcon,
   TrashIcon,
-  EyeIcon,
-  EyeOffIcon,
   BookIcon,
-  ZoomInIcon,
-  ZoomOutIcon,
   HamburgerIcon,
   FlipIcon,
-  SettingsIcon,
   CloseIcon,
   GridViewIcon,
   BookOpenIcon,
-  BindingRightIcon,
-  BindingLeftIcon,
-  CheckIcon2,
   NoPageIcon,
   DownloadIcon,
   InfoIcon,
-  PdfIcon,
+  CheckIcon2,
+  AlertTriangleIcon,
+  ScissorsIcon,
+  ExportIcon,
 } from './icons';
 
 // 抽出したコンポーネント
@@ -78,9 +71,11 @@ import {
   DragOverlayChapterItem,
   DropPlaceholder,
 } from './components/dnd';
-import { ExportModal, EpubMetadataModal, BleedEditorModal, UpdateDialog, SplitFoldersDialog } from './components/modals';
-import type { SplitFolderEntry, SplitFoldersDialogResult } from './components/modals';
-import { EpubMakerView } from './components/epub';
+import { UpdateDialog, SplitFoldersDialog } from './components/modals';
+import type { SplitFolderEntry, SplitFoldersDialogResult, ExportOptions } from './components/modals';
+import { BleedTab } from './components/bleed';
+import { OutputTab } from './components/output';
+import { useBleedStore } from './bleedStore';
 import {
   SIDEBAR_PREFIX,
 } from './constants/dnd';
@@ -446,6 +441,8 @@ function App() {
     selectedPageId,
     selectedPageIds,
     thumbnailSize,
+    activeTab,
+    setActiveTab,
     // プロジェクト状態
     projectName,
     // チャプター管理
@@ -478,14 +475,11 @@ function App() {
     updatePagesValidation,
     // プロジェクト管理
     resetProject,
-    // EPUB_maker
-    loadEpubFromDaidori,
+    // EPUB生成（handleEpubGenerate がプレビュー上書き情報を参照）
     epubPages,
-    epubSelectedPageId,
-    epubSelectedPageIds,
   } = useStore();
 
-  const [previewMode, setPreviewMode] = useState<'grid' | 'spread' | 'epub'>('grid');
+  const [previewMode, setPreviewMode] = useState<'grid' | 'spread'>('grid');
   const [isViewerMode, setIsViewerMode] = useState(false);
   const [spreadZoom, setSpreadZoom] = useState(100);
   const [isPageBarVisible, setIsPageBarVisible] = useState(() => {
@@ -493,16 +487,12 @@ function App() {
     const saved = localStorage.getItem('daidori_pagebar_visible');
     return saved !== 'false';
   });
-  const [isToolbarCollapsed, setIsToolbarCollapsed] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isInfoSidebarCollapsed, setIsInfoSidebarCollapsed] = useState(() => {
     const saved = localStorage.getItem('daidori_info_sidebar_collapsed');
     return saved === 'true';
   });
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [openDropdown, setOpenDropdown] = useState<'view' | 'binding' | null>(null);
-  const viewDropdownRef = useRef<HTMLDivElement>(null);
-  const bindingDropdownRef = useRef<HTMLDivElement>(null);
   const [isSidebarFlipped, setIsSidebarFlipped] = useState(() => {
     const saved = localStorage.getItem('daidori_sidebar_flipped');
     return saved === 'true';
@@ -694,17 +684,11 @@ function App() {
     return result;
   }, [chapters]);
 
-  // 情報サイドバー用: 選択中のページ（EPUB表示時はepubSelectedPageId経由でoriginalPageIdを解決）
+  // 情報サイドバー用: 選択中のページ
   const selectedPageInfo = useMemo(() => {
-    if (previewMode === 'epub') {
-      if (!epubSelectedPageId) return null;
-      const epubPage = epubPages.find((p) => p.id === epubSelectedPageId);
-      if (!epubPage?.originalPageId) return null;
-      return allPages.find((p) => p.page.id === epubPage.originalPageId) ?? null;
-    }
     if (!selectedPageId) return null;
     return allPages.find((p) => p.page.id === selectedPageId) ?? null;
-  }, [previewMode, allPages, selectedPageId, epubPages, epubSelectedPageId]);
+  }, [allPages, selectedPageId]);
 
   // カラーモード集計（ファイルページのみ対象）
   const colorModeGroups = useMemo(() => {
@@ -1035,16 +1019,8 @@ function App() {
   ) : null;
 
   const {
-    isExportModalOpen,
-    bleedEditorState,
     exportResultDialog,
-    openExportModal,
-    closeExportModal,
-    handlePreExport,
-    startTachimiBleed,
-    handleBleedApply,
-    handleBleedSkip,
-    handleBleedCancel,
+    handleExport,
     setExportResultDialog,
     closeExportResultDialog,
   } = useExport(chapters, allPages);
@@ -1150,6 +1126,7 @@ function App() {
         thumbnailSize: restored.thumbnailSize,
         viewMode: 'all',
       });
+      useBleedStore.getState().reset();
       setPreviewCollapsedChapters(new Set(restored.collapsedChapterIds));
       setCurrentProjectPath(filePath);
       setProjectCreatedAt(restored.createdAt);
@@ -1312,7 +1289,8 @@ function App() {
     return null;
   }, []);
 
-  const handleLaunchTachimi = useCallback(async () => {
+  // PDF生成（出力タブ）。断ち切りは断ち切りタブで設定した内容（bleedStore）を適用する。
+  const handleGeneratePdf = useCallback(async () => {
     const hasPdfPages = chapters.some(
       (chapter) => chapter.pages.length > 0 || chapter.type === 'blank'
     );
@@ -1342,128 +1320,115 @@ function App() {
     const desktop = await desktopDir();
     const pdfOutputDir = await join(desktop, 'Script_Output', '台割pdf');
 
-    // 断ち切りエディタ（表紙・本文）を経由してから PDF 生成
-    // jpeg化 → 一律サイズ統一(バックエンド) → 断ち切り → PDF化
-    await startTachimiBleed('bulk', async (bleedSettings) => {
-      try {
-        // 各ページに ProcessOptions（断ち切り）を付与。サイズ統一はバックエンドが担当
-        const pdfChapters = chapters
-          .map((chapter) => {
-            const region = resolveBleedRegion(bleedSettings, chapter.type, chapter.id);
-            const options = buildProcessOptions(region, {
-              resizeMode: 'none',
-              resizePercent: 50,
-              jpgQuality: 100,
-            });
-            return {
-              name: chapter.name,
-              chapter_type: chapter.type,
-              pages: chapter.pages.map((page) => ({
-                source_path: page.filePath ?? null,
-                page_type: page.pageType,
-                options: page.filePath ? options : null,
-              })),
-            };
-          })
-          .filter((chapter) => chapter.pages.length > 0 || chapter.chapter_type === 'blank');
+    // 断ち切りタブで設定した内容を適用（未設定なら断ち切りなし）
+    const bleedSettings = useBleedStore.getState().getBleedSettings();
 
-        setExportResultDialog({
-          show: true,
-          title: 'チャプターPDF生成中',
-          message:
-            'JPEG化 → サイズ統一 → 断ち切り → PDF化 の順で処理しています。完了まで少しお待ちください。',
-          isError: false,
-        });
-        setTachimiPdfProgress({
-          phase: 'prepare',
-          message: 'Tachimi PDFジョブを準備しています',
-          current: 0,
-          total: pdfChapters.length || 1,
-          indeterminate: false,
-        });
+    try {
+      // 各ページに ProcessOptions（断ち切り）を付与。サイズ統一はバックエンドが担当
+      const pdfChapters = chapters
+        .map((chapter) => {
+          const region = resolveBleedRegion(bleedSettings, chapter.type, chapter.id);
+          const options = buildProcessOptions(region, {
+            resizeMode: 'none',
+            resizePercent: 50,
+            jpgQuality: 100,
+          });
+          return {
+            name: chapter.name,
+            chapter_type: chapter.type,
+            pages: chapter.pages.map((page) => ({
+              source_path: page.filePath ?? null,
+              page_type: page.pageType,
+              options: page.filePath ? options : null,
+            })),
+          };
+        })
+        .filter((chapter) => chapter.pages.length > 0 || chapter.chapter_type === 'blank');
 
-        const result = await invoke<{
-          generated: number;
-          output_dir: string;
-          results: { output_path: string; success: boolean; error?: string | null }[];
-        }>('generate_tachimi_chapter_pdfs', {
-          exePath: exe,
-          outputDir: pdfOutputDir,
-          outputName: projectName || '台割PDF',
-          chapters: pdfChapters,
-          isSpread: false,
-        });
+      setExportResultDialog({
+        show: true,
+        title: 'チャプターPDF生成中',
+        message:
+          'JPEG化 → サイズ統一 → 断ち切り → PDF化 の順で処理しています。完了まで少しお待ちください。',
+        isError: false,
+      });
+      setTachimiPdfProgress({
+        phase: 'prepare',
+        message: 'Tachimi PDFジョブを準備しています',
+        current: 0,
+        total: pdfChapters.length || 1,
+        indeterminate: false,
+      });
 
-        const errors = result.results.filter((r) => !r.success);
-        const details = [
-          ...result.results.filter((r) => r.success).map((r) => r.output_path),
-          ...errors.map((r) => `${r.output_path || 'PDF生成'}: ${r.error ?? '不明なエラー'}`),
-        ].join('\n');
+      const result = await invoke<{
+        generated: number;
+        output_dir: string;
+        results: { output_path: string; success: boolean; error?: string | null }[];
+      }>('generate_tachimi_chapter_pdfs', {
+        exePath: exe,
+        outputDir: pdfOutputDir,
+        outputName: projectName || '台割PDF',
+        chapters: pdfChapters,
+        isSpread: false,
+      });
 
-        setExportResultDialog({
-          show: true,
-          title: errors.length > 0 ? 'チャプターPDF生成完了（一部エラー）' : 'チャプターPDF生成完了',
-          message: `全チャプターを1つのPDFにまとめました。\n出力先: ${result.output_dir}`,
-          details: details || undefined,
-          outputDir: result.output_dir,
-          isError: errors.length > 0,
-        });
-        setTachimiPdfProgress(null);
-      } catch (e) {
-        const msg = typeof e === 'string' ? e : (e instanceof Error ? e.message : '不明なエラーが発生しました');
-        setExportResultDialog({
-          show: true,
-          title: 'チャプターPDF生成に失敗',
-          message: msg,
-          isError: true,
-        });
-        setTachimiPdfProgress(null);
-      }
-    });
-  }, [chapters, detectTachimiExe, projectName, setExportResultDialog, startTachimiBleed]);
+      const errors = result.results.filter((r) => !r.success);
+      const details = [
+        ...result.results.filter((r) => r.success).map((r) => r.output_path),
+        ...errors.map((r) => `${r.output_path || 'PDF生成'}: ${r.error ?? '不明なエラー'}`),
+      ].join('\n');
 
-  const handlePreviewModeChange = useCallback((mode: 'grid' | 'spread' | 'epub') => {
-    if (mode === 'epub') {
-      loadEpubFromDaidori();
-      setIsInfoSidebarCollapsed(false);
+      setExportResultDialog({
+        show: true,
+        title: errors.length > 0 ? 'チャプターPDF生成完了（一部エラー）' : 'チャプターPDF生成完了',
+        message: '全チャプターを1つのPDFにまとめました。',
+        details: details || undefined,
+        outputDir: result.output_dir,
+        isError: errors.length > 0,
+      });
+      setTachimiPdfProgress(null);
+    } catch (e) {
+      const msg = typeof e === 'string' ? e : (e instanceof Error ? e.message : '不明なエラーが発生しました');
+      setExportResultDialog({
+        show: true,
+        title: 'チャプターPDF生成に失敗',
+        message: msg,
+        isError: true,
+      });
+      setTachimiPdfProgress(null);
     }
+  }, [chapters, detectTachimiExe, projectName, setExportResultDialog]);
+
+  // 画像出力（出力タブ）。CMYK ガード後、断ち切りタブの設定を注入して handleExport を実行。
+  // CMYK判定を最新に保つため非メモ化。
+  const handleExportImages = (options: ExportOptions) => {
+    if (blockIfCmyk('export')) return;
+    const bleedSettings = useBleedStore.getState().getBleedSettings();
+    void handleExport({ ...options, bleedSettings });
+  };
+
+  const handlePreviewModeChange = useCallback((mode: 'grid' | 'spread') => {
     if (mode === 'grid') {
       setIsViewerMode(false);
     }
     setPreviewMode(mode);
-    setOpenDropdown(null);
-  }, [loadEpubFromDaidori]);
+  }, []);
 
-  // ツールバー右側のアクションボタン（PDF生成・JPEG/TIF生成）
-  const toolbarActionButtons = (
-    <>
-      <button
-        type="button"
-        className="preview-fab preview-fab-secondary preview-fab-toolbar"
-        onClick={handleLaunchTachimi}
-        disabled={allPages.length === 0}
-        title="PDFを生成"
-      >
-        <PdfIcon size={16} />
-        <span className="preview-fab-label">PDF生成</span>
-      </button>
-      <button
-        type="button"
-        className="preview-fab preview-fab-secondary preview-fab-toolbar"
-        onClick={() => { if (!blockIfCmyk('export')) openExportModal(); }}
-        disabled={allPages.length === 0}
-        title="JPEG/TIF生成"
-      >
-        <ExportIcon size={16} />
-        <span className="preview-fab-label">JPEG/TIF生成</span>
-      </button>
-    </>
-  );
+  // ページバー表示切替（ビューアオーバーレイから呼ぶ。localStorageへ永続化）
+  const togglePageBar = useCallback(() => {
+    setIsPageBarVisible((prev) => {
+      const next = !prev;
+      localStorage.setItem('daidori_pagebar_visible', String(next));
+      return next;
+    });
+  }, []);
+  const enterViewerMode = useCallback(() => setIsViewerMode(true), []);
 
   // 新規プロジェクト
   const handleNewProject = async () => {
     if (!(await confirmDiscardUnsavedChanges())) return;
     resetProject();
+    useBleedStore.getState().reset();
     const createdAt = new Date().toISOString();
     setCurrentProjectPath(null);
     setProjectCreatedAt(createdAt);
@@ -1513,20 +1478,6 @@ function App() {
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
   }, [isMenuOpen]);
-
-  // ヘッダードロップダウンの外側クリックで閉じる
-  useEffect(() => {
-    if (!openDropdown) return;
-    const handleClick = (e: MouseEvent) => {
-      const refs = { view: viewDropdownRef, binding: bindingDropdownRef };
-      const ref = refs[openDropdown];
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpenDropdown(null);
-      }
-    };
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [openDropdown]);
 
   // 閲覧モード切替の適用（body classを追加/削除）
   useEffect(() => {
@@ -1656,17 +1607,10 @@ function App() {
     }
   }, [duplicateChapter, selectChapter, selectPage]);
 
-  // EPUBモード中にchaptersが変更されたら自動同期
+  // 見開き表示・断ち切りタブ・出力タブでは表示対象の全ページのサムネイルを先行生成
+  // （台割タブのリスト表示ではIntersectionObserverで遅延生成するが、他には仕組みが無い）
   useEffect(() => {
-    if (previewMode === 'epub') {
-      loadEpubFromDaidori();
-    }
-  }, [previewMode, chapters, loadEpubFromDaidori]);
-
-  // 見開き/EPUBモード時は表示対象の全ページのサムネイルを先行生成
-  // （リスト表示ではIntersectionObserverで遅延生成するが、他モードにはその仕組みが無い）
-  useEffect(() => {
-    if (previewMode !== 'spread' && previewMode !== 'epub') return;
+    if (activeTab === 'compose' && previewMode === 'grid') return;
     for (const chapter of chapters) {
       for (const page of chapter.pages) {
         if (
@@ -1678,7 +1622,7 @@ function App() {
         }
       }
     }
-  }, [previewMode, chapters]);
+  }, [activeTab, previewMode, chapters]);
 
   // キーボードショートカット
   useKeyboardShortcuts({
@@ -1687,7 +1631,7 @@ function App() {
     selectedPageIds,
     chapters,
     allPages,
-    previewMode,
+    allowViewer: (activeTab === 'compose' && previewMode === 'spread') || activeTab === 'output',
     removePage,
     removeSelectedPages,
     selectChapter,
@@ -2971,7 +2915,7 @@ function App() {
       >
         <div className="app">
         <main className="main-area">
-          <div className={`main-header ${isToolbarCollapsed ? 'collapsed' : ''}`}>
+          <div className="main-header">
             <div className="main-header-row" data-tauri-drag-region>
               {/* アプリアイコン */}
               <img src="/logo/daidori_icon.png" alt="台割マネージャー" className="app-icon" />
@@ -2985,97 +2929,34 @@ function App() {
                 <HamburgerIcon size={18} />
               </button>
 
-              {/* ツールバー折りたたみボタン */}
-              <button
-                className="toolbar-collapse-btn"
-                onClick={() => setIsToolbarCollapsed(!isToolbarCollapsed)}
-                title={isToolbarCollapsed ? 'ツールバーを展開' : 'ツールバーを折りたたむ'}
-              >
-                <svg width="16" height="16" viewBox="0 0 16 16" className={`collapse-icon ${isToolbarCollapsed ? 'collapsed' : ''}`}>
-                  <path d="M4 6L8 10L12 6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              </button>
-
               <div className="header-divider" />
-              {/* 表示モードドロップダウン */}
-              <div className="header-popup-container" ref={viewDropdownRef}>
+              {/* 工程タブ（台割 / 断ち切り / 出力） */}
+              <div className="view-tabs">
                 <button
-                  className={`header-popup-trigger ${openDropdown === 'view' ? 'open' : ''}`}
-                  onClick={() => setOpenDropdown(openDropdown === 'view' ? null : 'view')}
+                  type="button"
+                  className={`view-tab ${activeTab === 'compose' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('compose')}
                 >
-                  {previewMode === 'grid' ? <GridViewIcon size={14} /> : previewMode === 'spread' ? <BookOpenIcon size={14} /> : <BookIcon size={14} />}
-                  <span>{previewMode === 'grid' ? 'リスト' : previewMode === 'spread' ? '見開き' : 'EPUB'}</span>
-                  <svg className="header-popup-chevron" width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 4L5 6.5L7.5 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  <GridViewIcon size={15} />
+                  台割
                 </button>
-                <div className={`header-popup-menu ${openDropdown === 'view' ? 'open' : ''}`}>
-                  <div className="header-popup-header">表示</div>
-                  <button className={`header-popup-item ${previewMode === 'grid' ? 'selected' : ''}`} onClick={() => handlePreviewModeChange('grid')}>
-                    <GridViewIcon size={16} />
-                    <span>リスト</span>
-                    {previewMode === 'grid' && <span className="header-popup-check"><CheckIcon2 /></span>}
-                  </button>
-                  <button className={`header-popup-item ${previewMode === 'spread' ? 'selected' : ''}`} onClick={() => handlePreviewModeChange('spread')}>
-                    <BookOpenIcon size={16} />
-                    <span>見開き</span>
-                    {previewMode === 'spread' && <span className="header-popup-check"><CheckIcon2 /></span>}
-                  </button>
-                  <button
-                    className={`header-popup-item ${previewMode === 'epub' ? 'selected' : ''}`}
-                    onClick={() => handlePreviewModeChange('epub')}
-                    disabled={allPages.length === 0}
-                  >
-                    <BookIcon size={16} />
-                    <span>EPUB</span>
-                    {previewMode === 'epub' && <span className="header-popup-check"><CheckIcon2 /></span>}
-                  </button>
-                </div>
-              </div>
-
-              <div className="header-divider" />
-              {/* 綴じ方向ドロップダウン */}
-              <div className="header-popup-container" ref={bindingDropdownRef}>
                 <button
-                  className={`header-popup-trigger ${openDropdown === 'binding' ? 'open' : ''}`}
-                  onClick={() => setOpenDropdown(openDropdown === 'binding' ? null : 'binding')}
-                  disabled={previewMode === 'grid'}
+                  type="button"
+                  className={`view-tab ${activeTab === 'bleed' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('bleed')}
+                  disabled={allPages.length === 0}
                 >
-                  {bindingDirection === 'rtl' ? <BindingRightIcon size={14} /> : <BindingLeftIcon size={14} />}
-                  <span>{bindingDirection === 'rtl' ? '右綴じ' : '左綴じ'}</span>
-                  <svg className="header-popup-chevron" width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 4L5 6.5L7.5 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  <ScissorsIcon size={15} />
+                  断ち切り
                 </button>
-                <div className={`header-popup-menu ${openDropdown === 'binding' ? 'open' : ''}`}>
-                  <div className="header-popup-header">綴じ方向</div>
-                  <button className={`header-popup-item ${bindingDirection === 'rtl' ? 'selected' : ''}`} onClick={() => { setBindingDirection('rtl'); setOpenDropdown(null); }}>
-                    <BindingRightIcon size={16} />
-                    <span>右綴じ</span>
-                    {bindingDirection === 'rtl' && <span className="header-popup-check"><CheckIcon2 /></span>}
-                  </button>
-                  <button className={`header-popup-item ${bindingDirection === 'ltr' ? 'selected' : ''}`} onClick={() => { setBindingDirection('ltr'); setOpenDropdown(null); }}>
-                    <BindingLeftIcon size={16} />
-                    <span>左綴じ</span>
-                    {bindingDirection === 'ltr' && <span className="header-popup-check"><CheckIcon2 /></span>}
-                  </button>
-                </div>
-              </div>
-
-              <div className="header-divider" />
-              <div className="zoom-controls">
                 <button
-                  className="btn-icon btn-small"
-                  onClick={() => setSpreadZoom(Math.min(200, spreadZoom + 10))}
-                  disabled={previewMode === 'grid' || spreadZoom >= 200}
-                  title="ズームイン"
+                  type="button"
+                  className={`view-tab ${activeTab === 'output' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('output')}
+                  disabled={allPages.length === 0}
                 >
-                  <ZoomInIcon size={16} />
-                </button>
-                <span className={`zoom-value ${previewMode === 'grid' ? 'disabled' : ''}`}>{spreadZoom}%</span>
-                <button
-                  className="btn-icon btn-small"
-                  onClick={() => setSpreadZoom(Math.max(50, spreadZoom - 10))}
-                  disabled={previewMode === 'grid' || spreadZoom <= 50}
-                  title="ズームアウト"
-                >
-                  <ZoomOutIcon size={16} />
+                  <ExportIcon size={15} />
+                  出力
                 </button>
               </div>
 
@@ -3111,84 +2992,11 @@ function App() {
                 </button>
               </div>
             </div>
-
-            <div className={`toolbar-content ${isToolbarCollapsed ? 'collapsed' : ''}`}>
-              <button
-                className="viewer-mode-btn"
-                onClick={() => setIsViewerMode(true)}
-                title="閲覧モード (F1)"
-                disabled={previewMode === 'grid' || displayPages.length === 0}
-              >
-                <MonitorIcon size={14} />
-              </button>
-              <button
-                className="viewer-mode-btn"
-                onClick={() => {
-                  const newValue = !isPageBarVisible;
-                  setIsPageBarVisible(newValue);
-                  localStorage.setItem('daidori_pagebar_visible', String(newValue));
-                }}
-                title={isPageBarVisible ? 'ページバーを隠す' : 'ページバーを表示'}
-                disabled={previewMode === 'grid'}
-              >
-                {isPageBarVisible ? <EyeIcon size={14} /> : <EyeOffIcon size={14} />}
-              </button>
-
-              {/* Photoshopで開くボタン */}
-              {(() => {
-                // EPUBモード時はepubPagesから、それ以外はallPagesから選択ページを取得
-                let psdPaths: string[] = [];
-
-                if (previewMode === 'epub') {
-                  const ids = epubSelectedPageIds.length > 0
-                    ? epubSelectedPageIds
-                    : (epubSelectedPageId ? [epubSelectedPageId] : []);
-                  const selectedEpub = epubPages.filter(p => ids.includes(p.id));
-                  const psdEpub = selectedEpub.filter(p => p.sourcePath?.toLowerCase().endsWith('.psd'));
-                  if (psdEpub.length > 0 && psdEpub.length === selectedEpub.length) {
-                    psdPaths = psdEpub.map(p => p.sourcePath);
-                  }
-                } else {
-                  const selectedPages = selectedPageIds.length > 0
-                    ? allPages.filter(p => selectedPageIds.includes(p.page.id))
-                    : selectedPageId
-                      ? allPages.filter(p => p.page.id === selectedPageId)
-                      : [];
-                  const psdPages = selectedPages.filter(p => p.page.filePath?.toLowerCase().endsWith('.psd'));
-                  if (psdPages.length > 0 && psdPages.length === selectedPages.length) {
-                    psdPaths = psdPages.map(p => p.page.filePath!);
-                  }
-                }
-
-                return (
-                  <button
-                    className="photoshop-btn"
-                    onClick={async () => {
-                      for (const path of psdPaths) {
-                        try {
-                          await invoke('open_file_with_default_app', { filePath: path });
-                        } catch (error) {
-                          console.error('ファイルを開けませんでした:', error);
-                        }
-                      }
-                    }}
-                    title={psdPaths.length > 1 ? `Photoshopで開く (${psdPaths.length})` : 'Photoshopで開く'}
-                    disabled={psdPaths.length === 0}
-                  >
-                    <span className="photoshop-label">Ps</span>
-                  </button>
-                );
-              })()}
-
-              {/* ツールバー右側: エクスポート・EPUB生成 */}
-              <div className="toolbar-spacer" />
-              {toolbarActionButtons}
-            </div>
           </div>
 
-          {/* モードに応じたコンテンツ表示 */}
+          {/* 工程タブに応じたコンテンツ表示 */}
           <div className="preview-container">
-            {previewMode !== 'epub' && (
+            {/* 左スパイン: 台割ツリー（全工程で常駐） */}
             <aside className={`sidebar ${isSidebarCollapsed ? 'collapsed' : ''}`}>
               <div className="sidebar-header">
                 <button
@@ -3344,20 +3152,29 @@ function App() {
                 </button>
               </div>
             </aside>
-            )}
 
-            {previewMode === 'epub' ? (
-              <EpubMakerView
-                zoom={spreadZoom}
-                onZoomChange={setSpreadZoom}
-                isViewerMode={isViewerMode}
-                onExitViewerMode={() => setIsViewerMode(false)}
-                isPageBarVisible={isPageBarVisible}
-                bindingDirection={bindingDirection}
-                onReplaceFile={handleRefreshFile}
-                topBar={colorModeSummaryBar}
-              />
-            ) : (
+            {/* 中央＋右パネル: 工程タブで切替（左スパインは常駐） */}
+            {activeTab === 'compose' ? (
+            <>
+            <div className="compose-center">
+            <div className="compose-view-toggle">
+              <button
+                type="button"
+                className={`compose-view-btn ${previewMode === 'grid' ? 'active' : ''}`}
+                onClick={() => handlePreviewModeChange('grid')}
+              >
+                <GridViewIcon size={14} />
+                <span>リスト</span>
+              </button>
+              <button
+                type="button"
+                className={`compose-view-btn ${previewMode === 'spread' ? 'active' : ''}`}
+                onClick={() => handlePreviewModeChange('spread')}
+              >
+                <BookOpenIcon size={14} />
+                <span>見開き</span>
+              </button>
+            </div>
             <div className="preview-area" ref={previewAreaRef}>
               {colorModeSummaryBar}
               {selectedPageIds.length > 1 && (
@@ -3411,6 +3228,9 @@ function App() {
                 zoom={spreadZoom}
                 onZoomChange={setSpreadZoom}
                 bindingDirection={bindingDirection}
+                onBindingChange={setBindingDirection}
+                onEnterViewerMode={enterViewerMode}
+                onTogglePageBar={togglePageBar}
               />
             ) : (
               <div className="thumbnail-grid-container">
@@ -3639,33 +3459,50 @@ function App() {
               </div>
             )}
             </div>
-            )}
+            </div>
 
-            {/* 右側: 情報サイドバー / EPUB生成設定 */}
-            <aside className={`sidebar sidebar-right ${previewMode === 'epub' ? 'epub-settings-sidebar' : ''} ${isInfoSidebarCollapsed ? 'collapsed' : ''}`}>
+            {/* 右: 選択ページ情報パネル（台割タブ） */}
+            <aside className={`sidebar sidebar-right ${isInfoSidebarCollapsed ? 'collapsed' : ''}`}>
               <div className="sidebar-header">
                 <button
                   className="sidebar-toggle-btn"
                   onClick={() => setIsInfoSidebarCollapsed(!isInfoSidebarCollapsed)}
-                  title={isInfoSidebarCollapsed ? (previewMode === 'epub' ? 'EPUB設定を展開' : '情報パネルを展開') : (previewMode === 'epub' ? 'EPUB設定を折り畳む' : '情報パネルを折り畳む')}
+                  title={isInfoSidebarCollapsed ? '情報パネルを展開' : '情報パネルを折り畳む'}
                 >
                   {isInfoSidebarCollapsed ? '«' : '»'}
                 </button>
               </div>
               <div className="sidebar-content">
-                {previewMode === 'epub' ? (
-                  <EpubMetadataModal
-                    isOpen={true}
-                    embedded
-                    onClose={() => handlePreviewModeChange('grid')}
-                    onGenerate={async (metadata, outputPath, splitSettings) => {
-                      if (blockIfCmyk('epub')) return;
-                      await handleEpubGenerate(metadata, outputPath, splitSettings);
-                    }}
-                    chapters={chapters}
-                    projectName={projectName}
-                  />
-                ) : selectedPageInfo ? (
+                {/* 選択中PSDをPhotoshopで開く（選択がすべてPSDのとき） */}
+                {(() => {
+                  const selectedPages = selectedPageIds.length > 0
+                    ? allPages.filter(p => selectedPageIds.includes(p.page.id))
+                    : selectedPageId
+                      ? allPages.filter(p => p.page.id === selectedPageId)
+                      : [];
+                  const psdPages = selectedPages.filter(p => p.page.filePath?.toLowerCase().endsWith('.psd'));
+                  if (psdPages.length === 0 || psdPages.length !== selectedPages.length) return null;
+                  const psdPaths = psdPages.map(p => p.page.filePath!);
+                  return (
+                    <button
+                      className="info-photoshop-btn"
+                      onClick={async () => {
+                        for (const path of psdPaths) {
+                          try {
+                            await invoke('open_file_with_default_app', { filePath: path });
+                          } catch (error) {
+                            console.error('ファイルを開けませんでした:', error);
+                          }
+                        }
+                      }}
+                      title={psdPaths.length > 1 ? `Photoshopで開く (${psdPaths.length})` : 'Photoshopで開く'}
+                    >
+                      <span className="photoshop-label">Ps</span>
+                      <span>{psdPaths.length > 1 ? `Photoshopで開く (${psdPaths.length})` : 'Photoshopで開く'}</span>
+                    </button>
+                  );
+                })()}
+                {selectedPageInfo ? (
                   <div className="info-panel">
                     {selectedPageInfo.page.thumbnailStatus === 'ready' && selectedPageInfo.page.thumbnailCachePath ? (
                       <div className="info-thumbnail">
@@ -3745,6 +3582,35 @@ function App() {
                 )}
               </div>
             </aside>
+            </>
+            ) : activeTab === 'bleed' ? (
+              <BleedTab
+                isInfoSidebarCollapsed={isInfoSidebarCollapsed}
+                setIsInfoSidebarCollapsed={setIsInfoSidebarCollapsed}
+              />
+            ) : (
+              <OutputTab
+                chapters={chapters}
+                projectName={projectName}
+                onExportImages={handleExportImages}
+                onGenerateEpub={async (metadata, outputPath, splitSettings) => {
+                  if (blockIfCmyk('epub')) return;
+                  await handleEpubGenerate(metadata, outputPath, splitSettings);
+                }}
+                onGeneratePdf={handleGeneratePdf}
+                zoom={spreadZoom}
+                onZoomChange={setSpreadZoom}
+                isViewerMode={isViewerMode}
+                onExitViewerMode={() => setIsViewerMode(false)}
+                isPageBarVisible={isPageBarVisible}
+                bindingDirection={bindingDirection}
+                onReplaceFile={handleRefreshFile}
+                onBindingChange={setBindingDirection}
+                onEnterViewerMode={enterViewerMode}
+                onTogglePageBar={togglePageBar}
+                topBar={colorModeSummaryBar}
+              />
+            )}
           </div>
 
         </main>
@@ -3769,13 +3635,6 @@ function App() {
           )
         ) : null}
       </DragOverlay>
-
-      <ExportModal
-        isOpen={isExportModalOpen}
-        onClose={closeExportModal}
-        onExport={handlePreExport}
-        chapters={chapters}
-      />
 
       {/* 複数フォルダ → チャプター分割ダイアログ */}
       {splitFoldersDialog && (() => {
@@ -3862,26 +3721,6 @@ function App() {
         );
       })()}
 
-      {/* 断ち切りエディタ（キュー駆動） */}
-      {(() => {
-        const { queue, currentIndex } = bleedEditorState;
-        const item = currentIndex >= 0 && currentIndex < queue.length ? queue[currentIndex] : null;
-        if (!item) return null;
-        const key = item.kind === 'chapter' ? `chapter-${item.chapterId}` : item.kind;
-        return (
-          <BleedEditorModal
-            key={key}
-            isOpen={true}
-            label={item.label}
-            thumbnailPath={item.thumbnailPath}
-            originalFilePath={item.filePath}
-            onApply={handleBleedApply}
-            onSkip={handleBleedSkip}
-            onCancel={handleBleedCancel}
-          />
-        );
-      })()}
-
       {/* 自動更新ダイアログ */}
       <UpdateDialog
         state={autoUpdate.state}
@@ -3890,48 +3729,24 @@ function App() {
       />
 
       {/* エクスポート結果ダイアログ */}
-      {exportResultAnim.shouldRender && (
+      {exportResultAnim.shouldRender && !tachimiPdfProgress && (
         <div className={`modal-overlay ${exportResultAnim.isClosing ? 'closing' : ''}`}>
           <div className={`modal-content export-result-dialog ${exportResultDialog.isError ? 'has-error' : ''} ${exportResultAnim.isClosing ? 'closing' : ''}`}>
+            <div className={`result-icon ${exportResultDialog.isError ? 'error' : 'success'}`}>
+              {exportResultDialog.isError ? <AlertTriangleIcon size={28} /> : <CheckIcon2 />}
+            </div>
             <h2>{exportResultDialog.title}</h2>
             <p className="export-result-message">{exportResultDialog.message}</p>
-            {tachimiPdfProgress && exportResultDialog.title === 'チャプターPDF生成中' && (() => {
-              const percent = tachimiPdfProgress.indeterminate || tachimiPdfProgress.total <= 0
-                ? 100
-                : Math.min(100, Math.round((tachimiPdfProgress.current / tachimiPdfProgress.total) * 100));
-              const phaseLabel =
-                tachimiPdfProgress.phase === 'prepare' ? '準備中'
-                : tachimiPdfProgress.phase === 'stage' ? 'ページ整理中'
-                : tachimiPdfProgress.phase === 'generate' ? 'PDF生成中'
-                : tachimiPdfProgress.phase === 'finalize' ? '確認中'
-                : '完了';
-              return (
-                <div className="tachimi-progress">
-                  <div className="tachimi-progress-meta">
-                    <span>{phaseLabel}</span>
-                    {!tachimiPdfProgress.indeterminate && (
-                      <span>{tachimiPdfProgress.current} / {tachimiPdfProgress.total}</span>
-                    )}
-                  </div>
-                  <div className="tachimi-progress-bar">
-                    <div
-                      className={`tachimi-progress-fill ${tachimiPdfProgress.indeterminate ? 'indeterminate' : ''}`}
-                      style={{ width: `${percent}%` }}
-                    />
-                  </div>
-                  <div className="tachimi-progress-message">{tachimiPdfProgress.message}</div>
-                </div>
-              );
-            })()}
             {exportResultDialog.details && (
               <div className="export-result-details">
                 <pre>{exportResultDialog.details}</pre>
               </div>
             )}
             {exportResultDialog.outputDir && (
-              <p className="export-result-output">
-                出力先: <span className="output-path">{exportResultDialog.outputDir}</span>
-              </p>
+              <div className="export-result-output">
+                <FolderIcon size={14} />
+                <span className="output-path">{exportResultDialog.outputDir}</span>
+              </div>
             )}
             <div className="modal-footer">
               {exportResultDialog.outputDir && (
@@ -3953,11 +3768,11 @@ function App() {
                   className="btn-epub btn-small"
                   onClick={() => {
                     closeExportResultDialog();
-                    handlePreviewModeChange('epub');
+                    setActiveTab('output');
                   }}
                 >
                   <BookIcon size={14} />
-                  EPUBを生成
+                  出力タブへ
                 </button>
               )}
               <button
@@ -3970,6 +3785,43 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* チャプターPDF生成 進捗（独立した処理中ダイアログ） */}
+      {tachimiPdfProgress && (() => {
+        const percent = tachimiPdfProgress.indeterminate || tachimiPdfProgress.total <= 0
+          ? 0
+          : Math.min(100, Math.round((tachimiPdfProgress.current / tachimiPdfProgress.total) * 100));
+        const phaseLabel =
+          tachimiPdfProgress.phase === 'prepare' ? '準備中'
+          : tachimiPdfProgress.phase === 'stage' ? 'ページ整理中'
+          : tachimiPdfProgress.phase === 'generate' ? 'PDF生成中'
+          : tachimiPdfProgress.phase === 'finalize' ? '確認中'
+          : '完了';
+        return (
+          <div className="modal-overlay epub-progress-overlay">
+            <div className="epub-progress-dialog">
+              <div className="epub-progress-title">PDFを生成中</div>
+              <div className="epub-progress-phase">{phaseLabel}</div>
+              <div className="epub-progress-bar-track">
+                <div
+                  className={`epub-progress-bar-fill ${tachimiPdfProgress.indeterminate ? 'indeterminate' : ''}`}
+                  style={tachimiPdfProgress.indeterminate ? undefined : { width: `${percent}%` }}
+                />
+              </div>
+              <div className="epub-progress-meta">
+                {tachimiPdfProgress.indeterminate || tachimiPdfProgress.total <= 0 ? (
+                  <span>{tachimiPdfProgress.message}</span>
+                ) : (
+                  <>
+                    <span>{tachimiPdfProgress.current} / {tachimiPdfProgress.total} ページ</span>
+                    <span>{percent}%</span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* PDFラスタライズ進捗オーバーレイ */}
       {pdfRasterizeProgress && (() => {
@@ -4018,6 +3870,7 @@ function App() {
       {deleteConfirmAnim.shouldRender && (
         <div className={`modal-overlay ${deleteConfirmAnim.isClosing ? 'closing' : ''}`}>
           <div className={`modal-content delete-confirm-dialog ${deleteConfirmAnim.isClosing ? 'closing' : ''}`}>
+            <div className="dialog-icon danger"><TrashIcon size={26} /></div>
             <h2>
               {deleteConfirmDialog.type === 'all'
                 ? 'すべて削除'
@@ -4067,6 +3920,7 @@ function App() {
             className={`modal-content unsaved-dialog ${closeConfirmAnim.isClosing ? 'closing' : ''}`}
             onClick={(e) => e.stopPropagation()}
           >
+            <div className="dialog-icon warning"><AlertTriangleIcon size={26} /></div>
             <h2>アプリを終了しますか？</h2>
             <p>
               プロジェクトに未保存の変更があります。
@@ -4177,13 +4031,6 @@ function App() {
           title={isDarkMode ? 'ライトモードに切り替え' : 'ダークモードに切り替え'}
         >
           {isDarkMode ? <MoonIcon size={20} /> : <SunIcon size={20} />}
-        </button>
-        <button
-          className="hamburger-footer-btn"
-          onClick={() => {}}
-          title="環境設定"
-        >
-          <SettingsIcon size={20} />
         </button>
       </div>
     </div>

@@ -53,6 +53,7 @@ interface AppState {
   selectedPageIds: string[];  // 複数選択
   viewMode: 'selection' | 'all';
   thumbnailSize: ThumbnailSize;
+  activeTab: 'compose' | 'bleed' | 'output';  // 工程タブ（台割/断ち切り/出力）
 
   // 検証コンテキスト（mismatch tooltip 表示用の最頻値情報）
   validationContext: ValidationContext;
@@ -102,6 +103,7 @@ interface AppState {
   clearPageSelection: () => void;
   removeSelectedPages: () => void;  // 一括削除
   setThumbnailSize: (size: ThumbnailSize) => void;
+  setActiveTab: (tab: 'compose' | 'bleed' | 'output') => void;  // 工程タブ切替
 
   // アクション: サムネイル
   updatePageThumbnail: (pageId: string, cacheKey: string, cachePath: string) => void;
@@ -358,6 +360,7 @@ export const useStore = create<AppState>((set, get) => {
   selectedPageIds: [],
   viewMode: 'all',
   thumbnailSize: 'medium',
+  activeTab: 'compose',
 
   validationContext: { cover: {}, body: {} },
 
@@ -921,6 +924,10 @@ export const useStore = create<AppState>((set, get) => {
     set({ thumbnailSize: size });
   },
 
+  setActiveTab: (tab) => {
+    set({ activeTab: tab });
+  },
+
   // サムネイル更新（キャッシュキーとパスを保存、base64データは保存しない）
   updatePageThumbnail: (pageId, cacheKey, cachePath) => {
     set((state) => ({
@@ -1049,6 +1056,7 @@ export const useStore = create<AppState>((set, get) => {
       selectedPageId: null,
       selectedPageIds: [],
       viewMode: 'all',
+      activeTab: 'compose',
     });
   },
 

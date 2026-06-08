@@ -1,6 +1,6 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import type { Chapter, Page, ThumbnailResult } from '../types';
+import type { Chapter, Page } from '../types';
 import type { ExportOptions, BleedRegion, BleedSettings } from '../components/modals/ExportModal';
 import { regionToMargins } from '../components/modals/ExportModal';
 
@@ -18,62 +18,6 @@ interface ExportResultDialog {
   outputDir?: string;
   isError?: boolean;
   exportedPages?: { filename: string; pageType: string; chapterName?: string; label?: string }[];
-}
-
-export interface BleedQueueItem {
-  kind: 'cover' | 'body' | 'chapter';
-  chapterId?: string; // kind === 'chapter' のときに必須
-  label: string;
-  thumbnailPath: string;
-  filePath: string;
-}
-
-// 断ち切りキューの完了後アクション: 通常エクスポート or TachimiPDF生成
-type BleedPurpose = 'export' | 'tachimi';
-
-interface BleedEditorState {
-  purpose: BleedPurpose;
-  pendingExportOptions: ExportOptions | null;
-  mode: 'bulk' | 'per-chapter';
-  queue: BleedQueueItem[];
-  currentIndex: number; // -1 で未開始／完了
-  coverRegion: BleedRegion | null;
-  bodyRegion: BleedRegion | null;
-  perChapterRegions: Record<string, BleedRegion>;
-}
-
-const INITIAL_BLEED_STATE: BleedEditorState = {
-  purpose: 'export',
-  pendingExportOptions: null,
-  mode: 'bulk',
-  queue: [],
-  currentIndex: -1,
-  coverRegion: null,
-  bodyRegion: null,
-  perChapterRegions: {},
-};
-
-const ZERO_REGION: BleedRegion = {
-  left: 0, top: 0, right: 0, bottom: 0,
-  refWidth: 0, refHeight: 0,
-  tachikiriType: 'none',
-  strokeColor: 'black',
-  fillColor: 'white',
-  fillOpacity: 50,
-};
-
-// 完了時の bleedSettings を構築
-function buildBleedSettings(state: BleedEditorState): BleedSettings | undefined {
-  const { mode, coverRegion, bodyRegion, perChapterRegions } = state;
-  const hasAny = coverRegion || bodyRegion || Object.keys(perChapterRegions).length > 0;
-  if (!hasAny) return undefined;
-  return {
-    enabled: true,
-    mode,
-    cover: coverRegion ?? ZERO_REGION,
-    body: bodyRegion ?? ZERO_REGION,
-    perChapter: mode === 'per-chapter' ? perChapterRegions : undefined,
-  };
 }
 
 // 断ち切り適用: chapterType/chapterId から該当 BleedRegion を取得
@@ -179,11 +123,7 @@ function buildChapterTiffFileName(
 }
 
 export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
-  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
-  const [bleedEditorState, setBleedEditorState] = useState<BleedEditorState>(INITIAL_BLEED_STATE);
   const [exportResultDialog, setExportResultDialog] = useState<ExportResultDialog>({ show: false, title: '', message: '' });
-  // TachimiPDF用: 断ち切りキュー完了時に呼ぶコールバック（bleedSettings を受け取る）
-  const tachimiCompleteRef = useRef<((bleedSettings: BleedSettings | undefined) => void) | null>(null);
 
   const handleExport = useCallback(async (options: ExportOptions) => {
     const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, renameMode, startNumber, digits, prefix, perChapterSettings, bleedSettings } = options;
@@ -596,219 +536,15 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
     }
   }, [chapters, allPages]);
 
-  // 指定PSDのサムネイルパスを確保（キャッシュ済みならそれを返し、なければ生成）
-  const ensureThumbnail = useCallback(async (page: Page): Promise<string | null> => {
-    if (!page.filePath) return null;
-    if (page.thumbnailCachePath) return page.thumbnailCachePath;
-    try {
-      const result = await invoke<ThumbnailResult>('generate_thumbnail', {
-        filePath: page.filePath,
-        modifiedTime: page.modifiedTime ?? 0,
-      });
-      return result.cache_path;
-    } catch (e) {
-      console.error('ensureThumbnail failed:', e);
-      return null;
-    }
-  }, []);
-
-  // 断ち切りキュー（cover/body or 本文ごと）を構築
-  const buildBleedQueue = useCallback(async (bleedMode: 'bulk' | 'per-chapter'): Promise<BleedQueueItem[]> => {
-    // 各チャプターから先頭の画像ファイルページを探す（PSD優先＝ガイド自動読込が効く）
-    const findFirstFilePage = (chapter: Chapter): Page | null => {
-      let firstFile: Page | null = null;
-      for (const page of chapter.pages) {
-        if (page.filePath && page.fileType) {
-          if (page.fileType === 'psd') return page;
-          if (!firstFile) firstFile = page;
-        }
-      }
-      return firstFile;
-    };
-
-    const queue: BleedQueueItem[] = [];
-
-    // 表紙チャプターの先頭ファイルページ
-    for (const chapter of chapters) {
-      if (chapter.type !== 'cover') continue;
-      const fp = findFirstFilePage(chapter);
-      if (fp && fp.filePath) {
-        const thumb = await ensureThumbnail(fp);
-        if (thumb) {
-          queue.push({ kind: 'cover', label: '表紙', thumbnailPath: thumb, filePath: fp.filePath });
-          break;
-        }
-      }
-    }
-
-    if (bleedMode === 'per-chapter') {
-      // 本文(chapter)タイプのチャプターごとに先頭ファイルページを追加
-      for (const chapter of chapters) {
-        if (chapter.type !== 'chapter') continue;
-        const fp = findFirstFilePage(chapter);
-        if (fp && fp.filePath) {
-          const thumb = await ensureThumbnail(fp);
-          if (thumb) {
-            queue.push({
-              kind: 'chapter',
-              chapterId: chapter.id,
-              label: chapter.name,
-              thumbnailPath: thumb,
-              filePath: fp.filePath,
-            });
-          }
-        }
-      }
-    } else {
-      // bulk モード: 本文（cover以外の先頭ファイルページ）を1件追加
-      for (const chapter of chapters) {
-        if (chapter.type === 'cover') continue;
-        const fp = findFirstFilePage(chapter);
-        if (fp && fp.filePath) {
-          const thumb = await ensureThumbnail(fp);
-          if (thumb) {
-            queue.push({ kind: 'body', label: '本文', thumbnailPath: thumb, filePath: fp.filePath });
-            break;
-          }
-        }
-      }
-    }
-
-    return queue;
-  }, [chapters, ensureThumbnail]);
-
-  // エクスポート前に断ち切り確認が必要か判定し、必要ならエディタを表示
-  const handlePreExport = useCallback(async (options: ExportOptions) => {
-    const { convertToTiff, convertToJpg, bleedMode } = options;
-    // JPEG/TIFF いずれも断ち切りエディタを経由（JPEGはネイティブで断ち切り対応）
-    const needsBleedEditor = convertToTiff || convertToJpg;
-
-    // 変換しないならそのままエクスポート
-    if (!needsBleedEditor) {
-      handleExport(options);
-      return;
-    }
-
-    const queue = await buildBleedQueue(bleedMode);
-
-    if (queue.length === 0) {
-      // 画像ファイルなし → そのままエクスポート
-      handleExport(options);
-      return;
-    }
-
-    tachimiCompleteRef.current = null;
-    setBleedEditorState({
-      purpose: 'export',
-      pendingExportOptions: options,
-      mode: bleedMode,
-      queue,
-      currentIndex: 0,
-      coverRegion: null,
-      bodyRegion: null,
-      perChapterRegions: {},
-    });
-  }, [handleExport, buildBleedQueue]);
-
-  // TachimiPDF生成前に断ち切りエディタを表示し、完了で onComplete(bleedSettings) を呼ぶ
-  const startTachimiBleed = useCallback(async (
-    bleedMode: 'bulk' | 'per-chapter',
-    onComplete: (bleedSettings: BleedSettings | undefined) => void
-  ) => {
-    const queue = await buildBleedQueue(bleedMode);
-    if (queue.length === 0) {
-      // 画像ファイルなし → 断ち切りなしでそのまま続行
-      onComplete(undefined);
-      return;
-    }
-    tachimiCompleteRef.current = onComplete;
-    setBleedEditorState({
-      purpose: 'tachimi',
-      pendingExportOptions: null,
-      mode: bleedMode,
-      queue,
-      currentIndex: 0,
-      coverRegion: null,
-      bodyRegion: null,
-      perChapterRegions: {},
-    });
-  }, [buildBleedQueue]);
-
-  // キュー次ステップ進行 or 完了アクション実行（purpose で分岐）
-  const advanceOrFinish = useCallback((nextState: BleedEditorState) => {
-    if (nextState.currentIndex >= nextState.queue.length) {
-      const bleedSettings = buildBleedSettings(nextState);
-      if (nextState.purpose === 'tachimi') {
-        const cb = tachimiCompleteRef.current;
-        tachimiCompleteRef.current = null;
-        if (cb) setTimeout(() => cb(bleedSettings), 0);
-      } else {
-        const opts = nextState.pendingExportOptions!;
-        setTimeout(() => handleExport({ ...opts, bleedSettings }), 0);
-      }
-      return { ...INITIAL_BLEED_STATE };
-    }
-    return nextState;
-  }, [handleExport]);
-
-  // 断ち切りエディタ: 適用コールバック
-  const handleBleedApply = useCallback((region: BleedRegion) => {
-    setBleedEditorState(state => {
-      if (state.currentIndex < 0 || state.currentIndex >= state.queue.length) return state;
-      const item = state.queue[state.currentIndex];
-      const next: BleedEditorState = { ...state };
-      if (item.kind === 'cover') {
-        next.coverRegion = region;
-      } else if (item.kind === 'body') {
-        next.bodyRegion = region;
-      } else if (item.kind === 'chapter' && item.chapterId) {
-        next.perChapterRegions = { ...state.perChapterRegions, [item.chapterId]: region };
-      }
-      next.currentIndex = state.currentIndex + 1;
-      return advanceOrFinish(next);
-    });
-  }, [advanceOrFinish]);
-
-  // 断ち切りエディタ: スキップコールバック
-  const handleBleedSkip = useCallback(() => {
-    setBleedEditorState(state => {
-      if (state.currentIndex < 0 || state.currentIndex >= state.queue.length) return state;
-      const next: BleedEditorState = { ...state, currentIndex: state.currentIndex + 1 };
-      return advanceOrFinish(next);
-    });
-  }, [advanceOrFinish]);
-
-  // 断ち切りエディタ: キャンセル（エクスポート／PDF生成 中止）
-  const handleBleedCancel = useCallback(() => {
-    tachimiCompleteRef.current = null;
-    setBleedEditorState(INITIAL_BLEED_STATE);
-  }, []);
-
-  const openExportModal = useCallback(() => {
-    setIsExportModalOpen(true);
-  }, []);
-
-  const closeExportModal = useCallback(() => {
-    setIsExportModalOpen(false);
-  }, []);
-
   const closeExportResultDialog = useCallback(() => {
     setExportResultDialog({ show: false, title: '', message: '' });
   }, []);
 
   return {
     // State
-    isExportModalOpen,
-    bleedEditorState,
     exportResultDialog,
     // Actions
-    openExportModal,
-    closeExportModal,
-    handlePreExport,
-    startTachimiBleed,
-    handleBleedApply,
-    handleBleedSkip,
-    handleBleedCancel,
+    handleExport,
     setExportResultDialog,
     closeExportResultDialog,
   };

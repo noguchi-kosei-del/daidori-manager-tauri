@@ -1,8 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { invoke } from '@tauri-apps/api/core';
 import { BleedRegion, TachikiriType, BleedColor, BLEED_COLOR_MAP } from './ExportModal';
-import { LockIcon, UnlockIcon, ResetIcon } from '../../icons';
+import { LockIcon, UnlockIcon, ResetIcon, AlertTriangleIcon } from '../../icons';
 import { useModalAnimation } from '../../hooks';
 
 // 6モードカード定義（Tachimi準拠）
@@ -35,6 +36,20 @@ interface BleedEditorModalProps {
   onApply: (region: BleedRegion) => void;
   onSkip: () => void;
   onCancel: () => void;
+  // 断ち切りタブからの再利用時にボタン文言と初期値を差し替える（既定は従来のエクスポート用途）
+  applyLabel?: string;
+  skipLabel?: string;
+  initialRegion?: BleedRegion | null;
+  // 断ち切りタブ内で中央＋右パネルとしてインライン表示する（全画面モーダルにしない）
+  embedded?: boolean;
+  // 同一対象の別ページへのページ送り（黒ベタ等でトンボが見えない時用）。1件のみなら未指定
+  pageNav?: {
+    index: number;
+    total: number;
+    label?: string;
+    onPrev: () => void;
+    onNext: () => void;
+  };
 }
 
 export function BleedEditorModal({
@@ -45,6 +60,11 @@ export function BleedEditorModal({
   onApply,
   onSkip,
   onCancel,
+  applyLabel = 'エクスポート',
+  skipLabel = 'スキップしてエクスポート',
+  initialRegion = null,
+  embedded = false,
+  pageNav,
 }: BleedEditorModalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -78,19 +98,41 @@ export function BleedEditorModal({
   useEffect(() => {
     if (isOpen) {
       setGuides([]);
-      setGuidesLocked(false);
       setRulerDrag(null);
       setGuideDrag(null);
-      setSelection(null);
       isDragging.current = false;
       setShowCancelConfirm(false);
-      setAutoDetected(false);
-      setTachikiriType('crop_only');
-      setStrokeColor('black');
-      setFillColor('white');
-      setFillOpacity(50);
+      if (initialRegion) {
+        // 既存設定の復元（断ち切りタブで再編集する場合）
+        setTachikiriType(initialRegion.tachikiriType);
+        setStrokeColor(initialRegion.strokeColor);
+        setFillColor(initialRegion.fillColor);
+        setFillOpacity(initialRegion.fillOpacity);
+        if (initialRegion.tachikiriType !== 'none' && initialRegion.right > initialRegion.left && initialRegion.bottom > initialRegion.top) {
+          setSelection({
+            left: initialRegion.left,
+            top: initialRegion.top,
+            right: initialRegion.right,
+            bottom: initialRegion.bottom,
+          });
+          setGuidesLocked(true);
+        } else {
+          setSelection(null);
+          setGuidesLocked(false);
+        }
+        setAutoDetected(false);
+      } else {
+        setGuidesLocked(false);
+        setSelection(null);
+        setAutoDetected(false);
+        setTachikiriType('crop_only');
+        setStrokeColor('black');
+        setFillColor('white');
+        setFillOpacity(50);
+      }
     }
-  }, [isOpen, originalFilePath]);
+    // originalFilePath は依存に入れない（ページ送りで選択・設定がリセットされないように）
+  }, [isOpen, initialRegion]);
 
   // 元画像サイズ取得
   useEffect(() => {
@@ -373,9 +415,8 @@ export function BleedEditorModal({
   const { shouldRender, isClosing } = useModalAnimation(isOpen);
   if (!shouldRender) return null;
 
-  return (
-    <div className={`modal-overlay bleed-editor-overlay ${isClosing ? 'closing' : ''}`}>
-      <div className={`bleed-editor-modal ${isClosing ? 'closing' : ''}`} onClick={(e) => e.stopPropagation()}>
+  const editorBody = (
+    <>
         <div className="bleed-editor-header">
           <h2>{label}の断ち切り範囲設定</h2>
           <div className="bleed-editor-hint">{hint}</div>
@@ -485,6 +526,34 @@ export function BleedEditorModal({
             {originalSize && (
               <div className="bleed-editor-image-size">元画像: {originalSize.width} x {originalSize.height}</div>
             )}
+
+            {pageNav && pageNav.total > 1 && (
+              <div className="bleed-page-nav">
+                <div className="bleed-page-nav-head">プレビューするページ</div>
+                <div className="bleed-page-nav-row">
+                  <button
+                    type="button"
+                    className="bleed-page-nav-btn"
+                    onClick={pageNav.onPrev}
+                    disabled={pageNav.index <= 0}
+                    title="前のページ"
+                  >‹</button>
+                  <span className="bleed-page-nav-count">{pageNav.index + 1} / {pageNav.total}</span>
+                  <button
+                    type="button"
+                    className="bleed-page-nav-btn"
+                    onClick={pageNav.onNext}
+                    disabled={pageNav.index >= pageNav.total - 1}
+                    title="次のページ"
+                  >›</button>
+                </div>
+                {pageNav.label && (
+                  <div className="bleed-page-nav-name" title={pageNav.label}>{pageNav.label}</div>
+                )}
+                <div className="bleed-page-nav-hint">トンボが見えるページで設定できます</div>
+              </div>
+            )}
+
             <button
               className={`btn-small bleed-lock-btn ${guidesLocked ? 'active' : ''}`}
               onClick={toggleLock}
@@ -560,27 +629,46 @@ export function BleedEditorModal({
           <div style={{ flex: 1 }} />
           <button className="btn-secondary btn-small" onClick={() => setShowCancelConfirm(true)}>キャンセル</button>
           <button className="btn-primary btn-small" onClick={onSkip} disabled={!!hasValidSelection}>
-            スキップしてエクスポート
+            {skipLabel}
           </button>
           <button className="btn-primary btn-small" onClick={() => region && onApply(region)} disabled={!canApply}>
-            エクスポート
+            {applyLabel}
           </button>
         </div>
-      </div>
+    </>
+  );
 
-      {/* キャンセル確認ダイアログ */}
-      {showCancelConfirm && (
-        <div className="modal-overlay" style={{ zIndex: 10001 }} onClick={() => setShowCancelConfirm(false)}>
-          <div className="modal-content delete-confirm-dialog" onClick={(e) => e.stopPropagation()}>
-            <h2>エクスポートをキャンセルしますか？</h2>
-            <p>断ち切り設定を破棄してエクスポートを中止します。</p>
-            <div className="modal-footer">
-              <button className="btn-secondary btn-small" onClick={() => setShowCancelConfirm(false)}>戻る</button>
-              <button className="btn-danger btn-small" onClick={() => { setShowCancelConfirm(false); onCancel(); }}>キャンセルする</button>
-            </div>
-          </div>
+  const cancelConfirm = showCancelConfirm ? (
+    <div className="modal-overlay" style={{ zIndex: 10001 }} onClick={() => setShowCancelConfirm(false)}>
+      <div className="modal-content delete-confirm-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="dialog-icon warning"><AlertTriangleIcon size={26} /></div>
+        <h2>編集をキャンセルしますか？</h2>
+        <p>断ち切り設定の変更を破棄します。</p>
+        <div className="modal-footer">
+          <button className="btn-secondary btn-small" onClick={() => setShowCancelConfirm(false)}>戻る</button>
+          <button className="btn-danger btn-small" onClick={() => { setShowCancelConfirm(false); onCancel(); }}>キャンセルする</button>
         </div>
-      )}
+      </div>
     </div>
+  ) : null;
+
+  // 断ち切りタブ内インライン表示（中央＝プレビュー / 右＝操作パネル を1ブロックで占有）
+  if (embedded) {
+    return (
+      <div className="bleed-editor-inline">
+        {editorBody}
+        {cancelConfirm}
+      </div>
+    );
+  }
+
+  return createPortal(
+    <div className={`modal-overlay bleed-editor-overlay ${isClosing ? 'closing' : ''}`}>
+      <div className={`bleed-editor-modal ${isClosing ? 'closing' : ''}`} onClick={(e) => e.stopPropagation()}>
+        {editorBody}
+      </div>
+      {cancelConfirm}
+    </div>,
+    document.body
   );
 }

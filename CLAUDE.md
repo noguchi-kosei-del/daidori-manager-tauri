@@ -272,6 +272,54 @@ style-src 'self' 'unsafe-inline'
 
 ## 変更履歴
 
+### 2026-06-08: v1.7.0 工程タブ型UIへの刷新
+
+UIを「工程タブ型」に再設計。上部タブで **台割 / 断ち切り / 出力** の3工程に分け、左の台割ツリー（チャプター/ページ編集）は全工程で常駐、中央＋右パネルがタブで切り替わる。
+
+#### 状態管理
+- `store.ts` に `activeTab: 'compose' | 'bleed' | 'output'` と `setActiveTab` を追加（`resetProject` でも 'compose' にリセット）。
+- 新規 `src/bleedStore.ts`（Zustand）: 断ち切り設定をセッション内で保持し、断ち切りタブ⇄出力タブ⇄PDF生成で共有。**`.daiw` には永続化しない**。`getBleedSettings()` が出力時の `BleedSettings` を構築。新規/プロジェクト読込時に `reset()`。
+
+#### 台割タブ（旧 リスト/見開き）
+- `previewMode` を `'grid' | 'spread'` に縮小（`'epub'` を削除）。リスト/見開きは台割タブ内の見方トグルに降格。
+- 左サイドバー（台割ツリー）は `previewMode !== 'epub'` 条件を撤廃し全工程で常駐。
+- 色/サイズ/dpi 不一致サマリ（`colorModeSummaryBar`）は台割タブ中央に常設（クリックで該当ページへジャンプ）。
+
+#### 断ち切りタブ（新規 `src/components/bleed/BleedTab.tsx`）
+- 出力直前の強制リニアキュー（旧 `useExport` の `handlePreExport`/`startTachimiBleed`/`currentIndex`）を廃止。
+- 一括/本文ごとの対象を一覧表示し、任意の対象で `BleedEditorModal` を開いて編集→`bleedStore` に保存。`BleedEditorModal` に `applyLabel`/`skipLabel`/`initialRegion`（既存設定の復元）を追加。
+
+#### 出力タブ（新規 `src/components/output/OutputTab.tsx`）
+- 旧3入口（ツールバーの JPEG/TIF生成・PDF生成、表示モードのEPUB）を1タブに統合。行き先カードで **JPG／TIFF / EPUB / PDF** を選択。
+- JPG／TIFFは `ExportModal` を `embedded` で埋め込み（断ち切り設定ラジオは非表示＝断ち切りタブ管轄）。EPUBは `EpubMakerView`＋`EpubMetadataModal embedded`。PDFは `bleedStore` の断ち切りを適用して `generate_tachimi_chapter_pdfs`。
+- 出力時の断ち切りは `bleedStore.getBleedSettings()` を `handleExport`/PDF生成へ注入（`resolveBleedRegion`/`buildProcessOptions`/`resolveTiffCropBounds` は不変で流用）。Rust呼び出しのpayloadは無改修。
+
+#### ExportModal の出力形式を3択ラジオ化
+- 「JPEGに変換」「TIFFに変換」の独立チェックボックスを廃し、**そのままコピー（変換なし）/ JPEGに変換 / TIFFに変換** の排他ラジオに。「変換なしコピー＆リネーム」（全TIFF集約フラット化を含む）が明示的な選択肢に。旧「リネームして保存」チェックは廃止し常時リネーム前提（生成は出力先指定で有効）。
+
+#### UI配置の整理（コントロールの文脈化）
+- ヘッダーを1段に。グローバルヘッダーは「アイコン／メニュー／工程タブ／ウィンドウ操作」のみ。2段目ツールバー・折りたたみボタンを廃止。
+- ビュー固有操作はビューア内へ移設。新規 `src/components/preview/ViewerOverlay.tsx`（綴じ方向・ズーム・閲覧モード）を見開き(SpreadViewer)とEPUBプレビュー(EpubMakerView)に重ね、`.viewer-canvas:hover` で出現。ページバー表示切替もビューア下部にホバー出現。
+- リスト/見開きトグルはヘッダーから台割中央へ（`compose-center` で sticky な整えるバーと重ならないよう非スクロール行に配置）。出力タブも `output-center` で行き先バーを非スクロール行化。
+- Photoshopで開くボタンはツールバーから情報パネル上部へ（選択が全PSDのとき表示）。
+- ハンバーガーの空動作だった「設定」ボタンを削除。
+- 断ち切りタブ右サマリに折りたたみトグルを追加し他工程と統一。見開きビューで選択ページの該当スプレッドへ自動移動。EPUBプレビューでも整えるバーを表示。F1閲覧モードは `allowViewer`（台割見開き or 出力）で判定。
+
+#### バージョン
+- `package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を `1.7.0` に更新。
+
+#### 検証
+- `npm run build` 成功 / `cargo check` 成功（Rust無改修・Cargo.lock追従）。
+
+#### 追補（同v1.7.0: 出力UI/ダイアログ/断ち切りの精緻化）
+- 出力タブ JPG/TIFF: 出力形式を**中サイズカード**（原本/JPG/TIFF、色付きバッジ）で先に選ぶ構成に。コピー/移動は「そのままコピー」選択時のみ表示（変換系では原本コピーが成立しないため `useEffect` で `exportMode='copy'` に固定）。各選択肢にアイコン＋選択チェック＋ホバー演出。出力先フォルダは生成ボタン直前に移動。見出しにアイコン（フォルダ/コピー/書き出し/ペン）。`form-group input{width:100%}` がラジオに効いて点が中央化する不具合を `input[type=radio/checkbox]{width:auto}` で打ち消し。2カラムの区切り線（`.form-section` の border-top）を埋め込み時は撤去。
+- 出力タブ PDF: 全ページをチャプター順に並べた**サムネイル一覧プレビュー**＋下部に区切った青い生成バー（EPUBのCTAと同形・中央文言・右に大ボタン）。
+- 上部バー統合: JPG/TIFF・PDFの「チャプター/ページ・断ち切り」サマリを色サマリ（グレー/B4）と同じ帯の右側へ。
+- EPUB: 作成ウィザード(`EpubWizard`)の中央プレビュー全体表示（画像が実領域高さに収まるよう高さチェーン修正）、上部バーにビューア操作を重ね、閲覧モードでの付帯UI/余白を解除。タイトル初期値に既定名「新規プロジェクト」を入れずプレースホルダ表示。CTA文言を中央配置。
+- ダイアログ刷新: `modal-content`/ヘッダー/進捗のグラデ地を廃しフラット化。状態アイコンを円バッジで統一（成功=緑/警告=琥珀/危険=赤/処理中=中央スピナー）。EPUB生成・PDF取り込み・チャプターPDF生成を同一の進捗ダイアログに統一し、**チャプターPDFの進捗を完了ダイアログから分離**（独立表示）。完了/確認ダイアログの端への密着を共通余白(28px)で解消。
+- 断ち切りタブ: 範囲設定を全画面モーダルから**中央＋右パネルがその場で切り替わるインライン表示**に（`BleedEditorModal` に `embedded`）。`createPortal` で `document.body` 直下に描画し、transform 祖先による `position:fixed` の閉じ込め（上端見切れ）を解消。「断ち切りなし」を明示設定したら**設定済み**として扱う（null=未設定と区別）。黒ベタ等でトンボが見えない時のために、同一対象の別ページへ送れる**ページ送り**を右パネルに追加（2ページ以上で表示、選択範囲は保持）。
+- 工程タブ（台割/断ち切り/出力）にアイコンを追加。
+
 ### 2026-06-04: v1.5.9 UI/EPUB/プロジェクト保存まわりの改善
 
 #### バージョン

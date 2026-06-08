@@ -1,0 +1,1 @@
+export { BleedTab } from './BleedTab';
