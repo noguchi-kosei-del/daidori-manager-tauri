@@ -54,16 +54,6 @@ pub struct ProjectFile {
     pub ui_state: Option<SavedUiState>,
 }
 
-// ファイル検証結果
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileValidationResult {
-    pub page_id: String,
-    pub status: String, // "found", "missing", "moved", "modified"
-    pub original_path: String,
-    pub resolved_path: Option<String>,
-    pub suggested_path: Option<String>,
-}
-
 // ページ検証入力（作業中プロジェクト用・絶対パスベースの軽量検証）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageCheckInput {

@@ -68,6 +68,10 @@ export function BleedEditorModal({
 }: BleedEditorModalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  // ページ送り（方向キー / マウスホイール）用に最新の pageNav を保持
+  const pageNavRef = useRef(pageNav);
+  pageNavRef.current = pageNav;
+  const lastWheelTime = useRef(0);
 
   const [originalSize, setOriginalSize] = useState<{ width: number; height: number } | null>(null);
   const [imageBounds, setImageBounds] = useState<{
@@ -319,6 +323,51 @@ export function BleedEditorModal({
     };
   }, [isOpen, rulerDrag, guideDrag, guidesLocked, clientToImageCoord, clientToDisplayCoord, snapToGuides, originalSize]);
 
+  // 方向キーでプレビューページを送る（capture フェーズでグローバルの矢印キー処理＝選択移動を抑止）
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      const n = pageNavRef.current;
+      if (!n || n.total <= 1) return;
+      const el = document.activeElement;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA')) return;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (n.index > 0) n.onPrev();
+      } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (n.index < n.total - 1) n.onNext();
+      }
+    };
+    window.addEventListener('keydown', onKey, { capture: true });
+    return () => window.removeEventListener('keydown', onKey, { capture: true });
+  }, [isOpen]);
+
+  // マウスホイールでプレビューページを送る（プレビュー領域上のスクロール。ページのスクロールは抑止）
+  useEffect(() => {
+    if (!isOpen) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      const n = pageNavRef.current;
+      if (!n || n.total <= 1) return;
+      if (Math.abs(e.deltaY) < 1) return;
+      e.preventDefault();
+      const now = Date.now();
+      if (now - lastWheelTime.current < 150) return; // 1ノッチ=1ページ送りになるようスロットル
+      lastWheelTime.current = now;
+      if (e.deltaY > 0) {
+        if (n.index < n.total - 1) n.onNext();
+      } else {
+        if (n.index > 0) n.onPrev();
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [isOpen]);
+
   // ガイドドラッグ開始
   const handleGuideMouseDown = useCallback((index: number, e: React.MouseEvent) => {
     if (guidesLocked) return;
@@ -369,6 +418,8 @@ export function BleedEditorModal({
         setAutoDetected(false);
       }
     } else {
+      // 確定解除: 選択範囲をクリアしてガイド編集状態に戻す（確定時の薄暗いマスク＋選択枠を消す）
+      setSelection(null);
       setAutoDetected(false);
     }
   }, [guidesLocked, guides]);
@@ -655,7 +706,7 @@ export function BleedEditorModal({
   // 断ち切りタブ内インライン表示（中央＝プレビュー / 右＝操作パネル を1ブロックで占有）
   if (embedded) {
     return (
-      <div className="bleed-editor-inline">
+      <div className={`bleed-editor-inline ${isClosing ? 'closing' : ''}`}>
         {editorBody}
         {cancelConfirm}
       </div>

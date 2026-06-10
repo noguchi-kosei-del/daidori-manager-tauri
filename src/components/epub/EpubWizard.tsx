@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { save } from '@tauri-apps/plugin-dialog';
@@ -22,7 +23,7 @@ import {
   Chapter,
 } from '../../types';
 import { useStore } from '../../store';
-import { BookIcon, CloseIcon, CheckIcon2, NoPageIcon } from '../../icons';
+import { BookIcon, CheckIcon2, NoPageIcon } from '../../icons';
 
 const PUBLISHER_OPTIONS = [
   { name: 'CLLENN', fileAs: 'シレン' },
@@ -243,7 +244,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
   const goNext = () => { if (!currentError) setStep((s) => Math.min(STEPS.length - 1, s + 1)); };
   const goBack = () => setStep((s) => Math.max(0, s - 1));
 
-  return (
+  return createPortal(
     <div className="modal-overlay epub-wizard-overlay">
       <div className="epub-wizard">
         {/* 進行レール */}
@@ -274,7 +275,6 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
               <div className="epub-wizard-step-counter">ステップ {step + 1} / {STEPS.length}</div>
               <h2 className="epub-wizard-title">{STEPS[step]}</h2>
             </div>
-            <button className="epub-wizard-close" onClick={onClose} title="閉じる"><CloseIcon size={18} /></button>
           </header>
 
           <div className="epub-wizard-body" key={step}>
@@ -519,6 +519,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
           <footer className="epub-wizard-footer">
             <div className="epub-wizard-footer-msg">{currentError}</div>
             <div className="epub-wizard-footer-actions">
+              <button className="btn-danger" onClick={onClose} disabled={isGenerating}>キャンセル</button>
               {step > 0 && <button className="btn-secondary" onClick={goBack} disabled={isGenerating}>戻る</button>}
               {step < STEPS.length - 1 ? (
                 <button className="btn-primary" onClick={goNext} disabled={!!currentError}>次へ</button>
@@ -550,6 +551,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
           </div>
         </div>
       )}
-    </div>
+    </div>,
+    document.body
   );
 }

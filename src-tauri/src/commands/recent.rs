@@ -1,37 +1,12 @@
 use crate::types::RecentFile;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 // 設定ディレクトリを取得
 fn get_config_path() -> Result<PathBuf, String> {
     dirs::config_dir()
         .map(|p| p.join("daidori-manager"))
         .ok_or_else(|| "設定ディレクトリを特定できません".to_string())
-}
-
-// 最近使ったファイル一覧を取得
-#[tauri::command]
-pub async fn get_recent_files() -> Result<Vec<RecentFile>, String> {
-    let config_path = get_config_path()?;
-    let recent_path = config_path.join("recent_files.json");
-
-    if !recent_path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let content = fs::read_to_string(&recent_path).map_err(|e| format!("読み込みエラー: {}", e))?;
-    let recent: Vec<RecentFile> = serde_json::from_str(&content).unwrap_or_else(|e| {
-        eprintln!("Warning: recent_files.json parse error: {}", e);
-        Vec::new()
-    });
-
-    // 存在しないファイルをフィルタリング
-    let valid: Vec<RecentFile> = recent
-        .into_iter()
-        .filter(|r| Path::new(&r.path).exists())
-        .collect();
-
-    Ok(valid)
 }
 
 // 最近使ったファイルに追加

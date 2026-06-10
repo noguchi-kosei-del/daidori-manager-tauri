@@ -255,6 +255,36 @@ input, textarea, [contenteditable="true"] {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);
 }
+/* ヘッダー: プロジェクト操作（開く / 保存） */
+.header-project-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+.header-project-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--border-radius);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  -webkit-app-region: no-drag;
+}
+.header-project-btn svg { flex-shrink: 0; }
+.header-project-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
 .project-action-btn {
   display: inline-flex;
   align-items: center;
@@ -707,6 +737,21 @@ body.viewer-mode .hamburger-overlay {
 .chapter-item.dragging {
   opacity: 0.5;
 }
+/* チャプターの追加（マウント時）はふわっと登場、削除は退場してから実削除 */
+@keyframes chapterItemIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes chapterItemOut {
+  from { opacity: 1; transform: translateX(0) scale(1); }
+  to { opacity: 0; transform: translateX(-14px) scale(0.96); }
+}
+.chapter-item { animation: chapterItemIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.chapter-item.chapter-exiting {
+  animation: chapterItemOut 0.22s ease forwards;
+  pointer-events: none;
+}
+.chapter-item.dragging { animation: none; }
 .chapter-header { display: flex; align-items: center; padding: var(--spacing-md); cursor: grab; user-select: none; touch-action: none; position: relative; overflow: hidden; border-radius: var(--border-radius); }
 .chapter-header::before { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: -1; opacity: 0; background: linear-gradient(90deg, var(--color-bg-hover) 0%, transparent 100%); transition: opacity 0.15s ease; }
 .chapter-header:hover::before { opacity: 1; }
@@ -1696,18 +1741,6 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
 
 /* ビューア操作（綴じ/ズーム/閲覧）を上部バーの右側に重ねる（サマリ表示は変更しない） */
 .viewer-controls { display: inline-flex; align-items: center; gap: var(--spacing-xs); }
-.epub-controls-float {
-  position: absolute;
-  top: 5px;
-  right: var(--spacing-md);
-  z-index: 60;
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 4px;
-  border-radius: var(--border-radius);
-  background: var(--color-bg-secondary);
-}
-
 /* topBar の下にプレビュー本体を収める内側キャンバス（高さ確保＋オーバーレイ基準） */
 .epub-canvas-inner {
   flex: 1;
@@ -2150,6 +2183,20 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
   flex-direction: column;
   background: var(--color-bg-primary);
   overflow: hidden;
+  /* 設定ボタンで開く時: 下から上へスライド＋フェードイン */
+  animation: bleedEditorIn 0.3s ease-out;
+}
+/* キャンセル等で閉じる時: 上から下へスライド＋フェードアウト */
+.bleed-editor-inline.closing {
+  animation: bleedEditorOut 0.28s ease-in forwards;
+}
+@keyframes bleedEditorIn {
+  from { opacity: 0; transform: translateY(28px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes bleedEditorOut {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(28px); }
 }
 .bleed-editor-inline .bleed-editor-body { min-height: 0; }
 
@@ -4861,8 +4908,7 @@ body.viewer-mode .color-mode-summary-container {
 
 /* 閲覧モードでは出力タブ/EPUBの付帯UIを隠し、余白帯やクリップも解除して全画面でページのみ表示 */
 body.viewer-mode .output-epub-cta,
-body.viewer-mode .output-target-bar,
-body.viewer-mode .epub-controls-float {
+body.viewer-mode .output-target-bar {
   display: none;
 }
 body.viewer-mode .epub-canvas-inner {
@@ -6685,6 +6731,7 @@ h3.section-heading {
 
 /* ===================== 工程タブUI（台割 / 断ち切り / 出力） ===================== */
 .view-tabs {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -6692,7 +6739,22 @@ h3.section-heading {
   background: var(--color-bg-tertiary);
   border-radius: var(--border-radius-lg);
 }
+/* アクティブタブの背後をヌルッと滑るインジケーター */
+.view-tab-indicator {
+  position: absolute;
+  left: 0;
+  border-radius: var(--border-radius);
+  background: var(--color-accent);
+  box-shadow: 0 1px 4px var(--color-accent-glow);
+  pointer-events: none;
+  z-index: 0;
+  transition:
+    transform 0.32s cubic-bezier(0.4, 0, 0.2, 1),
+    width 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
 .view-tab {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -6705,7 +6767,7 @@ h3.section-heading {
   font-size: var(--font-size-md, 13px);
   font-weight: var(--font-weight-medium);
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: color 0.3s ease, background 0.15s ease;
   white-space: nowrap;
 }
 .view-tab:hover:not(:disabled):not(.active) {
@@ -6713,13 +6775,29 @@ h3.section-heading {
   color: var(--color-text-primary);
 }
 .view-tab.active {
-  background: var(--color-accent);
+  background: transparent;
   color: #fff;
-  box-shadow: 0 1px 4px var(--color-accent-glow);
 }
 .view-tab:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* 工程タブ切替時に中央／右パネルを、トグルの移動方向に合わせてスライドフェードイン
+   （--screen-slide-from は preview-container にタブ移動方向で設定。タブ切替でマウントし直される要素に付与） */
+/* MojiQの指示入れ/校正チェック切替に倣い、opacity を使わず transform のみでスライド。
+   フェード（透け）が無いので切替時のフラッシュが起きない。 */
+@keyframes tabContentSlide {
+  from { transform: translateX(var(--screen-slide-from, 0)); }
+  to { transform: translateX(0); }
+}
+.compose-center,
+.output-center,
+.bleed-tab-area,
+.sidebar-right {
+  /* backwards: 開始フレームを from に固定（カクつき防止）。終了後は transform を残さず
+     none に戻すので、sticky なサマリ帯に影響しない。 */
+  animation: tabContentSlide 0.22s ease-out backwards;
 }
 
 /* ===================== 出力タブ ===================== */
@@ -6730,6 +6808,18 @@ h3.section-heading {
   min-width: 0;
   display: flex;
   flex-direction: column;
+}
+/* 行き先バー下の本体。行き先切替で key により再マウントし、チップ移動方向へスライドフェード */
+@keyframes stageContentSlide {
+  from { transform: translateX(var(--stage-slide-from, 0)); }
+  to { transform: translateX(0); }
+}
+.output-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  animation: stageContentSlide 0.22s ease-out backwards;
 }
 .output-center .preview-area {
   margin-top: 0;
@@ -6765,6 +6855,20 @@ h3.section-heading {
   border-color: var(--color-border-accent);
   color: var(--color-accent);
 }
+/* 行き先バー右端のビューア操作（綴じ方向・ズーム・閲覧モード） */
+.output-target-controls {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 4px;
+  border-radius: var(--border-radius);
+  background: var(--color-bg-secondary);
+  transition: opacity 0.15s ease;
+}
+.output-target-controls.disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
 .output-tab-area { gap: var(--spacing-md); }
 
 /* JPG/TIFF・PDF: 設定を中央の広い領域にまとめる */
@@ -6793,34 +6897,25 @@ h3.section-heading {
   border-bottom: none;
   z-index: auto;
 }
-/* サマリ（チャプター/断ち切り）は枠・背景なしの素のチップとして右側に並べる */
-.output-topbar-row .output-summary-banner {
-  margin: 0;
-  padding: 0;
-  border: none;
-  background: transparent;
-  border-radius: 0;
-  flex-shrink: 0;
-}
 .output-settings-body {
   width: 100%;
   max-width: 900px;
   margin: 0 auto;
-  padding-top: var(--spacing-sm);
+  padding-top: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-lg);
+  gap: var(--spacing-md);
 }
 /* 中央配置: 出力先(全幅) → 2カラム(主設定 / リネーム) → 生成(固定フッター) */
 .output-settings-body .export-modal-embedded .modal-body {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-md);
+  gap: var(--spacing-sm);
 }
 .output-settings-body .export-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: var(--spacing-lg) var(--spacing-xl);
+  gap: var(--spacing-md) var(--spacing-xl);
   align-items: start;
 }
 .output-settings-body .export-col {
@@ -6830,11 +6925,21 @@ h3.section-heading {
   min-width: 0;
 }
 .output-settings-body .export-fullrow { grid-column: 1 / -1; }
+/* 出力サマリ（チャプター/断ち切り）を設定領域の右上・右端に枠なしで寄せる */
+.output-settings-center > .output-summary-banner {
+  align-self: flex-end;
+  flex-direction: row;
+  margin: 0 0 var(--spacing-xs) 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: 0;
+}
 /* 生成ボタンを常時見える位置に固定（スクロール不要に） */
 .output-settings-body .export-modal-embedded .modal-footer {
   justify-content: flex-end;
-  margin-top: var(--spacing-md);
-  padding: var(--spacing-md) 0 0;
+  margin-top: var(--spacing-sm);
+  padding: var(--spacing-sm) 0 0;
   background: none;
   border-top: 1px solid var(--color-border);
 }
@@ -6847,6 +6952,23 @@ h3.section-heading {
 }
 .output-settings-body .export-modal-embedded .modal-footer .btn-primary:hover:not(:disabled) {
   box-shadow: 0 4px 16px var(--color-accent-glow);
+}
+/* JPG/TIFF 設定はスクロールせず1画面に収める: 縦の余白を圧縮 */
+/* padding-top は据え置き（output-topbar-row の margin-top:-xl が上padxlを相殺する前提のため、
+   縮めるとバンド上端が見切れる）。下側だけ詰める。 */
+.output-settings-center:not(.output-pdf-mode) {
+  padding-bottom: var(--spacing-md);
+}
+.output-settings-body .export-modal-embedded .section-heading,
+.output-settings-body .export-modal-embedded .form-section h3.section-heading {
+  margin-bottom: var(--spacing-sm);
+}
+.output-settings-body .export-format-card {
+  padding: var(--spacing-sm) var(--spacing-md);
+  gap: 4px;
+}
+.output-settings-body .export-format-cards {
+  gap: var(--spacing-sm);
 }
 
 /* 出力内容の要約バナー */
@@ -6972,12 +7094,18 @@ h3.section-heading {
   flex-direction: column;
   gap: var(--spacing-sm);
 }
-/* form-group input{width:100%} がラジオ/チェックにも効くのを打ち消す（点が中央化するのを防止） */
+/* form-group input{width:100%; padding; border; transition:all} がラジオ/チェックにも効くのを完全に打ち消す。
+   transition:all + width:auto が flex 内でクリック時に幅をアニメーションさせ「一瞬巨大化」するのを防ぐ。 */
 .export-modal-embedded input[type="radio"],
 .export-modal-embedded input[type="checkbox"] {
   width: auto;
-  flex-shrink: 0;
+  min-width: 0;
+  flex: 0 0 auto;
   margin: 0;
+  padding: 0;
+  border: none;
+  box-shadow: none;
+  transition: none;
 }
 .export-modal-embedded .radio-label {
   position: relative;
@@ -7003,21 +7131,6 @@ h3.section-heading {
   background: var(--color-accent-subtle);
   border-color: var(--color-accent);
   box-shadow: inset 3px 0 0 var(--color-accent);
-}
-/* 選択時のチェック演出 */
-.export-modal-embedded .radio-label:has(input:checked)::after {
-  content: '';
-  position: absolute;
-  top: 10px;
-  right: 12px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--color-accent);
-  /* 白いチェックマーク */
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: center;
 }
 .export-modal-embedded .radio-label.disabled { opacity: 0.45; cursor: not-allowed; }
 
@@ -7055,46 +7168,132 @@ h3.section-heading {
 
 /* PDFタブ: プレビュー(全ページ) + 下に区切った青い生成バー */
 .output-pdf-mode { overflow: hidden; margin-bottom: 0; }
-.output-pdf-preview {
+.output-pdf-preview-shell {
+  position: relative;
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  padding: var(--spacing-md) var(--spacing-md) var(--spacing-lg);
+  width: calc(100% + var(--spacing-xl) + var(--spacing-sm));
+  margin: 0 calc(var(--spacing-sm) * -1) 0 calc(var(--spacing-xl) * -1);
+  display: flex;
+  overflow: hidden;
+}
+.output-pdf-preview-shell.positioning {
+  opacity: 0;
+}
+.output-pdf-preview {
+  --pdf-page-width: clamp(185px, 20.2vw, 317px);
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding: 52px var(--spacing-md) 58px;
+  display: flex;
+  align-items: center;
+  outline: none;
+  overscroll-behavior: contain;
+}
+.output-pdf-preview::-webkit-scrollbar { display: none; }
+.output-pdf-strip {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: max-content;
+  padding: 0 var(--spacing-xl);
+}
+.output-pdf-chapter {
+  --chapter-color: var(--color-accent);
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  min-height: calc(var(--pdf-page-width) * 1.44 + 44px);
+  padding: 38px var(--spacing-md) var(--spacing-md);
+  background: rgba(0, 120, 212, 0.14);
+  background: color-mix(in srgb, var(--chapter-color) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--chapter-color) 36%, transparent);
+}
+.output-pdf-chapter + .output-pdf-chapter {
+  margin-left: 2px;
+}
+.output-pdf-thumb-badge {
+  position: absolute;
+  top: -34px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 14px;
+  border-radius: var(--border-radius-full, 999px);
+  background: var(--chapter-color);
+  color: #fff;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--chapter-color) 34%, rgba(0, 0, 0, 0.18));
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2;
+}
+.output-pdf-thumbs {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+.output-pdf-thumb {
+  position: relative;
+  flex: 0 0 var(--pdf-page-width);
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-lg);
+  align-items: center;
+  gap: 6px;
+  padding: 10px;
+  border-radius: var(--border-radius-sm);
+  background: #fff;
+  background: color-mix(in srgb, var(--chapter-color) 10%, #fff);
+  border: 1px solid color-mix(in srgb, var(--chapter-color) 22%, rgba(0, 0, 0, 0.14));
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
 }
-.output-pdf-chapter { display: flex; flex-direction: column; gap: var(--spacing-sm); }
-.output-pdf-chapter-head { display: flex; align-items: center; gap: var(--spacing-sm); }
-.output-pdf-chapter-badge {
-  padding: 2px 10px;
-  border-radius: var(--border-radius-full, 999px);
-  color: #fff;
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-bold);
-}
-.output-pdf-chapter-name { font-weight: var(--font-weight-medium); color: var(--color-text-primary); }
-.output-pdf-chapter-count { font-size: var(--font-size-xs); color: var(--color-text-muted); }
-.output-pdf-thumbs {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-  gap: var(--spacing-sm);
-}
-.output-pdf-thumb { display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .output-pdf-thumb-img {
   width: 100%;
-  aspect-ratio: 3 / 4;
+  height: calc(var(--pdf-page-width) * 1.34);
   display: flex;
   align-items: center;
   justify-content: center;
   background: #fff;
-  border: 1px solid var(--color-border);
+  border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: var(--border-radius-sm);
   overflow: hidden;
 }
 .output-pdf-thumb-img img { width: 100%; height: 100%; object-fit: contain; }
-.output-pdf-thumb-img .ph { color: #999; font-size: var(--font-size-xs); }
-.output-pdf-thumb-no { font-size: 10px; color: var(--color-text-muted); }
+.output-pdf-thumb-img .ph {
+  color: color-mix(in srgb, var(--chapter-color) 70%, #555);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+}
+.output-pdf-thumb-no {
+  min-width: 28px;
+  padding: 1px 7px;
+  border-radius: var(--border-radius-full, 999px);
+  background: rgba(255, 255, 255, 0.72);
+  color: color-mix(in srgb, var(--chapter-color) 72%, #333);
+  font-size: 11px;
+  font-family: var(--font-family-mono);
+  font-weight: var(--font-weight-bold);
+  text-align: center;
+}
+.output-pdf-nav-bar {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: 18px;
+  z-index: 20;
+}
+.output-pdf-nav-track {
+  height: 12px;
+}
+.output-pdf-nav-handle {
+  height: 10px;
+  width: 30px;
+}
 
 .output-pdf-bar {
   flex-shrink: 0;
@@ -7121,6 +7320,7 @@ h3.section-heading {
   gap: var(--spacing-sm);
   min-width: 220px;
   padding: 12px 40px;
+  border-radius: 999px;
   font-size: var(--font-size-md, 14px);
   font-weight: var(--font-weight-bold);
   white-space: nowrap;
@@ -7147,8 +7347,22 @@ h3.section-heading {
   font-weight: var(--font-weight-bold);
   color: var(--color-text-primary);
 }
-.bleed-tab-mode { display: inline-flex; gap: 2px; padding: 3px; background: var(--color-bg-tertiary); border-radius: var(--border-radius-lg); }
+.bleed-tab-mode { position: relative; display: inline-flex; gap: 2px; padding: 3px; background: var(--color-bg-tertiary); border-radius: var(--border-radius-lg); }
+/* アクティブの背後をヌルッと滑るインジケーター */
+.bleed-tab-mode-indicator {
+  position: absolute;
+  left: 0;
+  border-radius: var(--border-radius);
+  background: var(--color-accent);
+  pointer-events: none;
+  z-index: 0;
+  transition:
+    transform 0.32s cubic-bezier(0.4, 0, 0.2, 1),
+    width 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
 .bleed-tab-mode-btn {
+  position: relative;
+  z-index: 1;
   padding: 5px 14px;
   border: none;
   border-radius: var(--border-radius);
@@ -7157,8 +7371,9 @@ h3.section-heading {
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   cursor: pointer;
+  transition: color 0.3s ease;
 }
-.bleed-tab-mode-btn.active { background: var(--color-accent); color: #fff; }
+.bleed-tab-mode-btn.active { background: transparent; color: #fff; }
 
 .bleed-target-grid {
   display: flex;
@@ -7308,6 +7523,7 @@ h3.section-heading {
   gap: var(--spacing-sm);
   min-width: 220px;
   padding: 12px 40px;
+  border-radius: 999px;
   font-size: var(--font-size-md, 14px);
   font-weight: var(--font-weight-bold);
   white-space: nowrap;
@@ -7393,11 +7609,6 @@ h3.section-heading {
 }
 .epub-wizard-step-counter { font-size: var(--font-size-xs); color: var(--color-accent); font-weight: var(--font-weight-bold); letter-spacing: 0.05em; }
 .epub-wizard-title { font-size: var(--font-size-xl, 18px); margin: 2px 0 0; color: var(--color-text-primary); }
-.epub-wizard-close {
-  border: none; background: transparent; color: var(--color-text-secondary);
-  cursor: pointer; padding: 6px; border-radius: var(--border-radius);
-}
-.epub-wizard-close:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
 
 .epub-wizard-body {
   flex: 1;
@@ -7492,7 +7703,8 @@ h3.section-heading {
 .epub-wizard-footer-msg { font-size: var(--font-size-sm); color: var(--color-warning, #e0a030); }
 .epub-wizard-footer-actions { display: flex; gap: var(--spacing-sm); margin-left: auto; }
 .epub-wizard-footer-actions .btn-primary,
-.epub-wizard-footer-actions .btn-secondary { padding: 9px 24px; }
+.epub-wizard-footer-actions .btn-secondary,
+.epub-wizard-footer-actions .btn-danger { padding: 9px 24px; border-radius: 999px; }
 .epub-wizard-generate { font-weight: var(--font-weight-bold); }
 
 .epub-wizard-progress {
@@ -7577,6 +7789,10 @@ body.light-mode .viewer-pagebar-toggle { background: rgba(255, 255, 255, 0.92); 
   pointer-events: auto;
 }
 .viewer-pagebar-toggle:hover { color: var(--color-text-primary); border-color: var(--color-border-light); }
+/* 台割見開きのページバー＆切替ボタンをEPUB（.epub-canvas-inner）と同じ配置に揃える
+   （ページバーは右に隙間を空け、目ボタンをその隙間・バー高さに合わせて配置） */
+.spread-viewer-container .spread-nav-bar { bottom: 18px; left: 24px; right: 76px; }
+.spread-viewer-container .viewer-pagebar-hotzone { right: 28px; bottom: 12px; }
 
 /* ===================== 台割タブ: 中央レイアウト + リスト/見開きトグル ===================== */
 /* トグルをスクロール領域(preview-area)の外に出し、sticky な整えるバーと重ならないようにする */
@@ -7589,7 +7805,23 @@ body.light-mode .viewer-pagebar-toggle { background: rgba(255, 255, 255, 0.92); 
 .compose-center .preview-area {
   margin-top: 0;
 }
+/* リスト/見開きの本体。サマリ帯の下でトグル方向へスライドフェード（key=previewMode で再マウント） */
+@keyframes composeContentSlide {
+  from { transform: translateX(var(--compose-slide-from, 0)); }
+  to { transform: translateX(0); }
+}
+.compose-stage {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  align-self: stretch; /* 閲覧モードで preview-area が align-items:center になっても全幅を維持 */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  animation: composeContentSlide 0.22s ease-out backwards;
+}
 .compose-view-toggle {
+  position: relative;
   display: inline-flex;
   align-self: flex-start;
   gap: 2px;
@@ -7598,7 +7830,21 @@ body.light-mode .viewer-pagebar-toggle { background: rgba(255, 255, 255, 0.92); 
   background: var(--color-bg-tertiary);
   border-radius: var(--border-radius-lg);
 }
+/* アクティブ表示の背後をヌルッと滑るインジケーター */
+.compose-view-indicator {
+  position: absolute;
+  left: 0;
+  border-radius: var(--border-radius);
+  background: var(--color-accent);
+  pointer-events: none;
+  z-index: 0;
+  transition:
+    transform 0.32s cubic-bezier(0.4, 0, 0.2, 1),
+    width 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
 .compose-view-btn {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-xs);
@@ -7610,10 +7856,35 @@ body.light-mode .viewer-pagebar-toggle { background: rgba(255, 255, 255, 0.92); 
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: color 0.3s ease, background 0.15s ease;
 }
 .compose-view-btn:hover:not(.active) { background: var(--color-bg-hover); color: var(--color-text-primary); }
-.compose-view-btn.active { background: var(--color-accent); color: #fff; }
+.compose-view-btn.active { background: transparent; color: #fff; }
+
+/* 上部バー: リスト/見開きトグル（左）＋ ビューア操作（右、トグルの反対側） */
+.compose-top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: var(--spacing-md) var(--spacing-md) var(--spacing-xs);
+}
+.compose-top-bar .compose-view-toggle {
+  margin: 0;
+  align-self: auto;
+}
+.compose-viewer-controls {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  background: var(--color-bg-tertiary);
+  border-radius: var(--border-radius-lg);
+  transition: opacity 0.15s ease;
+}
+/* 見開き表示以外はグレーアウト（操作不可） */
+.compose-viewer-controls.disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
 
 /* ===================== 情報パネル: Photoshopで開く ===================== */
 .info-photoshop-btn {

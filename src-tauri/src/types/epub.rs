@@ -46,17 +46,6 @@ pub enum EpubPageImageProfileOverride {
     PreserveOriginal,
 }
 
-impl EpubFormat {
-    /// 形式に応じたデフォルトビューポートサイズを返す
-    pub fn default_viewport(&self) -> (u32, u32) {
-        match self {
-            EpubFormat::Kadokawa => (1442, 2048),
-            EpubFormat::Hybrid => (1127, 1600),
-            EpubFormat::Oebps => (1352, 1920),
-        }
-    }
-}
-
 /// ページ綴じ方向
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -217,32 +206,6 @@ pub struct EpubMetadata {
 
 fn default_language() -> String {
     "ja".to_string()
-}
-
-impl EpubMetadata {
-    /// 新規メタデータを作成（UUID自動生成）
-    pub fn new(title: String, publisher: String) -> Self {
-        let format = EpubFormat::default();
-        let (width, height) = format.default_viewport();
-        Self {
-            title,
-            title_file_as: None,
-            authors: Vec::new(),
-            publisher,
-            publisher_file_as: None,
-            language: "ja".to_string(),
-            page_direction: PageDirection::default(),
-            viewport_width: width,
-            viewport_height: height,
-            spread_mode: SpreadMode::default(),
-            orientation: Orientation::default(),
-            book_uuid: uuid::Uuid::new_v4().to_string(),
-            output_format: format,
-            allow_missing_colophon: false,
-            hybrid_css_profile: HybridCssProfile::Current,
-            image_color_policy: EpubImageColorPolicy::Auto,
-        }
-    }
 }
 
 /// EPUBページ情報

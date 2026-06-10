@@ -102,7 +102,6 @@ interface AppState {
   selectPageRange: (fromPageId: string, toPageId: string) => void;  // Shift+クリック用
   clearPageSelection: () => void;
   removeSelectedPages: () => void;  // 一括削除
-  setThumbnailSize: (size: ThumbnailSize) => void;
   setActiveTab: (tab: 'compose' | 'bleed' | 'output') => void;  // 工程タブ切替
 
   // アクション: サムネイル
@@ -128,30 +127,17 @@ interface AppState {
   // アクション: プロジェクト管理
   resetProject: () => void;
 
-  // ヘルパー
-  getAllPages: () => { page: Page; chapter: Chapter; globalIndex: number }[];
-  getTotalPageCount: () => number;
-
   // アクション: EPUB_maker
-  setEpubPages: (pages: EpubPageInfo[]) => void;
-  setEpubMetadata: (metadata: EpubMetadata | null) => void;
-  updateEpubMetadata: (updates: Partial<EpubMetadata>) => void;
-  setEpubCustomCss: (css: string) => void;
   setEpubCurrentSpread: (index: number) => void;
-  setEpubImageFolder: (folder: string | null) => void;
   setEpubSelectedPageId: (id: string | null) => void;
   toggleEpubPageSelection: (pageId: string) => void;
   selectEpubPageRange: (fromPageId: string, toPageId: string) => void;
-  clearEpubPageSelection: () => void;
-  reorderEpubPage: (fromIndex: number, toIndex: number) => void;
   setEpubPageAsCover: (pageId: string) => void;
   setEpubPageAsColophon: (pageId: string) => void;
   clearEpubPageCover: () => void;
   clearEpubPageColophon: (pageId: string) => void;
   setEpubPageImageProfileOverride: (pageId: string, override: EpubPageImageProfileOverride) => void;
   loadEpubFromDaidori: () => void;
-  resetEpubState: () => void;
-  markEpubAsModified: () => void;
 }
 
 // デフォルトのチャプター名
@@ -919,11 +905,6 @@ export const useStore = create<AppState>((set, get) => {
     }));
   },
 
-  // サムネイルサイズ切り替え
-  setThumbnailSize: (size) => {
-    set({ thumbnailSize: size });
-  },
-
   setActiveTab: (tab) => {
     set({ activeTab: tab });
   },
@@ -1024,27 +1005,6 @@ export const useStore = create<AppState>((set, get) => {
     }));
   },
 
-  // 全ページ取得（通し番号付き）
-  getAllPages: () => {
-    const chapters = get().chapters;
-    const result: { page: Page; chapter: Chapter; globalIndex: number }[] = [];
-    let globalIndex = 0;
-
-    for (const chapter of chapters) {
-      for (const page of chapter.pages) {
-        result.push({ page, chapter, globalIndex });
-        globalIndex++;
-      }
-    }
-
-    return result;
-  },
-
-  // 総ページ数
-  getTotalPageCount: () => {
-    return get().chapters.reduce((sum, c) => sum + c.pages.length, 0);
-  },
-
   // プロジェクトをリセット（新規作成）
   resetProject: () => {
     set({
@@ -1061,33 +1021,8 @@ export const useStore = create<AppState>((set, get) => {
   },
 
   // EPUB_makerアクション
-  setEpubPages: (pages) => {
-    set({ epubPages: pages, isEpubModified: true });
-  },
-
-  setEpubMetadata: (metadata) => {
-    set({ epubMetadata: metadata, isEpubModified: true });
-  },
-
-  updateEpubMetadata: (updates) => {
-    set((state) => ({
-      epubMetadata: state.epubMetadata
-        ? { ...state.epubMetadata, ...updates }
-        : null,
-      isEpubModified: true,
-    }));
-  },
-
-  setEpubCustomCss: (css) => {
-    set({ epubCustomCss: css, isEpubModified: true });
-  },
-
   setEpubCurrentSpread: (index) => {
     set({ epubCurrentSpread: index });
-  },
-
-  setEpubImageFolder: (folder) => {
-    set({ epubImageFolder: folder });
   },
 
   setEpubSelectedPageId: (id) => {
@@ -1123,19 +1058,6 @@ export const useStore = create<AppState>((set, get) => {
         epubSelectedPageIds: rangeIds,
         epubSelectedPageId: toPageId,
       };
-    });
-  },
-
-  clearEpubPageSelection: () => {
-    set({ epubSelectedPageIds: [], epubSelectedPageId: null });
-  },
-
-  reorderEpubPage: (fromIndex, toIndex) => {
-    set((state) => {
-      const pages = [...state.epubPages];
-      const [removed] = pages.splice(fromIndex, 1);
-      pages.splice(toIndex, 0, removed);
-      return { epubPages: pages, isEpubModified: true };
     });
   },
 
@@ -1301,20 +1223,4 @@ export const useStore = create<AppState>((set, get) => {
     });
   },
 
-  resetEpubState: () => {
-    set({
-      epubPages: [],
-      epubMetadata: null,
-      epubCustomCss: '',
-      epubCurrentSpread: 0,
-      epubImageFolder: null,
-      epubSelectedPageId: null,
-      epubSelectedPageIds: [],
-      isEpubModified: false,
-    });
-  },
-
-  markEpubAsModified: () => {
-    set({ isEpubModified: true });
-  },
 }});

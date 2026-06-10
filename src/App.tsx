@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import { desktopDir, join } from '@tauri-apps/api/path';
@@ -18,10 +18,11 @@ import type { SortingStrategy } from '@dnd-kit/sortable';
 const noShiftStrategy: SortingStrategy = () => null;
 import { useStore, FileInfo, THUMBNAIL_SIZES } from './store';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useKeyboardShortcuts, useDragHandlers, useExport, resolveBleedRegion, buildProcessOptions, queueThumbnail, useAutoUpdate, scheduleStartupCheck, useModalAnimation } from './hooks';
+import { useKeyboardShortcuts, useDragHandlers, useExport, resolveBleedRegion, buildProcessOptions, queueThumbnail, useAutoUpdate, scheduleStartupCheck, useModalAnimation, useSlidingIndicator } from './hooks';
 import { getVersion } from '@tauri-apps/api/app';
 import { describePhysicalSize, findPaperSize, pixelsToMm } from './utils/paperSize';
 import { expandPdfFiles } from './utils/pdf';
+import { computeSlideDirection } from './utils/slideDirection';
 import {
   Chapter,
   ChapterType,
@@ -40,7 +41,6 @@ import {
 } from './types';
 import {
   FolderIcon,
-  FileIcon,
   PlusIcon,
   PlusCircleIcon,
   SunIcon,
@@ -59,10 +59,13 @@ import {
   AlertTriangleIcon,
   ScissorsIcon,
   ExportIcon,
+  OpenProjectIcon,
+  SaveIcon,
 } from './icons';
 
 // 抽出したコンポーネント
 import { SpreadViewer } from './components/preview/SpreadViewer';
+import { ViewerControls } from './components/preview/ViewerControls';
 import { ThumbnailCard } from './components/preview/ThumbnailCard';
 import { ChapterItem } from './components/sidebar';
 import {
@@ -75,6 +78,7 @@ import { UpdateDialog, SplitFoldersDialog } from './components/modals';
 import type { SplitFolderEntry, SplitFoldersDialogResult, ExportOptions } from './components/modals';
 import { BleedTab } from './components/bleed';
 import { OutputTab } from './components/output';
+import { SlidingIndicator } from './components/SlidingIndicator';
 import { useBleedStore } from './bleedStore';
 import {
   SIDEBAR_PREFIX,
@@ -488,6 +492,33 @@ function App() {
     return saved !== 'false';
   });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  // 断ち切りタブで範囲設定（BleedEditorModal）を開いている間は左の台割ツリーを隠す
+  const [isBleedEditing, setIsBleedEditing] = useState(false);
+  // セグメント型トグルのスライドインジケーター（工程タブ／台割の表示切替をヌルッと移動）
+  const { containerRef: viewTabsRef, rect: tabIndicator } = useSlidingIndicator<HTMLDivElement>(activeTab);
+  const { containerRef: composeViewToggleRef, rect: composeViewIndicator } = useSlidingIndicator<HTMLDivElement>(previewMode);
+  // 画面遷移の向き: 工程タブが右へ移動したら右から、左へ移動したら左からスライドフェード
+  const [screenSlideFrom, setScreenSlideFrom] = useState('0px');
+  // 台割のリスト/見開き切替時のスライド方向
+  const [composeSlideFrom, setComposeSlideFrom] = useState('0px');
+  const handleTabChange = useCallback((tab: typeof activeTab) => {
+    if (tab === activeTab) return;
+    setScreenSlideFrom(computeSlideDirection(tab, activeTab, ['compose', 'bleed', 'output']));
+    setActiveTab(tab);
+  }, [activeTab, setActiveTab]);
+  // チャプター削除はふわっと退場アニメーションさせてから実際に削除する
+  const [exitingChapterIds, setExitingChapterIds] = useState<Set<string>>(new Set());
+  const animateRemoveChapter = useCallback((chapterId: string) => {
+    setExitingChapterIds((prev) => new Set(prev).add(chapterId));
+    window.setTimeout(() => {
+      removeChapter(chapterId);
+      setExitingChapterIds((prev) => {
+        const next = new Set(prev);
+        next.delete(chapterId);
+        return next;
+      });
+    }, 230);
+  }, [removeChapter]);
   const [isInfoSidebarCollapsed, setIsInfoSidebarCollapsed] = useState(() => {
     const saved = localStorage.getItem('daidori_info_sidebar_collapsed');
     return saved === 'true';
@@ -607,6 +638,16 @@ function App() {
   const [showCloseConfirmDialog, setShowCloseConfirmDialog] = useState(false);
   const closeConfirmAnim = useModalAnimation(showCloseConfirmDialog);
   const deleteConfirmAnim = useModalAnimation(deleteConfirmDialog.show);
+  // 「開く / 新規」で未保存変更を破棄するか確認するカスタムダイアログ（Promiseでインラインawaitに対応）
+  const [showDiscardConfirmDialog, setShowDiscardConfirmDialog] = useState(false);
+  const discardConfirmAnim = useModalAnimation(showDiscardConfirmDialog);
+  const discardConfirmResolveRef = useRef<((ok: boolean) => void) | null>(null);
+  const resolveDiscardConfirm = useCallback((ok: boolean) => {
+    setShowDiscardConfirmDialog(false);
+    const resolve = discardConfirmResolveRef.current;
+    discardConfirmResolveRef.current = null;
+    resolve?.(ok);
+  }, []);
   // exportResultDialog はuseExport フック内で管理されているので useModalAnimation 適用は後で（ローカル useEffect で）
 
   // ウィンドウクローズ要求のインターセプト
@@ -1034,12 +1075,12 @@ function App() {
     });
   }, [setExportResultDialog]);
 
-  const confirmDiscardUnsavedChanges = useCallback(async () => {
-    if (!shouldConfirmUnsavedChanges) return true;
-    return await ask(
-      '未保存の変更があります。保存せずに続行しますか？',
-      { title: '未保存の変更', kind: 'warning' }
-    );
+  const confirmDiscardUnsavedChanges = useCallback((): Promise<boolean> => {
+    if (!shouldConfirmUnsavedChanges) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      discardConfirmResolveRef.current = resolve;
+      setShowDiscardConfirmDialog(true);
+    });
   }, [shouldConfirmUnsavedChanges]);
 
   const saveProjectToPath = useCallback(async (targetPath: string): Promise<boolean> => {
@@ -1408,11 +1449,13 @@ function App() {
   };
 
   const handlePreviewModeChange = useCallback((mode: 'grid' | 'spread') => {
+    // 見開き（spread）はリスト（grid）の右側のトグル → 右へ移動なら右から、左なら左からスライド
+    setComposeSlideFrom(computeSlideDirection(mode, previewMode, ['grid', 'spread']));
     if (mode === 'grid') {
       setIsViewerMode(false);
     }
     setPreviewMode(mode);
-  }, []);
+  }, [previewMode]);
 
   // ページバー表示切替（ビューアオーバーレイから呼ぶ。localStorageへ永続化）
   const togglePageBar = useCallback(() => {
@@ -1595,8 +1638,8 @@ function App() {
       });
       return;
     }
-    removeChapter(chapterId);
-  }, [chapters, removeChapter]);
+    animateRemoveChapter(chapterId);
+  }, [chapters, animateRemoveChapter]);
 
   // チャプター複製（読み込み済みファイルごと）
   const handleDuplicateChapter = useCallback((chapterId: string) => {
@@ -2931,11 +2974,12 @@ function App() {
 
               <div className="header-divider" />
               {/* 工程タブ（台割 / 断ち切り / 出力） */}
-              <div className="view-tabs">
+              <div className="view-tabs" ref={viewTabsRef}>
+                <SlidingIndicator rect={tabIndicator} className="view-tab-indicator" />
                 <button
                   type="button"
                   className={`view-tab ${activeTab === 'compose' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('compose')}
+                  onClick={() => handleTabChange('compose')}
                 >
                   <GridViewIcon size={15} />
                   台割
@@ -2943,7 +2987,7 @@ function App() {
                 <button
                   type="button"
                   className={`view-tab ${activeTab === 'bleed' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('bleed')}
+                  onClick={() => handleTabChange('bleed')}
                   disabled={allPages.length === 0}
                 >
                   <ScissorsIcon size={15} />
@@ -2952,11 +2996,32 @@ function App() {
                 <button
                   type="button"
                   className={`view-tab ${activeTab === 'output' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('output')}
+                  onClick={() => handleTabChange('output')}
                   disabled={allPages.length === 0}
                 >
                   <ExportIcon size={15} />
                   出力
+                </button>
+              </div>
+
+              <div className="header-divider" />
+              {/* プロジェクト操作（開く / 保存） */}
+              <div className="header-project-actions">
+                <button
+                  className="header-project-btn"
+                  onClick={() => void handleOpenProject()}
+                  title="プロジェクトを開く (Ctrl+O)"
+                >
+                  <OpenProjectIcon size={18} />
+                  <span>開く</span>
+                </button>
+                <button
+                  className="header-project-btn"
+                  onClick={() => void handleSaveProject()}
+                  title={currentProjectPath ? `保存: ${currentProjectPath}` : 'プロジェクトを保存 (Ctrl+S)'}
+                >
+                  <SaveIcon size={18} />
+                  <span>保存</span>
                 </button>
               </div>
 
@@ -2995,8 +3060,9 @@ function App() {
           </div>
 
           {/* 工程タブに応じたコンテンツ表示 */}
-          <div className="preview-container">
-            {/* 左スパイン: 台割ツリー（全工程で常駐） */}
+          <div className="preview-container" style={{ '--screen-slide-from': screenSlideFrom } as CSSProperties}>
+            {/* 左スパイン: 台割ツリー（台割・出力タブと、断ち切りの一覧表示時に表示。範囲設定中は非表示） */}
+            {(activeTab === 'compose' || activeTab === 'output' || (activeTab === 'bleed' && !isBleedEditing)) && (
             <aside className={`sidebar ${isSidebarCollapsed ? 'collapsed' : ''}`}>
               <div className="sidebar-header">
                 <button
@@ -3024,6 +3090,7 @@ function App() {
                       <ChapterItem
                         key={chapter.id}
                         chapter={chapter}
+                        isExiting={exitingChapterIds.has(chapter.id)}
                         isSelected={chapter.id === selectedChapterId}
                         selectedPageId={selectedPageId}
                         onSelect={() => {
@@ -3112,24 +3179,6 @@ function App() {
                     +AD
                   </button>
                 </div>
-                <div className="project-sidebar-actions">
-                  <button
-                    className="project-action-btn"
-                    onClick={() => void handleOpenProject()}
-                    title="プロジェクトを開く (Ctrl+O)"
-                  >
-                    <FolderIcon size={14} />
-                    <span>開く</span>
-                  </button>
-                  <button
-                    className={`project-action-btn ${isProjectDirty ? 'dirty' : ''}`}
-                    onClick={() => void handleSaveProject()}
-                    title={currentProjectPath ? `保存: ${currentProjectPath}` : 'プロジェクトを保存 (Ctrl+S)'}
-                  >
-                    <FileIcon size={14} />
-                    <span>{isProjectDirty ? '保存*' : '保存'}</span>
-                  </button>
-                </div>
                 <div className="footer-stats">
                   <span className="stats-label">合計</span>
                   <span className="stats-value">{allPages.length}</span>
@@ -3152,28 +3201,43 @@ function App() {
                 </button>
               </div>
             </aside>
+            )}
 
-            {/* 中央＋右パネル: 工程タブで切替（左スパインは常駐） */}
+            {/* 中央＋右パネル: 工程タブで切替（左スパインは台割タブのみ） */}
             {activeTab === 'compose' ? (
             <>
             <div className="compose-center">
-            <div className="compose-view-toggle">
-              <button
-                type="button"
-                className={`compose-view-btn ${previewMode === 'grid' ? 'active' : ''}`}
-                onClick={() => handlePreviewModeChange('grid')}
-              >
-                <GridViewIcon size={14} />
-                <span>リスト</span>
-              </button>
-              <button
-                type="button"
-                className={`compose-view-btn ${previewMode === 'spread' ? 'active' : ''}`}
-                onClick={() => handlePreviewModeChange('spread')}
-              >
-                <BookOpenIcon size={14} />
-                <span>見開き</span>
-              </button>
+            <div className="compose-top-bar">
+              <div className="compose-view-toggle" ref={composeViewToggleRef}>
+                <SlidingIndicator rect={composeViewIndicator} className="compose-view-indicator" />
+                <button
+                  type="button"
+                  className={`compose-view-btn ${previewMode === 'grid' ? 'active' : ''}`}
+                  onClick={() => handlePreviewModeChange('grid')}
+                >
+                  <GridViewIcon size={14} />
+                  <span>リスト</span>
+                </button>
+                <button
+                  type="button"
+                  className={`compose-view-btn ${previewMode === 'spread' ? 'active' : ''}`}
+                  onClick={() => handlePreviewModeChange('spread')}
+                >
+                  <BookOpenIcon size={14} />
+                  <span>見開き</span>
+                </button>
+              </div>
+              {/* 綴じ方向・ズーム・閲覧モード: トグルの反対側（右）。見開き以外・チャプター未読込時はグレーアウト */}
+              <div className={`compose-viewer-controls ${previewMode === 'spread' && displayPages.length > 0 ? '' : 'disabled'}`}>
+                <ViewerControls
+                  bindingDirection={bindingDirection}
+                  onBindingChange={setBindingDirection}
+                  zoom={spreadZoom}
+                  onZoomChange={setSpreadZoom}
+                  onEnterViewerMode={enterViewerMode}
+                  canEnterViewerMode={previewMode === 'spread' && displayPages.length > 0}
+                />
+              </div>
             </div>
             <div className="preview-area" ref={previewAreaRef}>
               {colorModeSummaryBar}
@@ -3198,6 +3262,8 @@ function App() {
                   </button>
                 </div>
               )}
+              {/* リスト/見開き切替時に、トグルの移動方向へスライドフェード（keyで再マウント。サマリ帯は外側なので影響なし） */}
+              <div className="compose-stage" key={previewMode} style={{ '--compose-slide-from': composeSlideFrom } as CSSProperties}>
               {previewMode === 'spread' ? (
               <SpreadViewer
                 key={displayPages.map(p => p.page.id).join(',')}
@@ -3228,8 +3294,6 @@ function App() {
                 zoom={spreadZoom}
                 onZoomChange={setSpreadZoom}
                 bindingDirection={bindingDirection}
-                onBindingChange={setBindingDirection}
-                onEnterViewerMode={enterViewerMode}
                 onTogglePageBar={togglePageBar}
               />
             ) : (
@@ -3460,6 +3524,7 @@ function App() {
             )}
             </div>
             </div>
+            </div>
 
             {/* 右: 選択ページ情報パネル（台割タブ） */}
             <aside className={`sidebar sidebar-right ${isInfoSidebarCollapsed ? 'collapsed' : ''}`}>
@@ -3587,6 +3652,8 @@ function App() {
               <BleedTab
                 isInfoSidebarCollapsed={isInfoSidebarCollapsed}
                 setIsInfoSidebarCollapsed={setIsInfoSidebarCollapsed}
+                onEditingChange={setIsBleedEditing}
+                topBar={colorModeSummaryBar}
               />
             ) : (
               <OutputTab
@@ -3768,7 +3835,7 @@ function App() {
                   className="btn-epub btn-small"
                   onClick={() => {
                     closeExportResultDialog();
-                    setActiveTab('output');
+                    handleTabChange('output');
                   }}
                 >
                   <BookIcon size={14} />
@@ -3897,11 +3964,17 @@ function App() {
                 className="btn-danger btn-small"
                 onClick={() => {
                   if (deleteConfirmDialog.type === 'all') {
-                    clearChapters();
+                    // 全チャプターをふわっと退場させてからクリア
+                    const ids = chapters.map((c) => c.id);
+                    setExitingChapterIds(new Set(ids));
+                    window.setTimeout(() => {
+                      clearChapters();
+                      setExitingChapterIds(new Set());
+                    }, 230);
                   } else if (deleteConfirmDialog.type === 'pages') {
                     removeSelectedPages();
                   } else if (deleteConfirmDialog.chapterId) {
-                    removeChapter(deleteConfirmDialog.chapterId);
+                    animateRemoveChapter(deleteConfirmDialog.chapterId);
                   }
                   setDeleteConfirmDialog({ show: false, type: 'chapter' });
                 }}
@@ -3945,6 +4018,35 @@ function App() {
                 onClick={handleConfirmClose}
               >
                 保存せず終了
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 未保存変更の破棄確認（プロジェクトを開く / 新規作成） */}
+      {discardConfirmAnim.shouldRender && (
+        <div
+          className={`modal-overlay ${discardConfirmAnim.isClosing ? 'closing' : ''}`}
+          onClick={() => resolveDiscardConfirm(false)}
+        >
+          <div
+            className={`modal-content unsaved-dialog ${discardConfirmAnim.isClosing ? 'closing' : ''}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="dialog-icon warning"><AlertTriangleIcon size={26} /></div>
+            <h2>未保存の変更があります</h2>
+            <p>
+              保存していない変更があります。
+              <br />
+              保存せずに続行しますか？
+            </p>
+            <div className="modal-footer">
+              <button className="btn-secondary" onClick={() => resolveDiscardConfirm(false)}>
+                キャンセル
+              </button>
+              <button className="btn-danger" onClick={() => resolveDiscardConfirm(true)}>
+                保存せず続行
               </button>
             </div>
           </div>

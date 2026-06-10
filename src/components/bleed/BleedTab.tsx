@@ -1,7 +1,9 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect, type ReactNode } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { useStore } from '../../store';
 import { useBleedStore } from '../../bleedStore';
+import { useSlidingIndicator } from '../../hooks';
+import { SlidingIndicator } from '../SlidingIndicator';
 import { BleedEditorModal } from '../modals/BleedEditorModal';
 import type { BleedRegion } from '../modals/ExportModal';
 import type { Chapter, Page, ThumbnailResult } from '../../types';
@@ -49,9 +51,13 @@ function pickRepresentative(pages: Page[]): Page | null {
 interface BleedTabProps {
   isInfoSidebarCollapsed: boolean;
   setIsInfoSidebarCollapsed: (collapsed: boolean) => void;
+  // 範囲設定（BleedEditorModal）の開閉を親へ通知（左の台割ツリー表示制御用）
+  onEditingChange: (editing: boolean) => void;
+  // 色/サイズサマリ（台割の preview-area と同じ color-mode-summary-container）
+  topBar?: ReactNode;
 }
 
-export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed }: BleedTabProps) {
+export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, onEditingChange, topBar }: BleedTabProps) {
   const chapters = useStore((s) => s.chapters);
   const {
     mode,
@@ -65,12 +71,31 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed }: 
     reset,
   } = useBleedStore();
 
+  // 一括/本文ごとトグルのスライドインジケーター
+  const { containerRef: modeToggleRef, rect: modeIndicator } = useSlidingIndicator<HTMLDivElement>(mode);
+
   const [editing, setEditing] = useState<{
     target: BleedTarget;
     pageIndex: number;
     thumbnailPath: string;
     initialRegion: BleedRegion | null;
   } | null>(null);
+  // 範囲設定エディタの開閉（閉じる時は退場アニメ→約300ms後に editing をクリア）
+  const [editorOpen, setEditorOpen] = useState(false);
+
+  // 設定→上へスライドして開く / キャンセル等→下へスライドして閉じる。
+  // editing を即 null にせず、退場アニメーション後にクリアする。
+  const requestCloseEditor = useCallback(() => {
+    setEditorOpen(false);
+    window.setTimeout(() => setEditing(null), 300);
+  }, []);
+
+  // 範囲設定の開閉を親へ通知（開いている間は左の台割ツリーを隠す）。
+  // アンマウント時は false に戻して、タブ復帰時の一瞬の非表示を防ぐ。
+  useEffect(() => {
+    onEditingChange(!!editing);
+    return () => onEditingChange(false);
+  }, [editing, onEditingChange]);
 
   // 対象一覧を構築（mode により本文=代表1件 or 本文ごと）
   const targets = useMemo<BleedTarget[]>(() => {
@@ -136,6 +161,7 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed }: 
     const thumb = await ensureThumbnail(target.pages[startIndex] ?? target.page);
     if (!thumb) return;
     setEditing({ target, pageIndex: startIndex, thumbnailPath: thumb, initialRegion: getTargetRegion(target) });
+    setEditorOpen(true);
   }, [ensureThumbnail, getTargetRegion]);
 
   // ページ送り（黒ベタ等でトンボが見えない時に同一対象の別ページを表示）
@@ -162,12 +188,14 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed }: 
       {!editing && (
       <>
       <div className="preview-area bleed-tab-area">
+        {topBar}
         <div className="bleed-tab-header">
           <div className="bleed-tab-title">
             <ScissorsIcon size={18} />
             <span>断ち切り設定</span>
           </div>
-          <div className="bleed-tab-mode">
+          <div className="bleed-tab-mode" ref={modeToggleRef}>
+            <SlidingIndicator rect={modeIndicator} className="bleed-tab-mode-indicator" />
             <button
               type="button"
               className={`bleed-tab-mode-btn ${mode === 'bulk' ? 'active' : ''}`}
@@ -284,7 +312,7 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed }: 
           <BleedEditorModal
             embedded
             key={editing.target.kind === 'chapter' ? `chapter-${editing.target.chapterId}` : editing.target.kind}
-            isOpen={true}
+            isOpen={editorOpen}
             label={editing.target.label}
             thumbnailPath={editing.thumbnailPath}
             originalFilePath={curPage.filePath ?? ''}
@@ -298,9 +326,9 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed }: 
               onPrev: () => { void goToEditorPage(editing.pageIndex - 1); },
               onNext: () => { void goToEditorPage(editing.pageIndex + 1); },
             } : undefined}
-            onApply={(region) => { saveRegion(editing.target, region); setEditing(null); }}
-            onSkip={() => { saveRegion(editing.target, NONE_REGION); setEditing(null); }}
-            onCancel={() => setEditing(null)}
+            onApply={(region) => { saveRegion(editing.target, region); requestCloseEditor(); }}
+            onSkip={() => { saveRegion(editing.target, NONE_REGION); requestCloseEditor(); }}
+            onCancel={() => requestCloseEditor()}
           />
         );
       })()}

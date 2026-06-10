@@ -26,8 +26,6 @@ export function SpreadViewer({
   zoom = 100,
   onZoomChange,
   bindingDirection = 'rtl',
-  onBindingChange,
-  onEnterViewerMode,
   onTogglePageBar,
 }: {
   pages: { page: Page; chapter: Chapter; globalIndex: number }[];
@@ -41,8 +39,6 @@ export function SpreadViewer({
   zoom?: number;
   onZoomChange?: (zoom: number) => void;
   bindingDirection?: 'rtl' | 'ltr';
-  onBindingChange?: (d: 'rtl' | 'ltr') => void;
-  onEnterViewerMode?: () => void;
   onTogglePageBar?: () => void;
 }) {
   const isRTL = bindingDirection === 'rtl';
@@ -509,15 +505,9 @@ export function SpreadViewer({
 
   return (
     <div className="spread-viewer-container viewer-canvas">
-      {/* ビューア操作オーバーレイ（ホバーで出現） */}
-      {onBindingChange && onZoomChange && onEnterViewerMode && onTogglePageBar && (
+      {/* ページバー切替（ホバーで出現）。綴じ/ズーム/閲覧モードは上部バーへ移設 */}
+      {onTogglePageBar && (
         <ViewerOverlay
-          bindingDirection={bindingDirection}
-          onBindingChange={onBindingChange}
-          zoom={zoom}
-          onZoomChange={onZoomChange}
-          onEnterViewerMode={onEnterViewerMode}
-          canEnterViewerMode={pages.length > 0}
           isPageBarVisible={isPageBarVisible}
           onTogglePageBar={onTogglePageBar}
           isViewerMode={isViewerMode}

@@ -1,12 +1,25 @@
-import { useState, useEffect, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  type WheelEvent,
+} from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { useStore } from '../../store';
 import { useBleedStore } from '../../bleedStore';
 import { ExportModal } from '../modals/ExportModal';
 import { EpubMakerView, EpubWizard } from '../epub';
+import { ViewerControls } from '../preview/ViewerControls';
+import { computeSlideDirection } from '../../utils/slideDirection';
 import type { ExportOptions } from '../modals/ExportModal';
 import type { Chapter, EpubMetadata, EpubSplitSettings } from '../../types';
-import { CHAPTER_TYPE_LABELS, CHAPTER_TYPE_COLORS } from '../../types';
+import { CHAPTER_TYPE_LABELS, CHAPTER_TYPE_COLORS, PAGE_TYPE_LABELS } from '../../types';
 import { ExportIcon, BookIcon, PdfIcon, NoPageIcon, ScissorsIcon } from '../../icons';
 
 const TACHIKIRI_LABELS: Record<string, string> = {
@@ -62,11 +75,33 @@ export function OutputTab({
   topBar,
 }: OutputTabProps) {
   const [target, setTarget] = useState<OutputTarget>('image');
+  // 行き先切替時のスライド方向（チップが右へ移動したら右から、左なら左からフェードイン）
+  const [stageSlideFrom, setStageSlideFrom] = useState('0px');
   const [wizardOpen, setWizardOpen] = useState(false);
+  const pdfPreviewRef = useRef<HTMLDivElement | null>(null);
+  const pdfNavTrackRef = useRef<HTMLDivElement>(null);
+  const pdfScrollProgressRef = useRef(1);
+  const hasPdfScrollProgressRef = useRef(false);
+  const suppressPdfScrollProgressRef = useRef(false);
+  const [pdfScrollProgress, setPdfScrollProgress] = useState(1);
+  const [isPdfPreviewPositioned, setIsPdfPreviewPositioned] = useState(true);
+  const [isPdfNavDragging, setIsPdfNavDragging] = useState(false);
   const loadEpubFromDaidori = useStore((s) => s.loadEpubFromDaidori);
   const bleed = useBleedStore();
 
   const totalPages = chapters.reduce((sum, c) => sum + c.pages.length, 0);
+  const pdfPreviewChapters = (() => {
+    let pageNo = 0;
+    return chapters
+      .filter((chapter) => chapter.pages.length > 0)
+      .map((chapter) => ({
+        chapter,
+        pages: chapter.pages.map((page) => {
+          pageNo += 1;
+          return { page, pageNo };
+        }),
+      }));
+  })();
 
   // 断ち切りタブで設定済みの内容を要約（出力前の確認用）
   const bleedSummary = (() => {
@@ -93,8 +128,241 @@ export function OutputTab({
   }, [target, chapters, loadEpubFromDaidori]);
 
   const selectTarget = (t: OutputTarget) => {
+    if (t !== target) {
+      setStageSlideFrom(computeSlideDirection(t, target, ['image', 'epub', 'pdf']));
+    }
+    if (t === 'pdf') {
+      suppressPdfScrollProgressRef.current = true;
+      hasPdfScrollProgressRef.current = false;
+      pdfScrollProgressRef.current = 1;
+      setPdfScrollProgress(1);
+      setIsPdfPreviewPositioned(false);
+    }
     setTarget(t);
   };
+
+  const getPdfScrollDistance = useCallback((el: HTMLDivElement) => {
+    const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+    return Math.max(0, Math.min(maxScroll, el.scrollLeft));
+  }, []);
+
+  const setPdfScrollDistance = useCallback((el: HTMLDivElement, distance: number, behavior: ScrollBehavior = 'auto') => {
+    const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+    const nextDistance = Math.max(0, Math.min(maxScroll, distance));
+    // 初期配置（auto）は即時に右端へ。ユーザー操作（smooth）のみアニメーションさせる。
+    if (behavior === 'smooth') {
+      el.scrollTo({ left: nextDistance, behavior: 'smooth' });
+    } else {
+      el.scrollLeft = nextDistance;
+    }
+    const progress = maxScroll > 0 ? nextDistance / maxScroll : 1;
+    hasPdfScrollProgressRef.current = true;
+    pdfScrollProgressRef.current = progress;
+    setPdfScrollProgress(progress);
+  }, []);
+
+  const restorePdfScrollPosition = useCallback((el: HTMLDivElement) => {
+    const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+    const restoredProgress = 1;
+    setPdfScrollDistance(el, maxScroll * restoredProgress);
+    const progress = maxScroll > 0 ? getPdfScrollDistance(el) / maxScroll : 1;
+    pdfScrollProgressRef.current = progress;
+    setPdfScrollProgress(progress);
+    if (maxScroll > 0 || totalPages <= 1) {
+      suppressPdfScrollProgressRef.current = false;
+      setIsPdfPreviewPositioned(true);
+    }
+  }, [getPdfScrollDistance, setPdfScrollDistance, totalPages]);
+
+  const setPdfPreviewElement = useCallback((node: HTMLDivElement | null) => {
+    pdfPreviewRef.current = node;
+    if (node) restorePdfScrollPosition(node);
+  }, [restorePdfScrollPosition]);
+
+  const updatePdfScrollProgress = useCallback(() => {
+    if (target === 'pdf' && suppressPdfScrollProgressRef.current) return;
+    const el = pdfPreviewRef.current;
+    if (!el) return;
+    const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+    const progress = maxScroll > 0 ? getPdfScrollDistance(el) / maxScroll : 1;
+    hasPdfScrollProgressRef.current = true;
+    pdfScrollProgressRef.current = progress;
+    setPdfScrollProgress(progress);
+  }, [getPdfScrollDistance, isPdfPreviewPositioned, target]);
+
+  const getPdfPageStep = useCallback(() => {
+    const el = pdfPreviewRef.current;
+    if (!el) return 260;
+
+    const thumbs = Array.from(el.querySelectorAll<HTMLElement>('.output-pdf-thumb'));
+    if (thumbs.length >= 2) {
+      const first = thumbs[0].getBoundingClientRect();
+      const second = thumbs[1].getBoundingClientRect();
+      const measuredStep = Math.abs(second.left - first.left);
+      if (measuredStep > 0) return measuredStep;
+    }
+
+    return thumbs[0]?.getBoundingClientRect().width ?? 260;
+  }, []);
+
+  const scrollPdfPreviewByPages = useCallback((pageDelta: number) => {
+    const el = pdfPreviewRef.current;
+    if (!el) return;
+
+    const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+    const step = getPdfPageStep();
+    const currentDistance = getPdfScrollDistance(el);
+    const nextDistance = Math.max(0, Math.min(maxScroll, currentDistance - pageDelta * step));
+    setPdfScrollDistance(el, nextDistance, 'smooth');
+  }, [getPdfPageStep, getPdfScrollDistance, setPdfScrollDistance]);
+
+  const handlePdfPreviewWheel = (event: WheelEvent<HTMLDivElement>) => {
+    const dominantDelta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+    if (dominantDelta === 0) return;
+    scrollPdfPreviewByPages(dominantDelta > 0 ? 1 : -1);
+    event.preventDefault();
+  };
+
+  const handlePdfNavigationKey = useCallback((key: string, scrollTarget?: HTMLDivElement | null) => {
+    const el = scrollTarget ?? pdfPreviewRef.current;
+    if (!el) return false;
+
+    if (key === 'ArrowLeft' || key === 'ArrowDown') {
+      scrollPdfPreviewByPages(1);
+      return true;
+    } else if (key === 'ArrowRight' || key === 'ArrowUp') {
+      scrollPdfPreviewByPages(-1);
+      return true;
+    } else if (key === 'PageDown') {
+      scrollPdfPreviewByPages(4);
+      return true;
+    } else if (key === 'PageUp') {
+      scrollPdfPreviewByPages(-4);
+      return true;
+    } else if (key === 'Home') {
+      setPdfScrollDistance(el, Math.max(0, el.scrollWidth - el.clientWidth), 'smooth');
+      return true;
+    } else if (key === 'End') {
+      setPdfScrollDistance(el, 0, 'smooth');
+      return true;
+    }
+
+    return false;
+  }, [scrollPdfPreviewByPages, setPdfScrollDistance]);
+
+  const handlePdfPreviewKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (handlePdfNavigationKey(event.key, event.currentTarget)) {
+      event.preventDefault();
+    }
+  };
+
+  const scrollPdfPreviewToProgress = useCallback((progress: number) => {
+    const el = pdfPreviewRef.current;
+    if (!el) return;
+    const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+    setPdfScrollDistance(el, Math.max(0, Math.min(1, progress)) * maxScroll, isPdfNavDragging ? 'auto' : 'smooth');
+  }, [isPdfNavDragging, setPdfScrollDistance]);
+
+  const getPdfTrackProgress = useCallback((clientX: number) => {
+    const track = pdfNavTrackRef.current;
+    if (!track) return pdfScrollProgress;
+    const rect = track.getBoundingClientRect();
+    if (rect.width <= 0) return pdfScrollProgress;
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  }, [pdfScrollProgress]);
+
+  const handlePdfNavMouseDown = (event: ReactMouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsPdfNavDragging(true);
+    scrollPdfPreviewToProgress(getPdfTrackProgress(event.clientX));
+  };
+
+  useEffect(() => {
+    if (!isPdfNavDragging) return;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      scrollPdfPreviewToProgress(getPdfTrackProgress(event.clientX));
+    };
+    const handleMouseUp = () => setIsPdfNavDragging(false);
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [getPdfTrackProgress, isPdfNavDragging, scrollPdfPreviewToProgress]);
+
+  useLayoutEffect(() => {
+    if (target !== 'pdf') return;
+
+    const el = pdfPreviewRef.current;
+    if (el) restorePdfScrollPosition(el);
+    const frame = window.requestAnimationFrame(() => {
+      const nextEl = pdfPreviewRef.current;
+      if (nextEl) restorePdfScrollPosition(nextEl);
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [restorePdfScrollPosition, target, totalPages]);
+
+  useEffect(() => {
+    if (target !== 'pdf') return;
+
+    suppressPdfScrollProgressRef.current = true;
+    setIsPdfPreviewPositioned(false);
+
+    let attempts = 0;
+    const interval = window.setInterval(() => {
+      const el = pdfPreviewRef.current;
+      attempts += 1;
+      if (!el) {
+        if (attempts > 12) {
+          suppressPdfScrollProgressRef.current = false;
+          setIsPdfPreviewPositioned(true);
+          window.clearInterval(interval);
+        }
+        return;
+      }
+
+      const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+      if (maxScroll > 0 || totalPages <= 1 || attempts > 12) {
+        const progress = 1;
+        el.scrollLeft = maxScroll * progress;
+        pdfScrollProgressRef.current = maxScroll > 0 ? el.scrollLeft / maxScroll : 1;
+        suppressPdfScrollProgressRef.current = false;
+        setPdfScrollProgress(pdfScrollProgressRef.current);
+        setIsPdfPreviewPositioned(true);
+        window.clearInterval(interval);
+      }
+    }, 16);
+
+    return () => window.clearInterval(interval);
+  }, [target, totalPages]);
+
+  useEffect(() => {
+    if (target !== 'pdf' || totalPages === 0) return;
+
+    const handleDocumentKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+
+      const active = document.activeElement as HTMLElement | null;
+      const isTyping =
+        !!active &&
+        (active.tagName === 'INPUT' ||
+          active.tagName === 'TEXTAREA' ||
+          active.tagName === 'SELECT' ||
+          active.isContentEditable);
+      if (isTyping) return;
+
+      if (handlePdfNavigationKey(event.key)) {
+        event.preventDefault();
+      }
+    };
+
+    document.addEventListener('keydown', handleDocumentKeyDown);
+    return () => document.removeEventListener('keydown', handleDocumentKeyDown);
+  }, [handlePdfNavigationKey, target, totalPages]);
 
   const targetCards: { value: OutputTarget; label: string; desc: string; icon: ReactNode }[] = [
     { value: 'image', label: 'JPG／TIFF', desc: 'JPEG / TIFF / コピー&リネーム', icon: <ExportIcon size={20} /> },
@@ -115,6 +383,17 @@ export function OutputTab({
           <span>{c.label}</span>
         </button>
       ))}
+      {/* ビューア操作（綴じ方向・ズーム・閲覧モード）。EPUB以外はグレーアウト＝操作不可。 */}
+      <div className={`output-target-controls ${target === 'epub' && !isViewerMode ? '' : 'disabled'}`}>
+        <ViewerControls
+          bindingDirection={bindingDirection}
+          onBindingChange={onBindingChange}
+          zoom={zoom}
+          onZoomChange={onZoomChange}
+          onEnterViewerMode={onEnterViewerMode}
+          canEnterViewerMode={target === 'epub' && totalPages > 0}
+        />
+      </div>
     </div>
   );
 
@@ -138,6 +417,8 @@ export function OutputTab({
       {/* 中央: 行き先選択（固定行）＋ 行き先別の本体 */}
       <div className="output-center">
         {targetBar}
+        {/* 行き先（JPG/TIFF・EPUB・PDF）切替時に、チップの移動方向へスライドフェード（keyで再マウント） */}
+        <div className="output-stage" key={target} style={{ '--stage-slide-from': stageSlideFrom } as CSSProperties}>
         {target === 'epub' ? (
           <>
             <EpubMakerView
@@ -148,8 +429,6 @@ export function OutputTab({
               isPageBarVisible={isPageBarVisible}
               bindingDirection={bindingDirection}
               onReplaceFile={onReplaceFile}
-              onBindingChange={onBindingChange}
-              onEnterViewerMode={onEnterViewerMode}
               onTogglePageBar={onTogglePageBar}
               topBar={topBar}
             />
@@ -173,8 +452,8 @@ export function OutputTab({
           <div className={`preview-area output-settings-center ${target === 'pdf' ? 'output-pdf-mode' : ''}`}>
             <div className="output-topbar-row">
               <div className="output-topbar-summary">{topBar}</div>
-              {totalPages > 0 && summaryBanner}
             </div>
+            {totalPages > 0 && summaryBanner}
             {totalPages === 0 ? (
               <div className="spread-viewer-empty">
                 <NoPageIcon size={48} />
@@ -191,36 +470,90 @@ export function OutputTab({
                 />
               </div>
             ) : (
-              // PDF: 全ページをチャプター順に並べたプレビュー（PDFは単ページを順に結合）
-              <div className="output-pdf-preview">
-                {(() => {
-                  let pageNo = 0;
-                  return chapters.map((ch) => (
-                    <section key={ch.id} className="output-pdf-chapter">
-                      <div className="output-pdf-chapter-head">
-                        <span className="output-pdf-chapter-badge" style={{ backgroundColor: CHAPTER_TYPE_COLORS[ch.type] }}>
-                          {CHAPTER_TYPE_LABELS[ch.type]}
+              // PDF: 全ページを単ページカードとして横一列に並べる（チャプター種別色を背景に反映）
+              <div className={`output-pdf-preview-shell ${isPdfPreviewPositioned ? '' : 'positioning'}`}>
+                <div
+                  ref={setPdfPreviewElement}
+                  className="output-pdf-preview"
+                  tabIndex={0}
+                  role="region"
+                  aria-label="PDF生成前の単ページプレビュー"
+                  onScroll={updatePdfScrollProgress}
+                  onWheel={handlePdfPreviewWheel}
+                  onKeyDown={handlePdfPreviewKeyDown}
+                  onMouseDown={(event) => event.currentTarget.focus()}
+                >
+                  <div className="output-pdf-strip" role="list">
+                    {[...pdfPreviewChapters].reverse().map(({ chapter, pages }) => {
+                      const chapterStyle = {
+                        '--chapter-color': CHAPTER_TYPE_COLORS[chapter.type],
+                      } as CSSProperties;
+                      const firstPageNo = pages[0]?.pageNo;
+
+                      return (
+                        <section
+                          key={chapter.id}
+                          className="output-pdf-chapter"
+                          style={chapterStyle}
+                          title={`${chapter.name} / ${pages.length}P`}
+                        >
+                          <div className="output-pdf-thumbs">
+                            {[...pages].reverse().map(({ page, pageNo }) => {
+                              const src = page.thumbnailStatus === 'ready' && page.thumbnailCachePath
+                                ? convertFileSrc(page.thumbnailCachePath)
+                                : null;
+                              const placeholderLabel = page.pageType === 'file'
+                                ? (page.thumbnailStatus === 'error' ? '読込エラー' : '読込中')
+                                : (page.label || PAGE_TYPE_LABELS[page.pageType]);
+
+                              return (
+                                <article
+                                  key={page.id}
+                                  className={`output-pdf-thumb ${pageNo === firstPageNo ? 'chapter-start' : ''}`}
+                                  data-page-type={page.pageType}
+                                  role="listitem"
+                                >
+                                  {pageNo === firstPageNo && (
+                                    <span className="output-pdf-thumb-badge">
+                                      {CHAPTER_TYPE_LABELS[chapter.type]}
+                                    </span>
+                                  )}
+                                  <div className="output-pdf-thumb-img">
+                                    {src ? (
+                                      <img src={src} alt={page.fileName || placeholderLabel} loading="lazy" />
+                                    ) : (
+                                      <span className="ph">{placeholderLabel}</span>
+                                    )}
+                                  </div>
+                                  <span className="output-pdf-thumb-no">{pageNo}</span>
+                                </article>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      );
+                    })}
+                  </div>
+                </div>
+                {totalPages > 1 && (
+                  <div className="output-pdf-nav-bar">
+                    <div
+                      ref={pdfNavTrackRef}
+                      className="spread-nav-track output-pdf-nav-track"
+                      onMouseDown={handlePdfNavMouseDown}
+                    >
+                      <div
+                        className={`spread-nav-handle output-pdf-nav-handle ${isPdfNavDragging ? 'dragging' : ''}`}
+                        style={{ left: `calc(${pdfScrollProgress * 100}% - ${pdfScrollProgress * 30}px)` }}
+                      >
+                        <div className="spread-nav-handle-grip" />
+                        <span className="spread-nav-handle-label">
+                          {Math.max(1, Math.min(totalPages, Math.round((1 - pdfScrollProgress) * (totalPages - 1)) + 1))}p
                         </span>
-                        <span className="output-pdf-chapter-name">{ch.name}</span>
-                        <span className="output-pdf-chapter-count">{ch.pages.length}P</span>
                       </div>
-                      <div className="output-pdf-thumbs">
-                        {ch.pages.map((p) => {
-                          pageNo += 1;
-                          const src = p.thumbnailCachePath ? convertFileSrc(p.thumbnailCachePath) : null;
-                          return (
-                            <div key={p.id} className="output-pdf-thumb">
-                              <div className="output-pdf-thumb-img">
-                                {src ? <img src={src} alt="" loading="lazy" /> : <span className="ph">{p.pageType === 'blank' ? '白紙' : '—'}</span>}
-                              </div>
-                              <span className="output-pdf-thumb-no">{pageNo}</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </section>
-                  ));
-                })()}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -242,6 +575,7 @@ export function OutputTab({
           )}
           </>
         )}
+        </div>
       </div>
 
       {/* EPUB作成ウィザード（モーダル） */}

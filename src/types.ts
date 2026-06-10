@@ -182,13 +182,6 @@ export interface DaidoriProjectFile {
 // EPUB出力形式
 export type EpubFormat = 'kadokawa' | 'hybrid' | 'oebps';
 
-// EPUB形式のラベル
-export const EPUB_FORMAT_LABELS: Record<EpubFormat, string> = {
-  kadokawa: 'KADOKAWA（電書協準拠）',
-  hybrid: 'Hybrid（EPUB2/3両対応）',
-  oebps: 'OEBPS（シンプル）',
-};
-
 // EPUB形式のデフォルトビューポート
 export const EPUB_FORMAT_VIEWPORTS: Record<EpubFormat, { width: number; height: number }> = {
   kadokawa: { width: 1442, height: 2048 },

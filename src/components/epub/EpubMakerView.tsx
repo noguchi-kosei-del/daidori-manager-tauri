@@ -2,7 +2,6 @@ import { useEffect, type ReactNode } from 'react';
 import { useStore } from '../../store';
 import { EpubSpreadPreview } from './EpubSpreadPreview';
 import { NoPageIcon, EyeIcon, EyeOffIcon } from '../../icons';
-import { ViewerControls } from '../preview/ViewerControls';
 
 interface EpubMakerViewProps {
   zoom?: number;
@@ -13,8 +12,6 @@ interface EpubMakerViewProps {
   bindingDirection?: 'rtl' | 'ltr';
   onReplaceFile?: (originalPageId: string) => void;
   topBar?: ReactNode;
-  onBindingChange?: (d: 'rtl' | 'ltr') => void;
-  onEnterViewerMode?: () => void;
   onTogglePageBar?: () => void;
 }
 
@@ -27,8 +24,6 @@ export function EpubMakerView({
   bindingDirection = 'rtl',
   onReplaceFile,
   topBar,
-  onBindingChange,
-  onEnterViewerMode,
   onTogglePageBar,
 }: EpubMakerViewProps) {
   const {
@@ -91,25 +86,11 @@ export function EpubMakerView({
     setEpubCurrentSpread(index);
   };
 
-  const hasControls = !!(onBindingChange && onZoomChange && onEnterViewerMode);
-
   return (
     <div className="preview-area epub-mode-preview">
       {/* 色サマリ（JPG/TIFF・PDFと同じ自然な上部バー） */}
       {topBar}
-      {/* ビューア操作は上部バーの右側に重ねる（絵に被らない） */}
-      {hasControls && epubPages.length > 0 && !isViewerMode && (
-        <div className="epub-controls-float">
-          <ViewerControls
-            bindingDirection={bindingDirection}
-            onBindingChange={onBindingChange!}
-            zoom={zoom}
-            onZoomChange={onZoomChange!}
-            onEnterViewerMode={onEnterViewerMode!}
-            canEnterViewerMode={epubPages.length > 0}
-          />
-        </div>
-      )}
+      {/* ビューア操作（綴じ方向・ズーム・閲覧モード）は行き先バー右側へ移設 */}
       <div id="epub-split-preview-host" className="epub-split-preview-host" />
       {epubPages.length === 0 ? (
         <div className="spread-viewer-empty">

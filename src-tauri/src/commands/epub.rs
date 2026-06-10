@@ -145,18 +145,6 @@ pub fn generate_book_uuid() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// デフォルトメタデータを作成（UUID自動生成・ビューポート自動設定）
-#[tauri::command]
-pub fn create_epub_metadata(title: String, publisher: String) -> EpubMetadata {
-    EpubMetadata::new(title, publisher)
-}
-
-/// 形式に応じたデフォルトビューポートサイズを返す
-#[tauri::command]
-pub fn get_default_viewport(format: EpubFormat) -> (u32, u32) {
-    format.default_viewport()
-}
-
 /// PSDファイル内のガイド線情報を読み取る（リソースID 1032）
 #[tauri::command]
 pub async fn read_psd_guides(path: String) -> Result<Vec<PsdGuide>, String> {

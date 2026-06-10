@@ -7,3 +7,4 @@ export { useExport, resolveBleedRegion, buildProcessOptions } from './useExport'
 export { useAutoUpdate, scheduleStartupCheck } from './useAutoUpdate';
 export type { AutoUpdateState, UpdateState, UpdateInfo, UseAutoUpdateReturn } from './useAutoUpdate';
 export { useModalAnimation } from './useModalAnimation';
+export { useSlidingIndicator } from './useSlidingIndicator';

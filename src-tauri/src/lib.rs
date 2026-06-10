@@ -33,8 +33,7 @@ fn take_pending_open_path(state: tauri::State<PendingOpen>) -> Option<String> {
 
 // Tauri コマンドを再エクスポート
 use commands::epub::{
-    create_epub_metadata, generate_book_uuid, generate_epub, get_default_viewport,
-    get_image_dimensions, read_psd_guides,
+    generate_book_uuid, generate_epub, get_image_dimensions, read_psd_guides,
 };
 use commands::epubcheck::validate_epub_with_epubcheck;
 use commands::export::export_pages;
@@ -42,8 +41,8 @@ use commands::folder::get_folder_contents;
 use commands::jpeg_native::run_native_jpeg_convert;
 use commands::open_file::open_file_with_default_app;
 use commands::pdf::rasterize_pdf;
-use commands::project::{load_project, save_project, validate_pages, validate_project_files};
-use commands::recent::{add_recent_file, get_recent_files};
+use commands::project::{load_project, save_project, validate_pages};
+use commands::recent::add_recent_file;
 use commands::tachimi::{detect_tachimi_exe, generate_tachimi_chapter_pdfs};
 use commands::tiff::{check_photoshop_installed, run_photoshop_tiff_convert};
 use thumbnail::generate_thumbnail;
@@ -136,9 +135,7 @@ pub fn run() {
             export_pages,
             save_project,
             load_project,
-            validate_project_files,
             validate_pages,
-            get_recent_files,
             add_recent_file,
             open_file_with_default_app,
             check_photoshop_installed,
@@ -147,8 +144,6 @@ pub fn run() {
             generate_epub,
             generate_book_uuid,
             get_image_dimensions,
-            create_epub_metadata,
-            get_default_viewport,
             read_psd_guides,
             validate_epub_with_epubcheck,
             detect_tachimi_exe,

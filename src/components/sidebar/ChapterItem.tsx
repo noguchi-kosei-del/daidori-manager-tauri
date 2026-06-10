@@ -12,6 +12,7 @@ const DRAWN_EXTRA_FOLDER_NAMES = new Set(['全書店', 'シーモア', 'Renta!',
 // チャプターアイテム
 export function ChapterItem({
   chapter,
+  isExiting = false,
   isSelected,
   selectedPageId,
   onSelect,
@@ -33,6 +34,7 @@ export function ChapterItem({
   isFileDropTarget = false,
 }: {
   chapter: Chapter;
+  isExiting?: boolean;
   isSelected: boolean;
   selectedPageId: string | null;
   onSelect: () => void;
@@ -178,7 +180,7 @@ export function ChapterItem({
         backgroundColor: chapter.type !== 'chapter' ? `${CHAPTER_TYPE_COLORS[chapter.type]}15` : undefined,
         borderColor: chapter.type !== 'chapter' ? `${CHAPTER_TYPE_COLORS[chapter.type]}40` : undefined,
       }}
-      className={`chapter-item ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${isFileDropTarget ? 'file-drop-target' : ''}`}
+      className={`chapter-item ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${isFileDropTarget ? 'file-drop-target' : ''} ${isExiting ? 'chapter-exiting' : ''}`}
       data-chapter-id={chapter.id}
       onClick={onSelect}
     >

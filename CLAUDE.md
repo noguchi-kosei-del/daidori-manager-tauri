@@ -2609,3 +2609,87 @@ D2. **未保存確認条件の調整** ([src/App.tsx](src/App.tsx)):
 ### バージョン同期
 
 `package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を **`1.6.0`** に更新。
+
+---
+
+## v1.8.0: 画面遷移アニメーション刷新・タブ構成改善・ダイアログ統一・軽量リファクタ
+
+v1.7.0（工程タブ型UI）以降に積み上げた UI/UX 改善・不具合修正・デッドコード整理をまとめてリリース。**振る舞いに影響しない**機械的な整理を含む。`tsc --noEmit` / `npm run build` クリーン。
+
+### A. 画面遷移・トグルのアニメーション刷新
+
+A1. **スライドインジケーター** ([src/hooks/useSlidingIndicator.ts](src/hooks/useSlidingIndicator.ts), [src/components/SlidingIndicator.tsx](src/components/SlidingIndicator.tsx)):
+- 工程タブ（台割/断ち切り/出力）・台割のリスト/見開き・断ち切りの一括/本文ごと の各トグルに、アクティブ位置を計測して背後をヌルッと滑るピルを追加。
+- `useSlidingIndicator(activeKey)` が callback ref ＋ `ResizeObserver` で位置を計測（条件付きマウントのトグルにも追従）。span 描画は共通 `SlidingIndicator` コンポーネントに集約（CSS は各トグル固有クラスのまま＝見た目不変）。
+
+A2. **方向付きスライド遷移（MojiQ式・フラッシュ回避）** ([src/styles.css](src/styles.css), [src/App.tsx](src/App.tsx), [src/components/output/OutputTab.tsx](src/components/output/OutputTab.tsx)):
+- 工程タブ・リスト見開き・出力行き先（JPG/TIFF・EPUB・PDF）の切替で、トグルの移動方向に合わせて中身がスライドフェードイン（右移動→右から、左移動→左から）。方向は `--screen-slide-from` / `--compose-slide-from` / `--stage-slide-from` を CSS 変数で受け渡し。
+- MojiQ の指示入れ/校正チェック切替に倣い、**opacity を使わず transform のみ**でスライド（フェードによる透け＝フラッシュを排除）。`animation-fill-mode: backwards` で終了後に transform を残さず、sticky なカラーモードサマリ帯を壊さない。
+- リスト/見開きは `compose-stage`（`key=previewMode`）で再マウント。出力行き先は `output-stage`（`key=target`）で再マウント。いずれもサマリ帯の外側を動かすので sticky は不変。
+
+A3. **チャプター追加/削除アニメーション** ([src/components/sidebar/ChapterItem.tsx](src/components/sidebar/ChapterItem.tsx), [src/App.tsx](src/App.tsx), [src/styles.css](src/styles.css)):
+- 追加=ふわっと登場（`chapterItemIn`）。削除=`animateRemoveChapter` で退場アニメ（`chapter-exiting`）→約230ms後に実削除。「すべてクリア」も全チャプターを退場させてからクリア。
+
+A4. **断ち切り範囲設定エディタの開閉アニメ** ([src/components/modals/BleedEditorModal.tsx](src/components/modals/BleedEditorModal.tsx), [src/components/bleed/BleedTab.tsx](src/components/bleed/BleedTab.tsx), [src/styles.css](src/styles.css)):
+- 「設定」=下から上にスライド＋フェードイン、「キャンセル/保存/断ち切りなし」=上から下にスライド＋フェードアウト。`embedded` の `.bleed-editor-inline` に `isClosing` を適用し、BleedTab 側で `editorOpen` を `editing` データと分離（退場アニメ後に `editing` をクリア）。
+
+### B. 出力タブ・断ち切りタブの構成改善
+
+B1. **左の台割ツリーを出力/断ち切りでも常駐** ([src/App.tsx](src/App.tsx), [src/components/bleed/BleedTab.tsx](src/components/bleed/BleedTab.tsx)):
+- 左サイドバー（チャプター/ページ編集ツリー）を出力タブでも表示。断ち切りタブも一覧表示時は表示し、**範囲設定中は非表示**（`onEditingChange`→`isBleedEditing`）。
+
+B2. **ビューア操作の文脈化** ([src/components/output/OutputTab.tsx](src/components/output/OutputTab.tsx), [src/components/epub/EpubMakerView.tsx](src/components/epub/EpubMakerView.tsx)):
+- 綴じ方向/ズーム/閲覧モード操作（`ViewerControls`）を出力の行き先バー右へ移設。EPUB 以外の行き先ではグレーアウト。EpubMakerView の浮遊コントロール（`epub-controls-float`）は撤去。
+- 台割見開きでチャプター未読込時（`displayPages.length === 0`）は `compose-viewer-controls` をグレーアウト。
+
+B3. **断ち切りタブにカラーモードサマリ帯** ([src/components/bleed/BleedTab.tsx](src/components/bleed/BleedTab.tsx)):
+- 台割・出力と同じカラーモード/サイズのサマリ帯（`topBar`）を断ち切りグリッド上部に表示。
+
+### C. PDF プレビューのスクロール不具合修正
+
+C1. **スクロールバーの勝手な移動/フラッシュを修正** ([src/components/output/OutputTab.tsx](src/components/output/OutputTab.tsx), [src/styles.css](src/styles.css)):
+- 出力 PDF プレビュー（`output-pdf-strip`）が右綴じで「ページ1=右端」のため、選択ごとにスクロールが右へアニメして見える不具合を修正。`.output-pdf-preview` の `scroll-behavior: smooth` を撤去し、初期配置は即時・ユーザー操作のみ `scrollTo({behavior:'smooth'})` に分岐。ページ移動時のフォーカス青枠（`:focus-visible`）も削除。`output-pdf-strip` を拡大。
+
+### D. ダイアログ刷新
+
+D1. **未保存警告をカスタムダイアログに統一** ([src/App.tsx](src/App.tsx)):
+- プロジェクトを開く/新規作成時の未保存警告を、OS ネイティブ `ask` から他ダイアログと同じカスタムダイアログ（`modal-overlay`＋`unsaved-dialog`、`useModalAnimation` のフェード）に統一。`confirmDiscardUnsavedChanges` を **Promise 解決方式**にし、`resolveDiscardConfirm(true/false)` で従来のインライン `await` を維持。
+
+D2. **EPUB 作成ウィザードの操作系統一** ([src/components/epub/EpubWizard.tsx](src/components/epub/EpubWizard.tsx), [src/styles.css](src/styles.css)):
+- 右上 × を廃止し、下部フッターに**赤いキャンセルボタン**を追加。フッターボタン（キャンセル/戻る/次へ/生成）をピル型に。
+- **表示中はヘッダー操作不可**: ウィザードを `createPortal` で `document.body` 直下に描画し、`preview-container`（`z-index:1` のスタッキングコンテキスト）に閉じ込められて `main-header`（`z-index:100`）の下に来ていた問題を解消。オーバーレイ（`z-index:1000`）がヘッダーを覆って暗転＋クリック遮断。OS ウィンドウ操作（`z-index:9999`）は引き続き可能。
+
+D3. **出力ラジオの修正** ([src/styles.css](src/styles.css)):
+- 選択時のチェックバッジ（青丸の `::after`）を削除。ラジオがクリック時に一瞬巨大化する不具合を修正（`.form-group input` から継承する `transition: all` / `padding` / `border` を打ち消し、flex を `0 0 auto` 固定）。EPUB/PDF 生成ボタンを生成ボタンと同じピル型（`border-radius: 999px`）に。
+
+### E. デッドコード削除・軽量リファクタ（振る舞い不変）
+
+E1. **未使用 export / コマンド削除**:
+- フロント: `SettingsIcon`（[src/icons.tsx](src/icons.tsx)）、`EpubThumbnailBar`（コンポーネント丸ごと削除）、`EPUB_FORMAT_LABELS`（[src/types.ts](src/types.ts)）、未使用 EPUB store アクション 8 件、追加で `setThumbnailSize` / `getAllPages` / `getTotalPageCount` / `reorderEpubPage`（[src/store.ts](src/store.ts)）。
+- バックエンド: 未呼び出し Tauri コマンド 4 件（`get_recent_files` / `validate_project_files` / `create_epub_metadata` / `get_default_viewport`）＋カスケード（`validate_file_reference`・`FileValidationResult`・`EpubFormat::default_viewport`・`EpubMetadata::new`）。`undo`/`redo`・`save_project`/`load_project` は保持方針どおり温存。
+
+E2. **重複集約**:
+- スライド方向計算を [src/utils/slideDirection.ts](src/utils/slideDirection.ts) の `computeSlideDirection(next, current, order, distance)` に集約（3 箇所）。
+- スライドインジケーターの span を [src/components/SlidingIndicator.tsx](src/components/SlidingIndicator.tsx) に集約（3 箇所、CSS は無改修）。
+
+### F. その他
+
+- プレビュー見開き（[src/components/preview/SpreadViewer.tsx](src/components/preview/SpreadViewer.tsx)）/ `ViewerOverlay` の微調整を同梱。
+
+#### 新規ファイル
+| ファイル | 説明 |
+|---------|------|
+| `src/hooks/useSlidingIndicator.ts` | トグルのアクティブ位置計測フック |
+| `src/components/SlidingIndicator.tsx` | スライドインジケーター共通コンポーネント |
+| `src/utils/slideDirection.ts` | 画面遷移スライド方向計算 |
+
+#### 削除ファイル
+- `src/components/epub/EpubThumbnailBar.tsx`
+
+### 検証
+
+- `npx tsc --noEmit` 成功 / `npm run build` 成功。
+
+### バージョン同期
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を **`1.8.0`** に更新。
