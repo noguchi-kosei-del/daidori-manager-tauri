@@ -7643,9 +7643,9 @@ h3.section-heading {
 }
 .epub-wizard-seg button.active { background: var(--color-accent); color: #fff; }
 .epub-wizard-binding { display: flex; flex-direction: column; gap: var(--spacing-sm); }
-.bleed-tab-method { display: flex; align-items: center; gap: 8px; }
-.bleed-tab-method > label { font-size: var(--font-size-sm); color: var(--color-text-secondary); white-space: nowrap; }
-.bleed-tab-method > select { min-width: 280px; }
+.bleed-summary-method { display: flex; flex-direction: column; gap: 4px; margin-bottom: var(--spacing-sm); }
+.bleed-summary-method > label { font-size: var(--font-size-xs); color: var(--color-text-secondary); }
+.bleed-summary-method > select { width: 100%; }
 .bleed-action-panel {
   max-width: 560px;
   margin: var(--spacing-md) auto 0;

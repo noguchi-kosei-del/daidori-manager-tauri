@@ -262,15 +262,6 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
             <ScissorsIcon size={18} />
             <span>断ち切り設定</span>
           </div>
-          <div className="bleed-tab-method">
-            <label>方式</label>
-            <select value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
-              <option value="none">断ち切らない</option>
-              <option value="region">このタブで範囲を描いて断ち切る</option>
-              <option value="action-ratio">Photoshopアクションの比率で断ち切る（中央揃え）</option>
-              <option value="action">Photoshopアクションをそのまま実行（EPUB高品質のみ）</option>
-            </select>
-          </div>
           {method === 'region' && (
             <div className="bleed-tab-mode" ref={modeToggleRef}>
               <SlidingIndicator rect={modeIndicator} className="bleed-tab-mode-indicator" />
@@ -399,20 +390,33 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
         </div>
         <div className="sidebar-content">
           <div className="bleed-summary-panel">
-            <h3 className="bleed-summary-title">断ち切りサマリ</h3>
+            <h3 className="bleed-summary-title">断ち切り設定</h3>
+            <div className="bleed-summary-method">
+              <label>方式</label>
+              <select value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
+                <option value="none">断ち切らない</option>
+                <option value="region">範囲を描いて断ち切る</option>
+                <option value="action-ratio">アクションの比率で断ち切る（中央揃え）</option>
+                <option value="action">アクションをそのまま実行（EPUB高品質のみ）</option>
+              </select>
+            </div>
             <p className="bleed-summary-note">
               ここで設定した断ち切りは「出力」タブのすべての出力（JPEG / TIFF / PDF）に適用されます。
               プロジェクトファイルには保存されません。
             </p>
+            {method === 'region' && (
             <div className="bleed-summary-stat">
               <span>適用範囲</span>
               <span>{mode === 'bulk' ? '一括（表紙＋本文）' : '本文ごと'}</span>
             </div>
-            <div className="bleed-summary-stat">
-              <span>設定済み</span>
-              <span>{configuredCount} / {targets.length}</span>
-            </div>
-            {configuredCount > 0 && (
+            )}
+            {method === 'region' && (
+              <div className="bleed-summary-stat">
+                <span>設定済み</span>
+                <span>{configuredCount} / {targets.length}</span>
+              </div>
+            )}
+            {method === 'region' && configuredCount > 0 && (
               <button type="button" className="btn-secondary btn-small bleed-summary-clear" onClick={reset}>
                 すべて解除
               </button>

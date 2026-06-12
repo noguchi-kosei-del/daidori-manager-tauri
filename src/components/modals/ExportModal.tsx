@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import { save, open } from '@tauri-apps/plugin-dialog';
+import { save } from '@tauri-apps/plugin-dialog';
 import { desktopDir, join } from '@tauri-apps/api/path';
 import { invoke } from '@tauri-apps/api/core';
 import { Chapter, CHAPTER_TYPE_LABELS, CHAPTER_TYPE_COLORS } from '../../types';
 import { ExportIcon, FolderIcon, CopyIcon, PencilIcon, ReplaceIcon } from '../../icons';
 import { useModalAnimation } from '../../hooks';
+import { useBleedStore } from '../../bleedStore';
 
 // チャプターごとのリネーム設定
 export interface ChapterRenameSettings {
@@ -152,13 +153,11 @@ export function ExportModal({
   const [perChapterSettings, setPerChapterSettings] = useState<Record<string, ChapterRenameSettings>>({});
   // 断ち切りモード（一括/本文ごと）は「断ち切り」タブで管理。互換のため bulk 固定で渡す。
   const bleedMode: BleedMode = 'bulk';
-  // 処理の最後に実行するPhotoshopアクション（サイズ統一など）。設定はlocalStorageに永続化
+  // 処理の最後に実行するPhotoshopアクション（サイズ統一など）。設定はlocalStorageに永続化。
+  // アクションの .atn / アクション名は「断ち切り」タブの設定を参照する。
   const [runAction, setRunAction] = useState(false);
-  const [actionSetPath, setActionSetPath] = useState('');
-  const [actionName, setActionName] = useState('');
-  const [atnActions, setAtnActions] = useState<string[]>([]); // .atn内のアクション名一覧
-  const [atnSetName, setAtnSetName] = useState('');           // .atnのセット名（表示用）
-  const [atnError, setAtnError] = useState('');               // .atn解析エラー
+  const tabActionSetPath = useBleedStore((s) => s.actionSetPath);
+  const tabActionName = useBleedStore((s) => s.actionName);
   // TIFF変換時のサイズ統一（指定ピクセルへリサイズ）
   const [tiffResizeEnabled, setTiffResizeEnabled] = useState(false);
   const [tiffWidthText, setTiffWidthText] = useState('2250');
@@ -177,8 +176,6 @@ export function ExportModal({
       if (saved) {
         const obj = JSON.parse(saved);
         if (typeof obj.runAction === 'boolean') setRunAction(obj.runAction);
-        if (typeof obj.actionSetPath === 'string') setActionSetPath(obj.actionSetPath);
-        if (typeof obj.actionName === 'string') setActionName(obj.actionName);
         if (typeof obj.tiffResizeEnabled === 'boolean') setTiffResizeEnabled(obj.tiffResizeEnabled);
         if (typeof obj.tiffWidthText === 'string') setTiffWidthText(obj.tiffWidthText);
         if (typeof obj.tiffHeightText === 'string') setTiffHeightText(obj.tiffHeightText);
@@ -190,51 +187,6 @@ export function ExportModal({
       // 破損データは無視
     }
   }, [isOpen]);
-
-  // 選択した .atn からアクション名一覧を取得（ドロップダウン用）
-  useEffect(() => {
-    if (!actionSetPath) {
-      setAtnActions([]);
-      setAtnSetName('');
-      setAtnError('');
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const info = await invoke<{ setName: string | null; actions: string[] }>('read_atn_actions', { path: actionSetPath });
-        if (cancelled) return;
-        setAtnActions(info.actions ?? []);
-        setAtnSetName(info.setName ?? '');
-        setAtnError('');
-        // 既存のアクション名が一覧に無ければ、1件だけのときは自動選択
-        setActionName((prev) => {
-          if (prev && (info.actions ?? []).includes(prev)) return prev;
-          if ((info.actions ?? []).length === 1) return info.actions[0];
-          return (info.actions ?? []).includes(prev) ? prev : '';
-        });
-      } catch (e) {
-        if (cancelled) return;
-        setAtnActions([]);
-        setAtnSetName('');
-        setAtnError(String(e));
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [actionSetPath]);
-
-  // アクションセット(.atn)ファイルをエクスプローラーで選択
-  const handleSelectActionSet = async () => {
-    const selected = await open({
-      title: 'Photoshopアクションセット(.atn)を選択',
-      multiple: false,
-      directory: false,
-      filters: [{ name: 'Photoshopアクション', extensions: ['atn'] }],
-    });
-    if (typeof selected === 'string') {
-      setActionSetPath(selected);
-    }
-  };
 
   // 初期化：デフォルトの出力パスを設定
   useEffect(() => {
@@ -327,7 +279,7 @@ export function ExportModal({
     if (!outputPath) return;
     // アクション設定を永続化（次回のために記憶）
     try {
-      localStorage.setItem('daidori_tiff_action', JSON.stringify({ runAction, actionSetPath, actionName, tiffResizeEnabled, tiffWidthText, tiffHeightText, tiffBlurEnabled, tiffBlurRadiusText, tiffBlurBackgroundOnly }));
+      localStorage.setItem('daidori_tiff_action', JSON.stringify({ runAction, tiffResizeEnabled, tiffWidthText, tiffHeightText, tiffBlurEnabled, tiffBlurRadiusText, tiffBlurBackgroundOnly }));
     } catch {
       // 保存失敗は無視
     }
@@ -335,7 +287,8 @@ export function ExportModal({
     const tiffTargetHeight = Math.max(0, parseInt(tiffHeightText, 10) || 0);
     const tiffBlurRadius = Math.max(0, parseFloat(tiffBlurRadiusText) || 0);
     setIsExporting(true);
-    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, resizeMode, resizePercent, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode, runAction, actionSetPath, actionName: actionName.trim(), tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight, tiffBlurEnabled, tiffBlurRadius, tiffBlurBackgroundOnly });
+    // アクションの .atn / アクション名は「断ち切り」タブの設定を参照する
+    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, resizeMode, resizePercent, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode, runAction, actionSetPath: tabActionSetPath, actionName: tabActionName.trim(), tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight, tiffBlurEnabled, tiffBlurRadius, tiffBlurBackgroundOnly });
     setIsExporting(false);
     if (!embedded) onClose();
   };
@@ -593,51 +546,19 @@ export function ExportModal({
                 {runAction && (
                   <div className="action-settings">
                     <div className="form-group">
-                      <label>アクションセット（.atnファイル）</label>
-                      <div className="input-with-button">
-                        <input
-                          type="text"
-                          value={actionSetPath}
-                          placeholder="エクスプローラーで .atn を選択..."
-                          readOnly
-                        />
-                        <button className="btn-secondary btn-small" onClick={handleSelectActionSet}>
-                          参照
-                        </button>
-                      </div>
-                    </div>
-                    {atnSetName && (
-                      <div className="tiff-note">セット名: {atnSetName}</div>
-                    )}
-                    <div className="form-group">
-                      <label>アクション名</label>
-                      {atnActions.length > 0 ? (
-                        <select
-                          className="select-full"
-                          value={atnActions.includes(actionName) ? actionName : ''}
-                          onChange={(e) => setActionName(e.target.value)}
-                        >
-                          <option value="">（アクションを選択してください）</option>
-                          {atnActions.map((a) => (
-                            <option key={a} value={a}>{a}</option>
-                          ))}
-                        </select>
+                      <label>実行するアクション（「断ち切り」タブで設定）</label>
+                      {tabActionName ? (
+                        <div className="tiff-note">
+                          {tabActionName}{tabActionSetPath ? `（${tabActionSetPath.split(/[\\/]/).pop()}）` : ''}
+                        </div>
                       ) : (
-                        <input
-                          type="text"
-                          value={actionName}
-                          onChange={(e) => setActionName(e.target.value)}
-                          placeholder="例: サイズ統一"
-                        />
+                        <div className="tiff-note" style={{ color: 'var(--color-error, #dc2626)' }}>
+                          アクションが未選択です。「断ち切り」タブで方式を「アクション…」にして .atn とアクション名を選んでください。
+                        </div>
                       )}
                     </div>
-                    {atnError && (
-                      <div className="tiff-note" style={{ color: 'var(--color-error, #dc2626)' }}>
-                        .atnの解析に失敗しました（手入力してください）: {atnError}
-                      </div>
-                    )}
                     <div className="tiff-note">
-                      ※ 選択した .atn を処理開始時にPhotoshopへ読み込み、リサイズ前に各ページへ実行します。サイズ統一とTIFF保存はアプリが自動で行うため、<b>アクションには「保存」「閉じる」を含めないでください</b>（ぼかし・切り抜き等の加工のみ）。アクションが画像を閉じた場合はアプリ側の保存・リサイズはスキップされます。
+                      ※ 「断ち切り」タブで選んだ .atn / アクションを処理開始時にPhotoshopへ読み込み、リサイズ前に各ページへ実行します。サイズ統一とTIFF保存はアプリが自動で行うため、<b>アクションには「保存」「閉じる」を含めないでください</b>（ぼかし・切り抜き等の加工のみ）。
                     </div>
                   </div>
                 )}
