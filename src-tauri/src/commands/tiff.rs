@@ -237,11 +237,25 @@ pub async fn run_photoshop_tiff_convert(
     }
 }
 
+/// アクションごとの切り抜き想定サイズ（断ち切り座標から逆算した想定原稿サイズ）
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AtnActionCrop {
+    pub name: String,
+    /// 切り抜き範囲の右端(px) ≈ 想定原稿幅。切り抜きが無ければ 0
+    pub width: u32,
+    /// 切り抜き範囲の下端(px) ≈ 想定原稿高さ。切り抜きが無ければ 0
+    pub height: u32,
+}
+
 /// .atn 解析結果（フロントのドロップダウン用）
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AtnInfo {
     pub set_name: Option<String>,
     pub actions: Vec<String>,
+    /// アクションごとの想定サイズ（サイズ不一致警告用）
+    pub action_crops: Vec<AtnActionCrop>,
 }
 
 /// .atn ファイルからアクションセット名とアクション名一覧を読み取る。
@@ -251,7 +265,127 @@ pub fn read_atn_actions(path: String) -> Result<AtnInfo, String> {
     let bytes = fs::read(&path).map_err(|e| format!(".atnの読み込みに失敗: {}", e))?;
     let set_name = parse_atn_set_name(&path).or_else(|| filename_stem(&path));
     let actions = parse_atn_action_names(&bytes);
-    Ok(AtnInfo { set_name, actions })
+    let action_crops = parse_atn_action_crops(&bytes);
+    Ok(AtnInfo {
+        set_name,
+        actions,
+        action_crops,
+    })
+}
+
+/// アクション名とその開始バイト位置（アクションヘッダ位置）の一覧を返す。
+/// parse_atn_action_names と同じ検出ロジックだが、各アクションのバイト範囲を切り出すため
+/// 位置も保持する。
+fn find_action_names_with_pos(bytes: &[u8]) -> Vec<(usize, String)> {
+    let n = bytes.len();
+    let mut out: Vec<(usize, String)> = Vec::new();
+    if n < 16 {
+        return out;
+    }
+    let mut i = 0usize;
+    while i + 10 < n {
+        if bytes[i] == 0
+            && bytes[i + 1] == 0
+            && bytes[i + 2] == 0
+            && bytes[i + 3] == 0
+            && bytes[i + 4] == 0
+            && bytes[i + 5] == 0
+        {
+            let len_off = i + 6;
+            let len = u32::from_be_bytes([
+                bytes[len_off],
+                bytes[len_off + 1],
+                bytes[len_off + 2],
+                bytes[len_off + 3],
+            ]) as usize;
+            if (2..=40).contains(&len) {
+                let start = len_off + 4;
+                let end = start + len * 2;
+                if end <= n {
+                    let mut units: Vec<u16> = Vec::with_capacity(len);
+                    let mut ok = true;
+                    for j in 0..len {
+                        let o = start + j * 2;
+                        let c = u16::from_be_bytes([bytes[o], bytes[o + 1]]);
+                        if j == len - 1 && c == 0 {
+                        } else if (32..65500).contains(&c) {
+                            units.push(c);
+                        } else {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if ok && units.len() >= 2 {
+                        let name = String::from_utf16_lossy(&units)
+                            .trim_end_matches('\u{0}')
+                            .trim()
+                            .to_string();
+                        if !name.is_empty() && !out.iter().any(|(_, nm)| nm == &name) {
+                            out.push((i, name));
+                            i = end;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// バイト範囲内の Crop 記述子から最大の右端/下端(px)を取り出す。
+/// 記述子の UnitFloat は [key:4][type:"UntF"][unit:4][double:8] の並びで格納される。
+/// 切り抜き座標は key="Rght"/"Btom"、単位 "#Pxl"。リサイズの Wdth/Hght は対象外。
+fn max_crop_extent_pixels(data: &[u8]) -> (u32, u32) {
+    let mut max_w = 0f64;
+    let mut max_h = 0f64;
+    let mut p = 4usize;
+    while p + 16 <= data.len() {
+        if &data[p..p + 4] == b"UntF" && &data[p + 4..p + 8] == b"#Pxl" {
+            let key = &data[p - 4..p];
+            let val = f64::from_be_bytes([
+                data[p + 8],
+                data[p + 9],
+                data[p + 10],
+                data[p + 11],
+                data[p + 12],
+                data[p + 13],
+                data[p + 14],
+                data[p + 15],
+            ]);
+            if val.is_finite() && val > 0.0 && val < 1_000_000.0 {
+                if key == b"Rght" && val > max_w {
+                    max_w = val;
+                }
+                if key == b"Btom" && val > max_h {
+                    max_h = val;
+                }
+            }
+        }
+        p += 1;
+    }
+    (max_w.round() as u32, max_h.round() as u32)
+}
+
+/// アクションごとの切り抜き想定サイズを解析する。
+fn parse_atn_action_crops(bytes: &[u8]) -> Vec<AtnActionCrop> {
+    let names = find_action_names_with_pos(bytes);
+    let mut result = Vec::new();
+    for (idx, (start, name)) in names.iter().enumerate() {
+        let end = if idx + 1 < names.len() {
+            names[idx + 1].0
+        } else {
+            bytes.len()
+        };
+        let (w, h) = max_crop_extent_pixels(&bytes[*start..end]);
+        result.push(AtnActionCrop {
+            name: name.clone(),
+            width: w,
+            height: h,
+        });
+    }
+    result
 }
 
 /// .atn 内のアクション名一覧を解析する。

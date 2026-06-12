@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { save, open } from '@tauri-apps/plugin-dialog';
+import { save, open, ask } from '@tauri-apps/plugin-dialog';
 import { desktopDir, join } from '@tauri-apps/api/path';
 import {
   EpubMetadata,
@@ -71,6 +71,8 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
   const [psdAtnActions, setPsdAtnActions] = useState<string[]>([]);
   const [psdAtnSetName, setPsdAtnSetName] = useState('');
   const [psdAtnError, setPsdAtnError] = useState('');
+  // アクションごとの想定サイズ（.atnの切り抜き座標から逆算）。サイズ不一致警告に使う
+  const [psdAtnCrops, setPsdAtnCrops] = useState<{ name: string; width: number; height: number }[]>([]);
   const [colorMode, setColorMode] = useState<'auto' | 'custom'>('auto');
   const [hybridCssProfile, setHybridCssProfile] = useState<HybridCssProfile>('current');
   const [allowMissingColophon, setAllowMissingColophon] = useState(false);
@@ -348,11 +350,12 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     let cancelled = false;
     (async () => {
       try {
-        const info = await invoke<{ setName: string | null; actions: string[] }>('read_atn_actions', { path: psdActionSetPath });
+        const info = await invoke<{ setName: string | null; actions: string[]; actionCrops?: { name: string; width: number; height: number }[] }>('read_atn_actions', { path: psdActionSetPath });
         if (cancelled) return;
         const actions = info.actions ?? [];
         setPsdAtnActions(actions);
         setPsdAtnSetName(info.setName ?? '');
+        setPsdAtnCrops(info.actionCrops ?? []);
         setPsdAtnError('');
         setPsdActionName((prev) => {
           if (prev && actions.includes(prev)) return prev;
@@ -368,6 +371,36 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     })();
     return () => { cancelled = true; };
   }, [psdActionSetPath]);
+
+  // 台割中のPSDページの実サイズ一覧（サイズ不一致判定用）
+  const psdPageSizes = useMemo(() => {
+    const sizes: { w: number; h: number }[] = [];
+    for (const ch of chapters) {
+      for (const p of ch.pages) {
+        if (p.fileType === 'psd' && p.imageWidth && p.imageHeight) {
+          sizes.push({ w: p.imageWidth, h: p.imageHeight });
+        }
+      }
+    }
+    return sizes;
+  }, [chapters]);
+
+  // 選択アクションの想定サイズと各PSDサイズの不一致を検出（アクション断ち切り時のみ）
+  const sizeMismatch = useMemo(() => {
+    if (tachikiriMode !== 'action' || colorEngine !== 'photoshop') return null;
+    const exp = psdAtnCrops.find((c) => c.name === psdActionName);
+    if (!exp || !exp.width || !exp.height) return null;
+    // 想定サイズより小さい→切り抜きが画像外（黒余白）、極端に大きい→別サイズ用アクション
+    const bad = psdPageSizes.filter(
+      (s) =>
+        s.w < exp.width * 0.98 ||
+        s.h < exp.height * 0.98 ||
+        s.w > exp.width * 1.15 ||
+        s.h > exp.height * 1.15,
+    );
+    if (bad.length === 0) return null;
+    return { expected: { w: exp.width, h: exp.height }, sample: bad[0], count: bad.length };
+  }, [tachikiriMode, colorEngine, psdAtnCrops, psdActionName, psdPageSizes]);
 
   // アクションセット(.atn)ファイルをエクスプローラーで選択
   const handleSelectPsdActionSet = async () => {
@@ -431,6 +464,16 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
 
   const handleGenerate = async () => {
     if (!canGenerate) return;
+    // アクション断ち切りでサイズが想定と一致しない場合は確認を取る
+    if (tachikiriMode === 'action' && sizeMismatch) {
+      const proceed = await ask(
+        `選択画像のサイズ（例 ${sizeMismatch.sample.w}×${sizeMismatch.sample.h}px）が、アクション「${psdActionName}」の想定サイズ（${sizeMismatch.expected.w}×${sizeMismatch.expected.h}px）と一致しません（${sizeMismatch.count}枚）。\n` +
+          `このまま断ち切ると位置がズレたり黒余白が出る可能性があります。続けますか？\n\n` +
+          `（おすすめ: キャンセルして「断ち切りタブの範囲で断ち切る（内蔵・比率方式）」に切り替える）`,
+        { title: 'サイズが想定と一致しません', kind: 'warning' },
+      );
+      if (!proceed) return;
+    }
     setIsGenerating(true);
     setProgress({ phase: 'images', current: 0, total: 0 });
     const metadata: EpubMetadata = {
@@ -689,6 +732,19 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                         {psdAtnError && (
                           <div className="form-hint" style={{ color: 'var(--color-error, #dc2626)' }}>
                             .atnの解析に失敗しました（手入力してください）: {psdAtnError}
+                          </div>
+                        )}
+                        {sizeMismatch && (
+                          <div className="epub-size-warn">
+                            ⚠ 選択画像のサイズ（例 {sizeMismatch.sample.w}×{sizeMismatch.sample.h}px）が、アクション「{psdActionName}」の想定サイズ（{sizeMismatch.expected.w}×{sizeMismatch.expected.h}px）と一致しません（{sizeMismatch.count}枚）。このアクションは固定座標で断ち切るため、位置がズレたり黒余白が出る可能性があります。
+                            <button
+                              type="button"
+                              className="btn-secondary btn-small"
+                              style={{ marginTop: 6 }}
+                              onClick={() => setTachikiriMode('bleed')}
+                            >
+                              内蔵・比率方式に切り替える（サイズ違いに強い）
+                            </button>
                           </div>
                         )}
                         <div className="form-hint">
