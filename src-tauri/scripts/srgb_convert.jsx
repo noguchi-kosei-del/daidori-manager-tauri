@@ -16,10 +16,6 @@
 
 var originalDialogs = app.displayDialogs;
 app.displayDialogs = DialogModes.NO;
-// アクション再生中のダイアログ（保存オプション/上書き確認等）も抑止する。
-// これが無いと、アクション内の Save As 等でダイアログ/エクスプローラーが出る。
-var originalPlaybackDialogs = app.playbackDisplayDialogs;
-app.playbackDisplayDialogs = DialogModes.NO;
 app.preferences.rulerUnits = Units.PIXELS;
 
 var SRGB_PROFILE = "sRGB IEC61966-2.1";
@@ -114,19 +110,6 @@ function main() {
     resultFile.close();
 
     app.displayDialogs = originalDialogs;
-    app.playbackDisplayDialogs = originalPlaybackDialogs;
-
-    // アクション用の中間ファイル置き場を掃除
-    try {
-        var workFolder = new Folder(Folder.temp + "/daidori_srgb_work");
-        if (workFolder.exists) {
-            var leftovers = workFolder.getFiles();
-            for (var li = 0; li < leftovers.length; li++) {
-                try { leftovers[li].remove(); } catch (eLo) {}
-            }
-            try { workFolder.remove(); } catch (eWf) {}
-        }
-    } catch (eClean) {}
 }
 
 function writeProgress(tempFolder, current, total) {
@@ -191,7 +174,6 @@ function flattenOntoWhite(doc) {
 function processFile(fileConfig, globalSettings) {
     var filePath = fileConfig.path;
     var fileName = decodeURI(new File(filePath).name);
-    var workFile = null; // アクション用の中間PSD（保存/閉じる対応）。最後に掃除する
 
     try {
         var file = new File(filePath);
@@ -209,71 +191,46 @@ function processFile(fileConfig, globalSettings) {
         var dither = (globalSettings.dither === false) ? false : true;
         var maxPixels = globalSettings.maxPixels || 0;
 
-        // 0. 断ち切り等のPhotoshopアクションを実行（切り抜き＝幾何処理を最初に確定）。
-        //    レイヤー依存のアクションにも対応するため flatten より前に実行する。
-        //    アクションに「保存」「閉じる」が含まれていても処理を引き継げるよう、
-        //    実行前にドキュメントへ中間ファイルのパスを **asCopy=false で関連付け** する:
-        //      - これによりアクションの保存先（Ctrl+S / パス無しの別名保存）が中間ファイルへ向かい、
-        //        保存ダイアログ・エクスプローラー（保存先選択）が出ない
-        //      - アクションがドキュメントを閉じても、中間ファイルを再オープンして加工結果を引き継げる
-        //    PSDは「互換性を最大化」ダイアログが出るため TIFF(LZW) を使う。
+        // 0. 断ち切り等のPhotoshopアクションを実行（TIFF変換 tiff_convert.jsx と同じ方式）。
+        //    中間ファイルは作らず、開いたドキュメント（元ファイルパスを保持）へ直接 doAction する。
+        //    こうすることでアクションは元の設計どおり動き、保存ダイアログ等が出ない。
+        //    - アクションがドキュメントを閉じない（切り抜きのみ）→ そのまま続行
+        //    - アクションが「上書き保存→閉じる」まで実行 → 元ファイルが加工結果で上書き
+        //      されているので、元ファイルを再オープンして続行する
         if (globalSettings.runAction && globalSettings.actionName) {
-            var workFolder = new Folder(Folder.temp + "/daidori_srgb_work");
-            if (!workFolder.exists) workFolder.create();
-            var workBase = String(fileConfig.outputName).replace(/\.[^.]+$/, "");
-            workFile = new File(workFolder.fsName + "/work_" + workBase + ".tif");
-            if (workFile.exists) { try { workFile.remove(); } catch (eRmW) {} }
-            try {
-                var workTiff = new TiffSaveOptions();
-                workTiff.imageCompression = TIFFEncoding.TIFFLZW;
-                workTiff.layers = true;
-                workTiff.alphaChannels = true;
-                workTiff.embedColorProfile = true;
-                workTiff.byteOrder = ByteOrder.IBM;
-                // asCopy=false: ドキュメントを中間ファイルに関連付ける（保存先の付け替え）
-                doc.saveAs(workFile, workTiff, false, Extension.LOWERCASE);
-            } catch (eSaveWork) {
-                // 中間保存に失敗してもアクションは実行する（閉じられた場合のみ復旧不可）
-            }
-
-            // ダイアログ抑止を直前で再アサート（app.open 等でリセットされる可能性に備える）
-            app.displayDialogs = DialogModes.NO;
-            app.playbackDisplayDialogs = DialogModes.NO;
-
             var docCountBefore = app.documents.length;
-            var actionError = null;
             try {
                 app.doAction(globalSettings.actionName, globalSettings.actionSet || "");
             } catch (eAct) {
-                actionError = "アクション実行に失敗しました（セット: '" +
-                    (globalSettings.actionSet || "") + "' / アクション: '" +
-                    globalSettings.actionName + "'）: " + (eAct.message || String(eAct));
-            }
-
-            if (actionError) {
-                // 開いている可能性のあるドキュメントを閉じてからエラー返却
                 try {
                     while (app.documents.length > 0) {
                         app.activeDocument.close(SaveOptions.DONOTSAVECHANGES);
                     }
                 } catch (eCloseAll) {}
-                try { if (workFile && workFile.exists) workFile.remove(); } catch (eRm2) {}
-                return { fileName: fileName, success: false, error: actionError };
+                return {
+                    fileName: fileName,
+                    success: false,
+                    error: "アクション実行に失敗しました（セット: '" +
+                        (globalSettings.actionSet || "") + "' / アクション: '" +
+                        globalSettings.actionName + "'）: " + (eAct.message || String(eAct))
+                };
             }
 
             if (app.documents.length >= docCountBefore && app.documents.length > 0) {
-                // ドキュメントは開いたまま（保存・閉じるを含まないアクション）→ そのまま続行
-                doc = app.activeDocument;
+                // ドキュメントは開いたまま → 活性ドキュメントを処理対象に同期
+                try { doc = app.activeDocument; } catch (eDoc) {}
             } else {
-                // アクションが保存・閉じるを実行 → アクションの保存で更新された中間ファイルを再オープン
-                if (!workFile || !workFile.exists) {
+                // アクションが保存・閉じるを実行 → 上書き保存された元ファイルを再オープン
+                var reopened = new File(filePath);
+                if (reopened.exists) {
+                    doc = app.open(reopened);
+                } else {
                     return {
                         fileName: fileName,
                         success: false,
-                        error: "アクションがドキュメントを閉じましたが、中間ファイルが見つかりませんでした。"
+                        error: "アクションがドキュメントを閉じ、結果ファイルが見つかりませんでした。"
                     };
                 }
-                doc = app.open(workFile);
             }
             mode = doc.mode;
         }
@@ -356,8 +313,6 @@ function processFile(fileConfig, globalSettings) {
         doc.saveAs(outputFile, jpgOpts, true, Extension.LOWERCASE);
 
         doc.close(SaveOptions.DONOTSAVECHANGES);
-        // 中間PSDを掃除（閉じた後でないと削除できない）
-        try { if (workFile && workFile.exists) workFile.remove(); } catch (eRmDone) {}
 
         return {
             fileName: fileName,
@@ -372,7 +327,6 @@ function processFile(fileConfig, globalSettings) {
                 app.activeDocument.close(SaveOptions.DONOTSAVECHANGES);
             }
         } catch (e2) {}
-        try { if (workFile && workFile.exists) workFile.remove(); } catch (eRmErr) {}
         return { fileName: fileName, success: false, error: String(e) };
     }
 }
