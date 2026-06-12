@@ -99,8 +99,11 @@ export function BleedEditorModal({
   const [strokeColor, setStrokeColor] = useState<BleedColor>('black');
   const [fillColor, setFillColor] = useState<BleedColor>('white');
   const [fillOpacity, setFillOpacity] = useState(50);
-  // アクション/JSON から取り込んだぼかし半径(px)。0 でぼかしなし。
-  const [blurRadius, setBlurRadius] = useState(0);
+  // アクション/JSON から取り込んだぼかし半径(px)。編集可能（テキスト保持で自由入力）。
+  const [blurRadiusText, setBlurRadiusText] = useState('0');
+  const blurRadius = Math.max(0, parseFloat(blurRadiusText) || 0);
+  // 既存の setBlurRadius(n) 呼び出し（.atn/JSON/初期値からの取り込み）を温存するラッパー
+  const setBlurRadius = (n: number) => setBlurRadiusText(n > 0 ? String(n) : '0');
 
   // 断ち切り方式（断ち切りタブに一本化。グローバル設定をこの編集画面で選ぶ）
   const method = useBleedStore((s) => s.method);
@@ -974,6 +977,32 @@ export function BleedEditorModal({
                   </div>
                 </>
               )}
+            </div>
+
+            <div className="bleed-mode-section">
+              <div className="bleed-mode-title">ぼかし（ガウス）</div>
+              <div className="bleed-color-row">
+                <label>半径(px)</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={blurRadiusText}
+                  onChange={(e) => setBlurRadiusText(e.target.value.replace(/[^0-9.]/g, ''))}
+                  placeholder="例: 2.5"
+                  style={{ width: 80 }}
+                />
+                <button
+                  type="button"
+                  className="btn-secondary btn-small"
+                  onClick={() => setBlurRadiusText('0')}
+                  disabled={blurRadius <= 0}
+                >なし(0)</button>
+              </div>
+              <div className="bleed-editor-hint">
+                {blurRadius > 0
+                  ? `半径 ${blurRadius}px でぼかします（文字は保護＝背景のみ・カラー原稿は出力時に自動で0）。アクション/JSONから取り込んだ値をここで変更できます。`
+                  : 'ぼかしなし（0）。値を入れるとモノクロ原稿にガウスぼかしを適用します（アクション/JSON選択時はその値が自動で入ります）。'}
+              </div>
             </div>
             </>)}
           </div>
