@@ -2154,13 +2154,29 @@ function App() {
         }
       }
 
-      // 断ち切り「内蔵・比率方式」を選んだ場合、断ち切りタブ(bleedStore)の範囲から
-      // 各PSDの cropBounds を算出する（PSDのチャプター種別で表紙/本文を出し分け）。
+      // 断ち切り cropBounds の算出。
+      //  - 'bleed': 断ち切りタブ(bleedStore)の範囲（PSDのチャプター種別で表紙/本文を出し分け）
+      //  - 'action-ratio': アクションの切り抜き矩形を比率化（全PSD共通。refは矩形の右下＝想定原稿）
+      // どちらも srgb_convert.jsx の比率方式クロップで各PSDの実サイズに追従する。
       const epubBleedSettings =
         metadata.tachikiriMode === 'bleed'
           ? useBleedStore.getState().getBleedSettings()
           : undefined;
+      const actionRatioBounds =
+        metadata.tachikiriMode === 'action-ratio' && metadata.actionCropRect &&
+        metadata.actionCropRect.right > 0 && metadata.actionCropRect.bottom > 0
+          ? {
+              left: Math.max(0, Math.round(metadata.actionCropRect.left)),
+              top: Math.max(0, Math.round(metadata.actionCropRect.top)),
+              right: Math.round(metadata.actionCropRect.right),
+              bottom: Math.round(metadata.actionCropRect.bottom),
+              refWidth: Math.round(metadata.actionCropRect.right),
+              refHeight: Math.round(metadata.actionCropRect.bottom),
+              isProportional: true,
+            }
+          : undefined;
       const cropBoundsForPsd = (srcPath: string) => {
+        if (actionRatioBounds) return actionRatioBounds;
         if (!epubBleedSettings) return undefined;
         const info = psdChapterInfo.get(srcPath);
         if (!info) return undefined;

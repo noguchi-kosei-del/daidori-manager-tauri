@@ -71,8 +71,8 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
   const [psdAtnActions, setPsdAtnActions] = useState<string[]>([]);
   const [psdAtnSetName, setPsdAtnSetName] = useState('');
   const [psdAtnError, setPsdAtnError] = useState('');
-  // アクションごとの想定サイズ（.atnの切り抜き座標から逆算）。サイズ不一致警告に使う
-  const [psdAtnCrops, setPsdAtnCrops] = useState<{ name: string; width: number; height: number }[]>([]);
+  // アクションごとの切り抜き矩形（.atnから抽出）。サイズ警告＆比率断ち切りに使う
+  const [psdAtnCrops, setPsdAtnCrops] = useState<{ name: string; left: number; top: number; right: number; bottom: number }[]>([]);
   const [colorMode, setColorMode] = useState<'auto' | 'custom'>('auto');
   const [hybridCssProfile, setHybridCssProfile] = useState<HybridCssProfile>('current');
   const [allowMissingColophon, setAllowMissingColophon] = useState(false);
@@ -350,7 +350,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     let cancelled = false;
     (async () => {
       try {
-        const info = await invoke<{ setName: string | null; actions: string[]; actionCrops?: { name: string; width: number; height: number }[] }>('read_atn_actions', { path: psdActionSetPath });
+        const info = await invoke<{ setName: string | null; actions: string[]; actionCrops?: { name: string; left: number; top: number; right: number; bottom: number }[] }>('read_atn_actions', { path: psdActionSetPath });
         if (cancelled) return;
         const actions = info.actions ?? [];
         setPsdAtnActions(actions);
@@ -385,22 +385,26 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     return sizes;
   }, [chapters]);
 
-  // 選択アクションの想定サイズと各PSDサイズの不一致を検出（アクション断ち切り時のみ）
+  // 選択アクションの矩形（比率断ち切り用 / サイズ判定用）
+  const selectedActionCrop = useMemo(
+    () => psdAtnCrops.find((c) => c.name === psdActionName) ?? null,
+    [psdAtnCrops, psdActionName],
+  );
+
+  // 選択アクションの想定サイズと各PSDサイズの不一致を検出（'action'=そのまま実行 時のみ。
+  // 'action-ratio'=比率は各サイズに自動追従するので警告不要）
   const sizeMismatch = useMemo(() => {
     if (tachikiriMode !== 'action' || colorEngine !== 'photoshop') return null;
-    const exp = psdAtnCrops.find((c) => c.name === psdActionName);
-    if (!exp || !exp.width || !exp.height) return null;
+    if (!selectedActionCrop || !selectedActionCrop.right || !selectedActionCrop.bottom) return null;
+    const ew = selectedActionCrop.right;
+    const eh = selectedActionCrop.bottom;
     // 想定サイズより小さい→切り抜きが画像外（黒余白）、極端に大きい→別サイズ用アクション
     const bad = psdPageSizes.filter(
-      (s) =>
-        s.w < exp.width * 0.98 ||
-        s.h < exp.height * 0.98 ||
-        s.w > exp.width * 1.15 ||
-        s.h > exp.height * 1.15,
+      (s) => s.w < ew * 0.98 || s.h < eh * 0.98 || s.w > ew * 1.15 || s.h > eh * 1.15,
     );
     if (bad.length === 0) return null;
-    return { expected: { w: exp.width, h: exp.height }, sample: bad[0], count: bad.length };
-  }, [tachikiriMode, colorEngine, psdAtnCrops, psdActionName, psdPageSizes]);
+    return { expected: { w: Math.round(ew), h: Math.round(eh) }, sample: bad[0], count: bad.length };
+  }, [tachikiriMode, colorEngine, selectedActionCrop, psdPageSizes]);
 
   // アクションセット(.atn)ファイルをエクスプローラーで選択
   const handleSelectPsdActionSet = async () => {
@@ -494,6 +498,15 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
       photoshopAction:
         colorEngine === 'photoshop' && tachikiriMode === 'action' && psdActionName.trim()
           ? { actionSetPath: psdActionSetPath, actionName: psdActionName.trim() }
+          : undefined,
+      actionCropRect:
+        colorEngine === 'photoshop' && tachikiriMode === 'action-ratio' && selectedActionCrop
+          ? {
+              left: selectedActionCrop.left,
+              top: selectedActionCrop.top,
+              right: selectedActionCrop.right,
+              bottom: selectedActionCrop.bottom,
+            }
           : undefined,
     };
     try {
@@ -681,16 +694,19 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                     <select value={tachikiriMode} onChange={(e) => setTachikiriMode(e.target.value as EpubTachikiriMode)}>
                       <option value="none">断ち切らない</option>
                       <option value="bleed">断ち切りタブの範囲で断ち切る（内蔵・比率方式）</option>
-                      <option value="action">Photoshopアクションで断ち切る</option>
+                      <option value="action-ratio">Photoshopアクションの比率で断ち切る（内蔵クロップ・サイズ追従）</option>
+                      <option value="action">Photoshopアクションをそのまま実行して断ち切る</option>
                     </select>
                     <div className="form-hint">
                       {tachikiriMode === 'bleed'
                         ? '※「断ち切り」タブで設定した範囲を、各PSDの実サイズに合わせて比率で切り抜きます（TIFF/PDFと同じ方式。サイズ違いでもズレません）。'
+                        : tachikiriMode === 'action-ratio'
+                        ? '※ 選んだアクションの切り抜き座標から比率を割り出し、各PSDの実サイズに合わせて内蔵クロップで切り抜きます（サイズ違いに自動追従・保存ダイアログ無し）。おすすめ。'
                         : tachikiriMode === 'action'
-                        ? '※ 選んだ .atn のアクションで断ち切ります。アクションは固定座標のため、選択画像のサイズがアクションの想定と違うとズレ・黒余白が出ることがあります。'
+                        ? '※ 選んだ .atn のアクションをそのまま実行して断ち切ります。固定座標のため、選択画像のサイズがアクションの想定と違うとズレ・黒余白が出ることがあります。'
                         : '※ 断ち切りが必要な場合は方式を選んでください。'}
                     </div>
-                    {tachikiriMode === 'action' && (
+                    {(tachikiriMode === 'action' || tachikiriMode === 'action-ratio') && (
                       <div className="action-settings">
                         <div className="form-group">
                           <label>アクションセット（.atnファイル）</label>
@@ -741,14 +757,21 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                               type="button"
                               className="btn-secondary btn-small"
                               style={{ marginTop: 6 }}
-                              onClick={() => setTachikiriMode('bleed')}
+                              onClick={() => setTachikiriMode('action-ratio')}
                             >
-                              内蔵・比率方式に切り替える（サイズ違いに強い）
+                              比率方式に切り替える（サイズ違いに自動追従）
                             </button>
                           </div>
                         )}
+                        {tachikiriMode === 'action-ratio' && selectedActionCrop && selectedActionCrop.right > 0 && (
+                          <div className="form-hint">
+                            抽出した切り抜き比率: 左 {(selectedActionCrop.left / selectedActionCrop.right * 100).toFixed(1)}% / 上 {(selectedActionCrop.top / selectedActionCrop.bottom * 100).toFixed(1)}%（想定原稿 {Math.round(selectedActionCrop.right)}×{Math.round(selectedActionCrop.bottom)}px を基準）。各PSDの実サイズに合わせて比率で切り抜きます。
+                          </div>
+                        )}
                         <div className="form-hint">
-                          ※ 各PSDを開いてアクション（断ち切り・切り抜き等）を実行→sRGB変換→JPEG保存します（TIFF変換と同じ仕組み）。アクションに「上書き保存」「閉じる」が含まれていてもOK（元ファイルの加工結果を読み直して引き継ぎます）。最終的なEPUB用JPEGはアプリが書き出します。
+                          {tachikiriMode === 'action-ratio'
+                            ? '※ アクションは実行せず、切り抜き座標だけを使います。ぼかし等アクション固有の加工は適用されません（断ち切り＝切り抜きのみ反映）。'
+                            : '※ 各PSDを開いてアクション（断ち切り・切り抜き等）を実行→sRGB変換→JPEG保存します（TIFF変換と同じ仕組み）。アクションに「上書き保存」「閉じる」が含まれていてもOK（元ファイルの加工結果を読み直して引き継ぎます）。最終的なEPUB用JPEGはアプリが書き出します。'}
                         </div>
                       </div>
                     )}

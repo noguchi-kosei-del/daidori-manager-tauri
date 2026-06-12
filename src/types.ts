@@ -313,13 +313,20 @@ export interface EpubMetadata {
   /**
    * EPUBの断ち切り方式（colorEngine==='photoshop' のときのみ）。
    * 'none': 断ち切らない / 'bleed': 断ち切りタブの範囲で比率クロップ（TIFF/PDFと同じ内蔵方式）
-   * / 'action': Photoshopアクションで断ち切る。フロント専用。
+   * / 'action': Photoshopアクションをそのまま実行して断ち切る
+   * / 'action-ratio': Photoshopアクションの切り抜き座標から比率を割り出し、内蔵クロップで断ち切る。
+   * フロント専用。
    */
   tachikiriMode?: EpubTachikiriMode;
+  /**
+   * 'action-ratio' のとき使う、アクションの切り抜き矩形（想定原稿上の絶対座標px）。
+   * 各PSDの実サイズに合わせて比率スケーリングする（refWidth=right, refHeight=bottom）。
+   */
+  actionCropRect?: { left: number; top: number; right: number; bottom: number };
 }
 
-/** EPUB断ち切り方式（なし / 内蔵比率クロップ / Photoshopアクション） */
-export type EpubTachikiriMode = 'none' | 'bleed' | 'action';
+/** EPUB断ち切り方式（なし / 内蔵比率 / アクションそのまま / アクションの比率） */
+export type EpubTachikiriMode = 'none' | 'bleed' | 'action' | 'action-ratio';
 
 /** EPUB画像変換エンジン（19.3 実験: 高速ネイティブ / 高品質Photoshop） */
 export type EpubColorEngine = 'native' | 'photoshop';

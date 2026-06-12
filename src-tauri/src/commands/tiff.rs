@@ -237,15 +237,17 @@ pub async fn run_photoshop_tiff_convert(
     }
 }
 
-/// アクションごとの切り抜き想定サイズ（断ち切り座標から逆算した想定原稿サイズ）
+/// アクションごとの切り抜き矩形（最大面積のCrop。比率断ち切り＆サイズ警告に使用）
+/// left/top/right/bottom は元アクションが想定する原稿上の絶対座標(px)。
+/// 想定原稿サイズ ≈ (right, bottom)。切り抜きが無ければ全て 0。
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AtnActionCrop {
     pub name: String,
-    /// 切り抜き範囲の右端(px) ≈ 想定原稿幅。切り抜きが無ければ 0
-    pub width: u32,
-    /// 切り抜き範囲の下端(px) ≈ 想定原稿高さ。切り抜きが無ければ 0
-    pub height: u32,
+    pub left: f64,
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
 }
 
 /// .atn 解析結果（フロントのドロップダウン用）
@@ -334,13 +336,22 @@ fn find_action_names_with_pos(bytes: &[u8]) -> Vec<(usize, String)> {
     out
 }
 
-/// バイト範囲内の Crop 記述子から最大の右端/下端(px)を取り出す。
-/// 記述子の UnitFloat は [key:4][type:"UntF"][unit:4][double:8] の並びで格納される。
-/// 切り抜き座標は key="Rght"/"Btom"、単位 "#Pxl"。リサイズの Wdth/Hght は対象外。
-fn max_crop_extent_pixels(data: &[u8]) -> (u32, u32) {
-    let mut max_w = 0f64;
-    let mut max_h = 0f64;
+/// バイト範囲内の Crop 記述子から「最大面積の切り抜き矩形」(left,top,right,bottom px)を取り出す。
+/// 記述子の UnitFloat は [key:4][type:"UntF"][unit:4][double:8] の並び。切り抜きは
+/// Top/Left/Btom/Rght の順で並ぶ（単位 "#Pxl"）。Top を新しい矩形の開始とみなして区切る。
+/// ぼかし(Rds)・リサイズ(Wdth/Hght)・相対単位(#Rlt)の crop は対象外。複数 crop があれば
+/// 面積最大のものを返す。
+fn extract_action_crop_rect(data: &[u8]) -> Option<(f64, f64, f64, f64)> {
+    let mut crops: Vec<(f64, f64, f64, f64)> = Vec::new(); // (left, top, right, bottom)
+    let mut cur: [Option<f64>; 4] = [None; 4]; // [top, left, bottom, right]
     let mut p = 4usize;
+    let flush = |cur: &[Option<f64>; 4], crops: &mut Vec<(f64, f64, f64, f64)>| {
+        if let (Some(t), Some(l), Some(b), Some(r)) = (cur[0], cur[1], cur[2], cur[3]) {
+            if r > l && b > t {
+                crops.push((l, t, r, b));
+            }
+        }
+    };
     while p + 16 <= data.len() {
         if &data[p..p + 4] == b"UntF" && &data[p + 4..p + 8] == b"#Pxl" {
             let key = &data[p - 4..p];
@@ -354,21 +365,36 @@ fn max_crop_extent_pixels(data: &[u8]) -> (u32, u32) {
                 data[p + 14],
                 data[p + 15],
             ]);
-            if val.is_finite() && val > 0.0 && val < 1_000_000.0 {
-                if key == b"Rght" && val > max_w {
-                    max_w = val;
-                }
-                if key == b"Btom" && val > max_h {
-                    max_h = val;
+            let ki = match key {
+                b"Top " => Some(0usize),
+                b"Left" => Some(1usize),
+                b"Btom" => Some(2usize),
+                b"Rght" => Some(3usize),
+                _ => None,
+            };
+            if let Some(ki) = ki {
+                if val.is_finite() && val >= 0.0 && val < 1_000_000.0 {
+                    // "Top " が来たら新しい矩形の開始とみなし、直前の矩形を確定
+                    if ki == 0 && cur.iter().any(|x| x.is_some()) {
+                        flush(&cur, &mut crops);
+                        cur = [None; 4];
+                    }
+                    cur[ki] = Some(val);
                 }
             }
         }
         p += 1;
     }
-    (max_w.round() as u32, max_h.round() as u32)
+    flush(&cur, &mut crops);
+    // 面積最大の矩形を採用
+    crops.into_iter().max_by(|a, b| {
+        let aa = (a.2 - a.0) * (a.3 - a.1);
+        let ba = (b.2 - b.0) * (b.3 - b.1);
+        aa.partial_cmp(&ba).unwrap_or(std::cmp::Ordering::Equal)
+    })
 }
 
-/// アクションごとの切り抜き想定サイズを解析する。
+/// アクションごとの切り抜き矩形を解析する。
 fn parse_atn_action_crops(bytes: &[u8]) -> Vec<AtnActionCrop> {
     let names = find_action_names_with_pos(bytes);
     let mut result = Vec::new();
@@ -378,11 +404,14 @@ fn parse_atn_action_crops(bytes: &[u8]) -> Vec<AtnActionCrop> {
         } else {
             bytes.len()
         };
-        let (w, h) = max_crop_extent_pixels(&bytes[*start..end]);
+        let (left, top, right, bottom) =
+            extract_action_crop_rect(&bytes[*start..end]).unwrap_or((0.0, 0.0, 0.0, 0.0));
         result.push(AtnActionCrop {
             name: name.clone(),
-            width: w,
-            height: h,
+            left,
+            top,
+            right,
+            bottom,
         });
     }
     result
