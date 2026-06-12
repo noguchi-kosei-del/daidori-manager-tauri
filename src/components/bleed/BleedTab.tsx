@@ -27,16 +27,6 @@ const TACHIKIRI_LABELS: Record<string, string> = {
   fill_and_stroke: '塗り＋線',
 };
 
-// 「断ち切りなし」を明示設定したことを表す region（null=未設定 と区別するため）
-const NONE_REGION: BleedRegion = {
-  left: 0, top: 0, right: 0, bottom: 0,
-  refWidth: 0, refHeight: 0,
-  tachikiriType: 'none',
-  strokeColor: 'black',
-  fillColor: 'white',
-  fillOpacity: 100,
-};
-
 interface BleedTarget {
   kind: 'cover' | 'body' | 'chapter';
   chapterId?: string;
@@ -291,37 +281,36 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
         </div>
         <div className="sidebar-content">
           <div className="bleed-summary-panel">
-            <h3 className="bleed-summary-title">断ち切りサマリ</h3>
-            <p className="bleed-summary-note">
-              各ページの「設定/編集」を開いて、方式（範囲 / アクションの比率 / JSONの縮尺）と断ち切りを設定します。
-              アクション・JSONからは数値（断ち切り範囲＋ぼかし半径）だけを取り込み、アプリのネイティブ処理で断ち切り・ぼかしを行います。
-              ここで設定した断ち切りは「出力」タブのすべての出力（JPEG / TIFF / PDF）に適用されます。
-              プロジェクトファイルには保存されません。
-            </p>
-            <div className="bleed-summary-stat">
-              <span>方式</span>
-              <span>{BLEED_METHOD_LABELS[method] ?? method}</span>
+            <div className="bleed-summary-head">
+              <h3 className="bleed-summary-title">断ち切りサマリ</h3>
+              <span className="bleed-summary-count">{configuredCount}/{targets.length}</span>
             </div>
-            <div className="bleed-summary-stat">
-              <span>適用範囲</span>
-              <span>{mode === 'bulk' ? '一括（表紙＋本文）' : '本文ごと'}</span>
+            <div className="bleed-summary-stats">
+              <div className="bleed-summary-stat">
+                <span>方式</span>
+                <span>{BLEED_METHOD_LABELS[method] ?? method}</span>
+              </div>
+              <div className="bleed-summary-stat">
+                <span>適用範囲</span>
+                <span>{mode === 'bulk' ? '一括（表紙＋本文）' : '本文ごと'}</span>
+              </div>
+              <div className="bleed-summary-stat">
+                <span>設定済み</span>
+                <span>{configuredCount} / {targets.length}</span>
+              </div>
+              {(() => {
+                const blurs = [coverRegion?.blurRadius, bodyRegion?.blurRadius, ...Object.values(perChapterRegions).map((r) => r.blurRadius)]
+                  .filter((b): b is number => typeof b === 'number' && b > 0);
+                if (blurs.length === 0) return null;
+                const uniq = Array.from(new Set(blurs)).sort((a, b) => a - b);
+                return (
+                  <div className="bleed-summary-stat">
+                    <span>ぼかし</span>
+                    <span>{uniq.map((b) => `${b}px`).join(' / ')}（カラーは0）</span>
+                  </div>
+                );
+              })()}
             </div>
-            <div className="bleed-summary-stat">
-              <span>設定済み</span>
-              <span>{configuredCount} / {targets.length}</span>
-            </div>
-            {(() => {
-              const blurs = [coverRegion?.blurRadius, bodyRegion?.blurRadius, ...Object.values(perChapterRegions).map((r) => r.blurRadius)]
-                .filter((b): b is number => typeof b === 'number' && b > 0);
-              if (blurs.length === 0) return null;
-              const uniq = Array.from(new Set(blurs)).sort((a, b) => a - b);
-              return (
-                <div className="bleed-summary-stat">
-                  <span>ぼかし</span>
-                  <span>{uniq.map((b) => `${b}px`).join(' / ')}（カラーは0）</span>
-                </div>
-              );
-            })()}
             {configuredCount > 0 && (
               <button type="button" className="btn-secondary btn-small bleed-summary-clear" onClick={reset}>
                 すべて解除
@@ -343,9 +332,9 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
             label={editing.target.label}
             thumbnailPath={editing.thumbnailPath}
             originalFilePath={curPage.filePath ?? ''}
+            originalColorMode={curPage.imageColorMode}
             initialRegion={editing.initialRegion}
             applyLabel="この設定を保存"
-            skipLabel="断ち切りなしにする"
             pageNav={editing.target.pages.length > 1 ? {
               index: editing.pageIndex,
               total: editing.target.pages.length,
@@ -354,7 +343,6 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
               onNext: () => { void goToEditorPage(editing.pageIndex + 1); },
             } : undefined}
             onApply={(region) => { saveRegion(editing.target, region); requestCloseEditor(); }}
-            onSkip={() => { saveRegion(editing.target, NONE_REGION); requestCloseEditor(); }}
             onCancel={() => requestCloseEditor()}
           />
         );

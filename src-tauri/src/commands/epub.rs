@@ -3,7 +3,7 @@ use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
-use crate::epub::EpubBuilder;
+use crate::epub::{available_epub_output_path, EpubBuilder};
 use crate::types::{EpubFormat, EpubGenerateConfig, EpubGenerateResponse, EpubMetadata, EpubPage};
 
 #[derive(Serialize)]
@@ -11,6 +11,14 @@ pub struct PsdGuide {
     #[serde(rename = "type")]
     pub guide_type: String,
     pub position: u32,
+}
+
+#[tauri::command]
+pub fn get_available_epub_output_path(output_path: String) -> Result<String, String> {
+    let path = PathBuf::from(output_path);
+    Ok(available_epub_output_path(&path)
+        .to_string_lossy()
+        .to_string())
 }
 
 /// EPUB生成コマンド

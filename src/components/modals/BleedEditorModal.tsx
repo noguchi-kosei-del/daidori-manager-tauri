@@ -6,7 +6,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { BleedRegion, TachikiriType, BleedColor, BLEED_COLOR_MAP } from './ExportModal';
 import { LockIcon, UnlockIcon, ResetIcon, AlertTriangleIcon } from '../../icons';
 import { useModalAnimation } from '../../hooks';
-import { useBleedStore } from '../../bleedStore';
+import { useBleedStore, type BleedMethod } from '../../bleedStore';
 
 // 6モードカード定義（Tachimi準拠）
 const TACHIKIRI_CARDS: { value: TachikiriType; label: string }[] = [
@@ -17,13 +17,33 @@ const TACHIKIRI_CARDS: { value: TachikiriType; label: string }[] = [
   { value: 'fill_white', label: '塗る' },
   { value: 'fill_and_stroke', label: '塗+線' },
 ];
+const DEFAULT_BLUR_RADIUS = 2.5;
 const STROKE_TYPES: TachikiriType[] = ['crop_and_stroke', 'stroke_only', 'fill_and_stroke'];
 const FILL_TYPES: TachikiriType[] = ['fill_white', 'fill_and_stroke'];
+const CROP_TYPES: TachikiriType[] = ['crop_only', 'crop_and_stroke'];
 const COLOR_OPTIONS: { value: BleedColor; label: string }[] = [
   { value: 'black', label: '黒' },
   { value: 'white', label: '白' },
   { value: 'cyan', label: '水色' },
 ];
+const BLEED_METHOD_CARDS: { value: BleedMethod; label: string; badge: string }[] = [
+  { value: 'none', label: 'なし', badge: '-' },
+  { value: 'region', label: '手動', badge: '□' },
+  { value: 'action-ratio', label: 'アクション', badge: '%' },
+  { value: 'json', label: 'JSON', badge: '{}' },
+];
+
+function hexToRgba(hex: string, opacityPercent: number): string {
+  const clean = hex.replace('#', '');
+  const value = clean.length === 3
+    ? clean.split('').map((c) => `${c}${c}`).join('')
+    : clean;
+  const r = parseInt(value.slice(0, 2), 16);
+  const g = parseInt(value.slice(2, 4), 16);
+  const b = parseInt(value.slice(4, 6), 16);
+  const a = Math.max(0, Math.min(opacityPercent, 100)) / 100;
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
 
 interface Guide {
   type: 'h' | 'v';
@@ -35,12 +55,11 @@ interface BleedEditorModalProps {
   label: string;
   thumbnailPath: string;
   originalFilePath: string;
+  originalColorMode?: string;
   onApply: (region: BleedRegion) => void;
-  onSkip: () => void;
   onCancel: () => void;
   // 断ち切りタブからの再利用時にボタン文言と初期値を差し替える（既定は従来のエクスポート用途）
   applyLabel?: string;
-  skipLabel?: string;
   initialRegion?: BleedRegion | null;
   // 断ち切りタブ内で中央＋右パネルとしてインライン表示する（全画面モーダルにしない）
   embedded?: boolean;
@@ -59,11 +78,10 @@ export function BleedEditorModal({
   label,
   thumbnailPath,
   originalFilePath,
+  originalColorMode,
   onApply,
-  onSkip,
   onCancel,
   applyLabel = 'エクスポート',
-  skipLabel = 'スキップしてエクスポート',
   initialRegion = null,
   embedded = false,
   pageNav,
@@ -100,10 +118,26 @@ export function BleedEditorModal({
   const [fillColor, setFillColor] = useState<BleedColor>('white');
   const [fillOpacity, setFillOpacity] = useState(50);
   // アクション/JSON から取り込んだぼかし半径(px)。編集可能（テキスト保持で自由入力）。
-  const [blurRadiusText, setBlurRadiusText] = useState('0');
-  const blurRadius = Math.max(0, parseFloat(blurRadiusText) || 0);
+  const [blurEnabled, setBlurEnabled] = useState(true);
+  const [blurRadiusText, setBlurRadiusText] = useState(String(DEFAULT_BLUR_RADIUS));
+  const blurInputRadius = Math.max(0, parseFloat(blurRadiusText) || 0);
+  const blurRadius = blurEnabled ? blurInputRadius : 0;
   // 既存の setBlurRadius(n) 呼び出し（.atn/JSON/初期値からの取り込み）を温存するラッパー
-  const setBlurRadius = (n: number) => setBlurRadiusText(n > 0 ? String(n) : '0');
+  const setBlurRadius = (n: number) => {
+    if (n > 0) {
+      setBlurEnabled(true);
+      setBlurRadiusText(String(n));
+    } else {
+      setBlurEnabled(false);
+      setBlurRadiusText(String(DEFAULT_BLUR_RADIUS));
+    }
+  };
+  const setBlurAvailability = (enabled: boolean) => {
+    setBlurEnabled(enabled);
+    if (enabled && blurInputRadius <= 0) setBlurRadiusText(String(DEFAULT_BLUR_RADIUS));
+  };
+  const isColorBlurAutoZero = originalColorMode === 'RGB' || originalColorMode === 'CMYK';
+  const effectiveBlurRadius = isColorBlurAutoZero ? 0 : blurRadius;
 
   // 断ち切り方式（断ち切りタブに一本化。グローバル設定をこの編集画面で選ぶ）
   const method = useBleedStore((s) => s.method);
@@ -160,7 +194,7 @@ export function BleedEditorModal({
 
   // --- JSONの縮尺（CLLENN共有JSON）方式 ---
   type CllennRange = { label: string; bounds: { left: number; top: number; right: number; bottom: number }; docWidth: number; docHeight: number; blurRadius: number };
-  const [cllennDir, setCllennDir] = useState('');
+  const [, setCllennDir] = useState('');
   const [jsonLabels, setJsonLabels] = useState<string[]>([]);
   const [jsonLabel, setJsonLabel] = useState('');
   const [jsonWorks, setJsonWorks] = useState<{ name: string; path: string }[]>([]);
@@ -168,6 +202,7 @@ export function BleedEditorModal({
   const [jsonRanges, setJsonRanges] = useState<CllennRange[]>([]);
   const [jsonRangeIdx, setJsonRangeIdx] = useState(0);
   const [jsonError, setJsonError] = useState('');
+  const [jsonSearch, setJsonSearch] = useState('');
 
   // json 方式選択時: 固定フォルダのパスとレーベル一覧を取得
   useEffect(() => {
@@ -220,6 +255,28 @@ export function BleedEditorModal({
     () => (jsonRanges.length > 0 ? jsonRanges[Math.min(jsonRangeIdx, jsonRanges.length - 1)] ?? null : null),
     [jsonRanges, jsonRangeIdx],
   );
+  const normalizedJsonSearch = jsonSearch.trim().toLowerCase();
+  const filteredJsonLabels = useMemo(() => {
+    const filtered = normalizedJsonSearch
+      ? jsonLabels.filter((label) => label.toLowerCase().includes(normalizedJsonSearch))
+      : jsonLabels;
+    return jsonLabel && !filtered.includes(jsonLabel) ? [jsonLabel, ...filtered] : filtered;
+  }, [jsonLabels, jsonLabel, normalizedJsonSearch]);
+  const filteredJsonWorks = useMemo(() => {
+    const filtered = normalizedJsonSearch
+      ? jsonWorks.filter((work) => work.name.toLowerCase().includes(normalizedJsonSearch))
+      : jsonWorks;
+    const current = jsonWorks.find((work) => work.path === jsonWorkPath);
+    return current && !filtered.some((work) => work.path === current.path) ? [current, ...filtered] : filtered;
+  }, [jsonWorks, jsonWorkPath, normalizedJsonSearch]);
+  const filteredJsonRanges = useMemo(() => {
+    const indexed = jsonRanges.map((range, index) => ({ range, index }));
+    const filtered = normalizedJsonSearch
+      ? indexed.filter(({ range }) => range.label.toLowerCase().includes(normalizedJsonSearch))
+      : indexed;
+    const current = indexed.find(({ index }) => index === jsonRangeIdx);
+    return current && !filtered.some(({ index }) => index === current.index) ? [current, ...filtered] : filtered;
+  }, [jsonRanges, jsonRangeIdx, normalizedJsonSearch]);
 
   // 選択中の JSON 範囲を、この画像サイズに合わせた選択範囲(元画像px)へ変換
   const computeJsonSelection = useCallback(() => {
@@ -243,7 +300,7 @@ export function BleedEditorModal({
       setSelection(sel);
       setGuidesLocked(true);
       setTachikiriType((t) => (t === 'none' ? 'crop_only' : t));
-      setBlurRadius(selectedJsonRange?.blurRadius ?? 0);
+      setBlurRadius(selectedJsonRange?.blurRadius ?? DEFAULT_BLUR_RADIUS);
     }
   }, [computeJsonSelection, selectedJsonRange]);
 
@@ -255,7 +312,7 @@ export function BleedEditorModal({
       setSelection(sel);
       setGuidesLocked(true);
       setTachikiriType((t) => (t === 'none' ? 'crop_only' : t));
-      setBlurRadius(selectedJsonRange?.blurRadius ?? 0);
+      setBlurRadius(selectedJsonRange?.blurRadius ?? DEFAULT_BLUR_RADIUS);
     }
   }, [method, computeJsonSelection, selection, selectedJsonRange]);
 
@@ -281,7 +338,7 @@ export function BleedEditorModal({
       setSelection(sel);
       setGuidesLocked(true);
       setTachikiriType((t) => (t === 'none' ? 'crop_only' : t));
-      setBlurRadius(selectedActionCrop?.blurRadius ?? 0);
+      setBlurRadius(selectedActionCrop?.blurRadius ?? DEFAULT_BLUR_RADIUS);
     }
   }, [method, computeActionSelection, selection, selectedActionCrop]);
 
@@ -292,7 +349,7 @@ export function BleedEditorModal({
       setSelection(sel);
       setGuidesLocked(true);
       setTachikiriType((t) => (t === 'none' ? 'crop_only' : t));
-      setBlurRadius(selectedActionCrop?.blurRadius ?? 0);
+      setBlurRadius(selectedActionCrop?.blurRadius ?? DEFAULT_BLUR_RADIUS);
     }
   }, [computeActionSelection, selectedActionCrop]);
 
@@ -310,7 +367,12 @@ export function BleedEditorModal({
         setStrokeColor(initialRegion.strokeColor);
         setFillColor(initialRegion.fillColor);
         setFillOpacity(initialRegion.fillOpacity);
-        setBlurRadius(initialRegion.blurRadius ?? 0);
+        if ((initialRegion.blurRadius ?? 0) > 0) {
+          setBlurRadius(initialRegion.blurRadius ?? DEFAULT_BLUR_RADIUS);
+        } else {
+          setBlurEnabled(false);
+          setBlurRadiusText(String(DEFAULT_BLUR_RADIUS));
+        }
         if (initialRegion.tachikiriType !== 'none' && initialRegion.right > initialRegion.left && initialRegion.bottom > initialRegion.top) {
           setSelection({
             left: initialRegion.left,
@@ -332,7 +394,8 @@ export function BleedEditorModal({
         setStrokeColor('black');
         setFillColor('white');
         setFillOpacity(50);
-        setBlurRadius(0);
+        setBlurEnabled(true);
+        setBlurRadiusText(String(DEFAULT_BLUR_RADIUS));
       }
     }
     // originalFilePath は依存に入れない（ページ送りで選択・設定がリセットされないように）
@@ -363,10 +426,12 @@ export function BleedEditorModal({
 
   // 画像バウンド計算
   const calculateBounds = useCallback(() => {
-    const img = imgRef.current;
-    if (!img || !originalSize) return;
-    const cw = img.offsetWidth;
-    const ch = img.offsetHeight;
+    const container = containerRef.current;
+    if (!container || !originalSize) return;
+    const rect = container.getBoundingClientRect();
+    const cw = rect.width;
+    const ch = rect.height;
+    if (cw <= 0 || ch <= 0) return;
     const aspect = originalSize.width / originalSize.height;
     const cAspect = cw / ch;
     let dw: number, dh: number, ox: number, oy: number;
@@ -382,9 +447,18 @@ export function BleedEditorModal({
     if (isOpen) {
       const timer = setTimeout(calculateBounds, 100);
       window.addEventListener('resize', calculateBounds);
-      return () => { clearTimeout(timer); window.removeEventListener('resize', calculateBounds); };
+      const container = containerRef.current;
+      const resizeObserver = container && 'ResizeObserver' in window
+        ? new ResizeObserver(() => calculateBounds())
+        : null;
+      if (container && resizeObserver) resizeObserver.observe(container);
+      return () => {
+        clearTimeout(timer);
+        window.removeEventListener('resize', calculateBounds);
+        resizeObserver?.disconnect();
+      };
     }
-  }, [isOpen, calculateBounds]);
+  }, [isOpen, calculateBounds, method]);
 
   // ヒント更新
   useEffect(() => {
@@ -636,7 +710,7 @@ export function BleedEditorModal({
       strokeColor,
       fillColor,
       fillOpacity,
-      blurRadius: blurRadius > 0 ? blurRadius : undefined,
+      blurRadius: tachikiriType !== 'none' && effectiveBlurRadius > 0 ? effectiveBlurRadius : undefined,
     };
     if (tachikiriType === 'none') {
       return { left: 0, top: 0, right: 0, bottom: 0, ...base };
@@ -654,6 +728,181 @@ export function BleedEditorModal({
   // エクスポート可否: 'none' は選択不要、それ以外は有効な選択が必要
   const canApply = tachikiriType === 'none' || hasValidSelection;
 
+  const referencePanel = isActionMethod ? (
+    <div className="bleed-reference-panel">
+      <div className="bleed-reference-head">
+        <div>
+          <div className="bleed-reference-kicker">参照設定</div>
+          <div className="bleed-reference-title">アクション参照</div>
+        </div>
+        <div className="bleed-reference-head-right">
+          {atnSetName && <strong title={atnSetName}>{atnSetName}</strong>}
+        </div>
+      </div>
+      <>
+          <div className="bleed-reference-controls">
+            <div className="form-group">
+              <label>アクションセット（.atnファイル）</label>
+              <div className="input-with-button">
+                <input type="text" value={actionSetPath} placeholder="エクスプローラーで .atn を選択..." readOnly />
+                <button type="button" className="btn-secondary btn-small" onClick={() => void handleSelectActionSet()}>参照</button>
+              </div>
+            </div>
+            <div className="form-group">
+              <label>アクション名</label>
+              {atnActions.length > 0 ? (
+                <select value={atnActions.includes(actionName) ? actionName : ''} onChange={(e) => setActionName(e.target.value)}>
+                  <option value="">（アクションを選択してください）</option>
+                  {atnActions.map((a) => <option key={a} value={a}>{a}</option>)}
+                </select>
+              ) : (
+                <input type="text" value={actionName} onChange={(e) => setActionName(e.target.value)} placeholder="例: 断ち切り" />
+              )}
+            </div>
+          </div>
+          {atnError && <div className="bleed-editor-hint bleed-reference-error">.atnの解析に失敗しました（手入力してください）: {atnError}</div>}
+          {selectedActionCrop && selectedActionCrop.right > 0 && (
+            <div className="bleed-reference-result">
+              <div className="bleed-reference-meta">
+                <div>
+                  <span>切り抜き比率</span>
+                  <strong>
+                    横 {((selectedActionCrop.right - selectedActionCrop.left) / selectedActionCrop.right * 100).toFixed(1)}% / 縦 {((selectedActionCrop.bottom - selectedActionCrop.top) / selectedActionCrop.bottom * 100).toFixed(1)}%
+                  </strong>
+                </div>
+                <div>
+                  <span>想定原稿</span>
+                  <strong>{Math.round(selectedActionCrop.right)} x {Math.round(selectedActionCrop.bottom)}px</strong>
+                </div>
+                <div>
+                  <span>ぼかし半径</span>
+                  <strong>{(selectedActionCrop.blurRadius ?? 0) > 0 ? `${selectedActionCrop.blurRadius}px` : 'なし'}</strong>
+                </div>
+              </div>
+              <button type="button" className="btn-secondary btn-small" onClick={loadActionSelection} disabled={!originalSize}>
+                アクションの比率で範囲を再反映
+              </button>
+            </div>
+          )}
+      </>
+    </div>
+  ) : method === 'json' ? (
+    <div className="bleed-reference-panel">
+      <div className="bleed-reference-head">
+        <div>
+          <div className="bleed-reference-kicker">参照設定</div>
+          <div className="bleed-reference-title">JSON参照</div>
+        </div>
+      </div>
+      <>
+          <div className="bleed-reference-controls bleed-reference-controls-json">
+            <div className="form-group bleed-json-search">
+              <label>検索</label>
+              <input
+                type="text"
+                value={jsonSearch}
+                onChange={(e) => setJsonSearch(e.target.value)}
+                placeholder="作品名を検索"
+              />
+            </div>
+            <div className="form-group">
+              <label>レーベル</label>
+              <select value={jsonLabel} onChange={(e) => { setJsonLabel(e.target.value); setJsonWorkPath(''); setJsonRanges([]); }}>
+                <option value="">（レーベルを選択）</option>
+                {filteredJsonLabels.map((l) => <option key={l} value={l}>{l}</option>)}
+                {filteredJsonLabels.length === 0 && <option value="" disabled>該当なし</option>}
+              </select>
+            </div>
+            <div className="form-group">
+              <label>作品</label>
+              <select value={jsonWorkPath} onChange={(e) => setJsonWorkPath(e.target.value)} disabled={!jsonLabel || jsonWorks.length === 0}>
+                <option value="">（作品を選択）</option>
+                {filteredJsonWorks.map((w) => <option key={w.path} value={w.path}>{w.name}</option>)}
+                {jsonLabel && jsonWorks.length > 0 && filteredJsonWorks.length === 0 && <option value="" disabled>該当なし</option>}
+              </select>
+            </div>
+            {jsonRanges.length > 0 && (
+              <div className="form-group">
+                <label>範囲（ラベル）</label>
+                <select value={String(jsonRangeIdx)} onChange={(e) => { setJsonRangeIdx(Number(e.target.value)); setSelection(null); }}>
+                  {filteredJsonRanges.map(({ range, index }) => <option key={index} value={String(index)}>{range.label}</option>)}
+                  {filteredJsonRanges.length === 0 && <option value="" disabled>該当なし</option>}
+                </select>
+              </div>
+            )}
+          </div>
+          {selectedJsonRange && (
+            <div className="bleed-reference-result">
+              <div className="bleed-reference-meta">
+                <div>
+                  <span>断ち切り範囲</span>
+                  <strong>{Math.round(selectedJsonRange.bounds.left)},{Math.round(selectedJsonRange.bounds.top)} - {Math.round(selectedJsonRange.bounds.right)},{Math.round(selectedJsonRange.bounds.bottom)}</strong>
+                </div>
+                <div>
+                  <span>基準サイズ</span>
+                  <strong>{Math.round(selectedJsonRange.docWidth)} x {Math.round(selectedJsonRange.docHeight)}px</strong>
+                </div>
+                <div>
+                  <span>ぼかし半径</span>
+                  <strong>{(selectedJsonRange.blurRadius ?? 0) > 0 ? `${selectedJsonRange.blurRadius}px` : 'なし'}</strong>
+                </div>
+              </div>
+              <button type="button" className="btn-secondary btn-small" onClick={loadJsonSelection} disabled={!originalSize}>
+                JSONの範囲を再反映
+              </button>
+            </div>
+          )}
+          {jsonError && <div className="bleed-editor-hint bleed-reference-error">{jsonError}</div>}
+      </>
+    </div>
+  ) : null;
+
+  const pageNavControl = pageNav && pageNav.total > 1 ? (
+    <div className="bleed-page-nav bleed-page-nav-inline">
+      {pageNav.label && (
+        <div className="bleed-page-nav-name" title={pageNav.label}>{pageNav.label}</div>
+      )}
+      <div className="bleed-page-nav-row">
+        <button
+          type="button"
+          className="bleed-page-nav-btn"
+          onClick={pageNav.onPrev}
+          disabled={pageNav.index <= 0}
+          title="前のページ"
+        >‹</button>
+        <span className="bleed-page-nav-count">{pageNav.index + 1} / {pageNav.total}</span>
+        <button
+          type="button"
+          className="bleed-page-nav-btn"
+          onClick={pageNav.onNext}
+          disabled={pageNav.index >= pageNav.total - 1}
+          title="次のページ"
+        >›</button>
+      </div>
+    </div>
+  ) : null;
+
+  const guideControls = (
+    <div className="bleed-guide-floating" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+      <button
+        className={`btn-small bleed-lock-btn ${guidesLocked ? 'active' : ''}`}
+        onClick={toggleLock}
+        disabled={guides.length === 0}
+        title={guidesLocked ? 'ガイドの確定を解除' : 'ガイドを確定'}
+      >
+        {guidesLocked ? <UnlockIcon size={14} /> : <LockIcon size={14} />}
+        {guidesLocked ? '確定解除' : 'ガイド確定'}
+      </button>
+      {guides.length > 0 && !guidesLocked && (
+        <button className="btn-secondary btn-small bleed-reset-btn"
+          onClick={() => { setGuides([]); setSelection(null); }}>
+          <ResetIcon size={14} />
+          リセット
+        </button>
+      )}
+    </div>
+  );
+
   // 選択範囲の表示座標
   const selectionDisplay = (() => {
     if (!selection || !imageBounds || !originalSize) return null;
@@ -663,6 +912,18 @@ export function BleedEditorModal({
     const b = imageToDisplay(selection.bottom, 'h');
     return { left: l, top: t, width: r - l, height: b - t };
   })();
+  const showsCropPreview = CROP_TYPES.includes(tachikiriType);
+  const showsOutsidePreview = showsCropPreview || FILL_TYPES.includes(tachikiriType);
+  const outsidePreviewBackground = showsCropPreview
+    ? '#000000'
+    : hexToRgba(BLEED_COLOR_MAP[fillColor], fillOpacity);
+  const showsStrokePreview = STROKE_TYPES.includes(tachikiriType);
+  const selectionPreviewStyle = showsStrokePreview
+    ? {
+        borderColor: BLEED_COLOR_MAP[strokeColor],
+        boxShadow: `0 0 0 1px rgba(255, 255, 255, 0.55), 0 0 12px ${hexToRgba(BLEED_COLOR_MAP[strokeColor], 45)}`,
+      }
+    : undefined;
 
   const { shouldRender, isClosing } = useModalAnimation(isOpen);
   if (!shouldRender) return null;
@@ -670,12 +931,16 @@ export function BleedEditorModal({
   const editorBody = (
     <>
         <div className="bleed-editor-header">
-          <h2>{label}の断ち切り範囲設定</h2>
+          <div className="bleed-editor-title-row">
+            <h2>{label}の断ち切り範囲設定</h2>
+            {pageNavControl}
+          </div>
           <div className="bleed-editor-hint">{hint}</div>
         </div>
 
         <div className="bleed-editor-body">
-          <div className="bleed-editor-ruler-wrapper">
+          <div className="bleed-editor-main">
+            <div className="bleed-editor-ruler-wrapper">
             <div className="bleed-editor-ruler-corner" />
             <div
               className={`bleed-editor-ruler bleed-editor-ruler-h ${guidesLocked ? 'locked' : ''}`}
@@ -702,35 +967,45 @@ export function BleedEditorModal({
                 draggable={false}
                 onLoad={calculateBounds}
               />
+              {guideControls}
 
               {/* 選択範囲 */}
               {imageBounds && selectionDisplay && hasValidSelection && (
                 <>
-                  <div className="bleed-editor-dim" style={{
-                    left: imageBounds.offsetX, top: imageBounds.offsetY,
-                    width: imageBounds.displayWidth, height: selectionDisplay.top,
-                  }} />
-                  <div className="bleed-editor-dim" style={{
-                    left: imageBounds.offsetX,
-                    top: imageBounds.offsetY + selectionDisplay.top + selectionDisplay.height,
-                    width: imageBounds.displayWidth,
-                    height: imageBounds.displayHeight - selectionDisplay.top - selectionDisplay.height,
-                  }} />
-                  <div className="bleed-editor-dim" style={{
-                    left: imageBounds.offsetX,
-                    top: imageBounds.offsetY + selectionDisplay.top,
-                    width: selectionDisplay.left, height: selectionDisplay.height,
-                  }} />
-                  <div className="bleed-editor-dim" style={{
-                    left: imageBounds.offsetX + selectionDisplay.left + selectionDisplay.width,
-                    top: imageBounds.offsetY + selectionDisplay.top,
-                    width: imageBounds.displayWidth - selectionDisplay.left - selectionDisplay.width,
-                    height: selectionDisplay.height,
-                  }} />
+                  {showsOutsidePreview && (
+                    <>
+                      <div className="bleed-editor-dim" style={{
+                        left: imageBounds.offsetX, top: imageBounds.offsetY,
+                        width: imageBounds.displayWidth, height: selectionDisplay.top,
+                        background: outsidePreviewBackground,
+                      }} />
+                      <div className="bleed-editor-dim" style={{
+                        left: imageBounds.offsetX,
+                        top: imageBounds.offsetY + selectionDisplay.top + selectionDisplay.height,
+                        width: imageBounds.displayWidth,
+                        height: imageBounds.displayHeight - selectionDisplay.top - selectionDisplay.height,
+                        background: outsidePreviewBackground,
+                      }} />
+                      <div className="bleed-editor-dim" style={{
+                        left: imageBounds.offsetX,
+                        top: imageBounds.offsetY + selectionDisplay.top,
+                        width: selectionDisplay.left, height: selectionDisplay.height,
+                        background: outsidePreviewBackground,
+                      }} />
+                      <div className="bleed-editor-dim" style={{
+                        left: imageBounds.offsetX + selectionDisplay.left + selectionDisplay.width,
+                        top: imageBounds.offsetY + selectionDisplay.top,
+                        width: imageBounds.displayWidth - selectionDisplay.left - selectionDisplay.width,
+                        height: selectionDisplay.height,
+                        background: outsidePreviewBackground,
+                      }} />
+                    </>
+                  )}
                   <div className="bleed-editor-selection" style={{
                     left: imageBounds.offsetX + selectionDisplay.left,
                     top: imageBounds.offsetY + selectionDisplay.top,
                     width: selectionDisplay.width, height: selectionDisplay.height,
+                    ...selectionPreviewStyle,
                   }} />
                 </>
               )}
@@ -770,24 +1045,43 @@ export function BleedEditorModal({
                 )
               )}
             </div>
+            </div>
           </div>
 
           {/* サイドパネル */}
           <div className="bleed-editor-panel">
-            <div className="bleed-editor-panel-title">断ち切り設定</div>
+            <div className="bleed-editor-panel-head">
+              <div className="bleed-editor-panel-title">断ち切り設定</div>
+              {originalSize && (
+                <div className="bleed-editor-image-size">元画像 {originalSize.width} x {originalSize.height}</div>
+              )}
+            </div>
             {/* 断ち切り方式（全出力共通・断ち切りタブに一本化） */}
-            <div className="bleed-editor-method">
-              <label>方式</label>
-              <select value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
-                <option value="none">断ち切らない</option>
-                <option value="region">範囲を描いて断ち切る</option>
-                <option value="action-ratio">アクションの比率で断ち切る（中央揃え）</option>
-                <option value="json">JSONの縮尺を利用する</option>
-              </select>
+            <div className="bleed-editor-section bleed-editor-method">
+              <div className="bleed-mode-title">方式</div>
+              <div className="bleed-method-grid">
+                {BLEED_METHOD_CARDS.map((card) => (
+                  <button
+                    key={card.value}
+                    type="button"
+                    className={`bleed-method-card ${method === card.value ? 'selected' : ''}`}
+                    onClick={() => setMethod(card.value)}
+                    aria-pressed={method === card.value}
+                  >
+                    <span className="bleed-method-badge">{card.badge}</span>
+                    <span className="bleed-method-text">
+                      <strong>{card.label}</strong>
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
 
+            {referencePanel}
+
             {isActionMethod && (
-              <div className="bleed-editor-action">
+              <div className="bleed-editor-section bleed-editor-action">
+                <div className="bleed-mode-title">アクション参照</div>
                 <div className="form-group">
                   <label>アクションセット（.atnファイル）</label>
                   <div className="input-with-button">
@@ -795,7 +1089,7 @@ export function BleedEditorModal({
                     <button type="button" className="btn-secondary btn-small" onClick={() => void handleSelectActionSet()}>参照</button>
                   </div>
                 </div>
-                {atnSetName && <div className="bleed-editor-hint">セット名: {atnSetName}</div>}
+                {atnSetName && <div className="bleed-editor-meta-line"><span>セット名</span><strong>{atnSetName}</strong></div>}
                 <div className="form-group">
                   <label>アクション名</label>
                   {atnActions.length > 0 ? (
@@ -810,28 +1104,33 @@ export function BleedEditorModal({
                 {atnError && <div className="bleed-editor-hint" style={{ color: 'var(--color-error, #dc2626)' }}>.atnの解析に失敗しました（手入力してください）: {atnError}</div>}
                 {selectedActionCrop && selectedActionCrop.right > 0 && (
                   <>
-                    <div className="bleed-editor-hint">
-                      抽出した切り抜き比率: 横 {((selectedActionCrop.right - selectedActionCrop.left) / selectedActionCrop.right * 100).toFixed(1)}% / 縦 {((selectedActionCrop.bottom - selectedActionCrop.top) / selectedActionCrop.bottom * 100).toFixed(1)}%（想定原稿 {Math.round(selectedActionCrop.right)}×{Math.round(selectedActionCrop.bottom)}px 基準）
+                    <div className="bleed-editor-meta-grid">
+                      <div>
+                        <span>切り抜き比率</span>
+                        <strong>
+                          横 {((selectedActionCrop.right - selectedActionCrop.left) / selectedActionCrop.right * 100).toFixed(1)}% / 縦 {((selectedActionCrop.bottom - selectedActionCrop.top) / selectedActionCrop.bottom * 100).toFixed(1)}%
+                        </strong>
+                      </div>
+                      <div>
+                        <span>想定原稿</span>
+                        <strong>{Math.round(selectedActionCrop.right)} x {Math.round(selectedActionCrop.bottom)}px</strong>
+                      </div>
+                      <div>
+                        <span>ぼかし半径</span>
+                        <strong>{(selectedActionCrop.blurRadius ?? 0) > 0 ? `${selectedActionCrop.blurRadius}px` : 'なし'}</strong>
+                      </div>
                     </div>
-                    <div className="bleed-editor-hint">
-                      アクションのぼかし半径: {(selectedActionCrop.blurRadius ?? 0) > 0 ? `${selectedActionCrop.blurRadius}px` : 'なし'}（カラー原稿は自動で0）
-                    </div>
-                    <button type="button" className="btn-secondary btn-small" onClick={loadActionSelection} disabled={!originalSize}>
+                    <button type="button" className="btn-secondary btn-small bleed-editor-full-btn" onClick={loadActionSelection} disabled={!originalSize}>
                       アクションの比率で範囲を入れ直す
                     </button>
                   </>
                 )}
-                <div className="bleed-editor-hint">
-                  ※ アクションからは数値（切り抜き比率とぼかし半径）だけを取り出し、アプリのネイティブ処理で断ち切り・ぼかしを行います（Photoshopアクションは実行しません）。各画像の中央に当てはめた範囲をビューアに表示するので、ガイドや処理タイプで調整して「{applyLabel}」で確定してください（サイズ違いに自動追従）。
-                </div>
               </div>
             )}
 
             {method === 'json' && (
-              <div className="bleed-editor-action">
-                <div className="bleed-editor-hint">
-                  参照元（固定）: <span style={{ wordBreak: 'break-all' }}>{cllennDir || '取得中...'}</span>
-                </div>
+              <div className="bleed-editor-section bleed-editor-action">
+                <div className="bleed-mode-title">JSON参照</div>
                 <div className="form-group">
                   <label>レーベル</label>
                   <select value={jsonLabel} onChange={(e) => { setJsonLabel(e.target.value); setJsonWorkPath(''); setJsonRanges([]); }}>
@@ -856,77 +1155,36 @@ export function BleedEditorModal({
                 )}
                 {selectedJsonRange && (
                   <>
-                    <div className="bleed-editor-hint">
-                      断ち切り範囲: {Math.round(selectedJsonRange.bounds.left)},{Math.round(selectedJsonRange.bounds.top)} – {Math.round(selectedJsonRange.bounds.right)},{Math.round(selectedJsonRange.bounds.bottom)}（基準 {Math.round(selectedJsonRange.docWidth)}×{Math.round(selectedJsonRange.docHeight)}px）
+                    <div className="bleed-editor-meta-grid">
+                      <div>
+                        <span>断ち切り範囲</span>
+                        <strong>{Math.round(selectedJsonRange.bounds.left)},{Math.round(selectedJsonRange.bounds.top)} - {Math.round(selectedJsonRange.bounds.right)},{Math.round(selectedJsonRange.bounds.bottom)}</strong>
+                      </div>
+                      <div>
+                        <span>基準サイズ</span>
+                        <strong>{Math.round(selectedJsonRange.docWidth)} x {Math.round(selectedJsonRange.docHeight)}px</strong>
+                      </div>
+                      <div>
+                        <span>ぼかし半径</span>
+                        <strong>{(selectedJsonRange.blurRadius ?? 0) > 0 ? `${selectedJsonRange.blurRadius}px` : 'なし'}</strong>
+                      </div>
                     </div>
-                    <div className="bleed-editor-hint">
-                      JSONのぼかし半径: {(selectedJsonRange.blurRadius ?? 0) > 0 ? `${selectedJsonRange.blurRadius}px` : 'なし'}（カラー原稿は自動で0）
-                    </div>
-                    <button type="button" className="btn-secondary btn-small" onClick={loadJsonSelection} disabled={!originalSize}>
+                    <button type="button" className="btn-secondary btn-small bleed-editor-full-btn" onClick={loadJsonSelection} disabled={!originalSize}>
                       JSONの範囲を入れ直す
                     </button>
                   </>
                 )}
                 {jsonError && <div className="bleed-editor-hint" style={{ color: 'var(--color-error, #dc2626)' }}>{jsonError}</div>}
-                <div className="bleed-editor-hint">
-                  ※ CLLENNの共有JSON（縮尺）から断ち切り範囲とぼかし半径を取り出し、アプリのネイティブ処理で断ち切り・ぼかしを行います。ガイドや処理タイプで調整して「{applyLabel}」で確定してください（サイズ違いに自動追従）。
-                </div>
               </div>
             )}
 
             {method === 'none' && (
-              <div className="bleed-editor-hint">断ち切りを行いません。下の「{applyLabel}」で閉じてください。</div>
-            )}
-
-            {(method === 'region' || method === 'action-ratio' || method === 'json') && (<>
-            {originalSize && (
-              <div className="bleed-editor-image-size">元画像: {originalSize.width} x {originalSize.height}</div>
-            )}
-
-            {pageNav && pageNav.total > 1 && (
-              <div className="bleed-page-nav">
-                <div className="bleed-page-nav-head">プレビューするページ</div>
-                <div className="bleed-page-nav-row">
-                  <button
-                    type="button"
-                    className="bleed-page-nav-btn"
-                    onClick={pageNav.onPrev}
-                    disabled={pageNav.index <= 0}
-                    title="前のページ"
-                  >‹</button>
-                  <span className="bleed-page-nav-count">{pageNav.index + 1} / {pageNav.total}</span>
-                  <button
-                    type="button"
-                    className="bleed-page-nav-btn"
-                    onClick={pageNav.onNext}
-                    disabled={pageNav.index >= pageNav.total - 1}
-                    title="次のページ"
-                  >›</button>
-                </div>
-                {pageNav.label && (
-                  <div className="bleed-page-nav-name" title={pageNav.label}>{pageNav.label}</div>
-                )}
-                <div className="bleed-page-nav-hint">トンボが見えるページで設定できます</div>
+              <div className="bleed-editor-section">
+                <div className="bleed-editor-status-card">断ち切りなし</div>
               </div>
             )}
 
-            <button
-              className={`btn-small bleed-lock-btn ${guidesLocked ? 'active' : ''}`}
-              onClick={toggleLock}
-              disabled={guides.length === 0}
-              title={guidesLocked ? 'ガイドの確定を解除' : 'ガイドを確定'}
-            >
-              {guidesLocked ? <UnlockIcon size={14} /> : <LockIcon size={14} />}
-              {guidesLocked ? '確定解除' : 'ガイドを確定'}
-            </button>
-            {guides.length > 0 && !guidesLocked && (
-              <button className="btn-secondary btn-small bleed-reset-btn" style={{ marginTop: 8 }}
-                onClick={() => { setGuides([]); setSelection(null); }}>
-                <ResetIcon size={14} />
-                ガイドをリセット
-              </button>
-            )}
-
+            {(method === 'region' || method === 'action-ratio' || method === 'json') && (<>
             <div className="bleed-mode-section">
               <div className="bleed-mode-title">処理タイプ</div>
               <div className="bleed-mode-grid">
@@ -981,51 +1239,47 @@ export function BleedEditorModal({
 
             <div className="bleed-mode-section">
               <div className="bleed-mode-title">ぼかし（ガウス）</div>
-              <div className="bleed-color-row">
-                <label>半径(px)</label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={blurRadiusText}
-                  onChange={(e) => setBlurRadiusText(e.target.value.replace(/[^0-9.]/g, ''))}
-                  placeholder="例: 2.5"
-                  style={{ width: 80 }}
-                />
+              <div className="bleed-blur-toggle">
                 <button
                   type="button"
-                  className="btn-secondary btn-small"
-                  onClick={() => setBlurRadiusText('0')}
-                  disabled={blurRadius <= 0}
-                >なし(0)</button>
+                  className={`bleed-blur-toggle-btn ${blurEnabled ? 'selected' : ''}`}
+                  onClick={() => setBlurAvailability(true)}
+                >
+                  あり
+                </button>
+                <button
+                  type="button"
+                  className={`bleed-blur-toggle-btn ${!blurEnabled ? 'selected' : ''}`}
+                  onClick={() => setBlurAvailability(false)}
+                >
+                  なし
+                </button>
               </div>
-              <div className="bleed-editor-hint">
-                {blurRadius > 0
-                  ? `半径 ${blurRadius}px でぼかします（文字は保護＝背景のみ・カラー原稿は出力時に自動で0）。アクション/JSONから取り込んだ値をここで変更できます。`
-                  : 'ぼかしなし（0）。値を入れるとモノクロ原稿にガウスぼかしを適用します（アクション/JSON選択時はその値が自動で入ります）。'}
-              </div>
+              {blurEnabled && (
+                <div className="bleed-color-row">
+                  <label>半径(px)</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={blurRadiusText}
+                    onChange={(e) => setBlurRadiusText(e.target.value.replace(/[^0-9.]/g, ''))}
+                    placeholder="2.5"
+                    style={{ width: 80 }}
+                  />
+                  {isColorBlurAutoZero && <span className="bleed-auto-zero-badge">出力時0</span>}
+                </div>
+              )}
             </div>
             </>)}
-          </div>
-        </div>
-
-        <div className="bleed-editor-footer">
-          <div style={{ flex: 1 }} />
-          <button className="btn-secondary btn-small" onClick={() => setShowCancelConfirm(true)}>キャンセル</button>
-          {method === 'region' || method === 'action-ratio' || method === 'json' ? (
-            <>
-              <button className="btn-primary btn-small" onClick={onSkip} disabled={!!hasValidSelection}>
-                {skipLabel}
+            <div className="bleed-editor-panel-actions">
+              <button className="btn-secondary bleed-editor-panel-action-btn" onClick={() => setShowCancelConfirm(true)}>
+                キャンセル
               </button>
-              <button className="btn-primary btn-small" onClick={() => region && onApply(region)} disabled={!canApply}>
+              <button className="btn-primary bleed-editor-panel-action-btn" onClick={() => region && onApply(region)} disabled={!region || !canApply}>
                 {applyLabel}
               </button>
-            </>
-          ) : (
-            // 「断ち切らない」は全出力共通設定。ここでは閉じるだけ（即時 bleedStore 反映済み）
-            <button className="btn-primary btn-small" onClick={onCancel}>
-              {applyLabel}
-            </button>
-          )}
+            </div>
+          </div>
         </div>
     </>
   );

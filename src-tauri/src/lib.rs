@@ -33,8 +33,12 @@ fn take_pending_open_path(state: tauri::State<PendingOpen>) -> Option<String> {
 }
 
 // Tauri コマンドを再エクスポート
+use commands::cllenn::{
+    get_cllenn_json_dir, list_cllenn_labels, list_cllenn_works, read_cllenn_ranges,
+};
 use commands::epub::{
-    generate_book_uuid, generate_epub, get_image_dimensions, read_psd_guides,
+    generate_book_uuid, generate_epub, get_available_epub_output_path, get_image_dimensions,
+    read_psd_guides,
 };
 use commands::epub_verify::verify_epub_internal;
 use commands::epubcheck::validate_epub_with_epubcheck;
@@ -43,13 +47,12 @@ use commands::folder::{ensure_dir, get_folder_contents};
 use commands::jpeg_native::run_native_jpeg_convert;
 use commands::open_file::open_file_with_default_app;
 use commands::pdf::rasterize_pdf;
-use commands::project::{load_project, save_project, validate_pages};
+use commands::project::{
+    get_available_project_save_path, load_project, save_project, validate_pages,
+};
 use commands::recent::add_recent_file;
 use commands::srgb_convert::run_photoshop_srgb_convert;
 use commands::tachimi::{detect_tachimi_exe, generate_tachimi_chapter_pdfs};
-use commands::cllenn::{
-    get_cllenn_json_dir, list_cllenn_labels, list_cllenn_works, read_cllenn_ranges,
-};
 use commands::tiff::{check_photoshop_installed, read_atn_actions, run_photoshop_tiff_convert};
 use thumbnail::generate_thumbnail;
 
@@ -140,6 +143,7 @@ pub fn run() {
             ensure_dir,
             generate_thumbnail,
             export_pages,
+            get_available_project_save_path,
             save_project,
             load_project,
             validate_pages,
@@ -154,6 +158,7 @@ pub fn run() {
             read_cllenn_ranges,
             run_native_jpeg_convert,
             run_photoshop_srgb_convert,
+            get_available_epub_output_path,
             generate_epub,
             generate_book_uuid,
             get_image_dimensions,

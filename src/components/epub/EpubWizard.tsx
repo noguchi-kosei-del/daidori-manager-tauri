@@ -110,6 +110,14 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
 
   const totalPages = chapters.reduce((sum, ch) => sum + ch.pages.length, 0);
 
+  const resolveAvailableOutputPath = async (path: string): Promise<string> => {
+    try {
+      return await invoke<string>('get_available_epub_output_path', { outputPath: path });
+    } catch {
+      return path;
+    }
+  };
+
   // 開いたら台割→EPUBページへ同期＋初期値
   useEffect(() => {
     if (!isOpen) {
@@ -179,7 +187,8 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
           const desktop = await desktopDir();
           const epubDir = await join(desktop, 'Script_Output', '台割', 'EPUB');
           await invoke('ensure_dir', { path: epubDir }).catch(() => {});
-          setOutputPath(await join(epubDir, `${projectName || 'output'}.epub`));
+          const requestedPath = await join(epubDir, `${projectName || 'output'}.epub`);
+          setOutputPath(await resolveAvailableOutputPath(requestedPath));
         } catch { /* ignore */ }
       })();
     }
@@ -313,7 +322,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
       defaultPath: outputPath || `${projectName || 'output'}.epub`,
       filters: [{ name: 'EPUB', extensions: ['epub'] }],
     });
-    if (selected) setOutputPath(selected);
+    if (selected) setOutputPath(await resolveAvailableOutputPath(selected));
   };
 
   // UUID再生成（明示操作のみ。同期effectで epubState にも保存される）
@@ -393,7 +402,9 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
       // 断ち切りは「断ち切り」タブ(bleedStore)に一本化。App側で参照する。
     };
     try {
-      await onGenerate(metadata, outputPath, splitEnabled ? {
+      const resolvedOutputPath = await resolveAvailableOutputPath(outputPath);
+      if (resolvedOutputPath !== outputPath) setOutputPath(resolvedOutputPath);
+      await onGenerate(metadata, resolvedOutputPath, splitEnabled ? {
         enabled: true,
         ranges: splitRanges,
         baseName: splitBaseName.trim() || projectName || 'output',

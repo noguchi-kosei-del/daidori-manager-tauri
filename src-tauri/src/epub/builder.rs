@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::{BufWriter, Read, Write};
+use std::io::{BufWriter, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -93,6 +93,84 @@ fn source_needs_conversion(source_path: &str) -> Option<&'static str> {
         Some("tiff")
     } else {
         None
+    }
+}
+
+fn numbered_file_path(path: &Path, counter: usize) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
+    let file_name = match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) if !ext.is_empty() => format!("{}({}).{}", stem, counter, ext),
+        _ => format!("{}({})", stem, counter),
+    };
+
+    path.parent()
+        .map(|parent| parent.join(&file_name))
+        .unwrap_or_else(|| PathBuf::from(file_name))
+}
+
+fn output_path_conflicts(path: &Path) -> bool {
+    if path.exists() {
+        return true;
+    }
+
+    match (path.parent(), path.file_stem()) {
+        (Some(parent), Some(stem)) => parent.join(stem).exists(),
+        _ => false,
+    }
+}
+
+pub(crate) fn available_epub_output_path(requested_path: &Path) -> PathBuf {
+    let mut counter = 0;
+
+    loop {
+        let candidate = if counter == 0 {
+            requested_path.to_path_buf()
+        } else {
+            numbered_file_path(requested_path, counter)
+        };
+
+        if !output_path_conflicts(&candidate) {
+            return candidate;
+        }
+        counter += 1;
+    }
+}
+
+fn create_unique_output_file(requested_path: &Path) -> Result<(PathBuf, File), String> {
+    let mut counter = 0;
+
+    loop {
+        let candidate = if counter == 0 {
+            requested_path.to_path_buf()
+        } else {
+            numbered_file_path(requested_path, counter)
+        };
+
+        if output_path_conflicts(&candidate) {
+            counter += 1;
+            continue;
+        }
+
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => return Ok((candidate, file)),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                counter += 1;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Failed to create EPUB file {}: {}",
+                    candidate.display(),
+                    error
+                ));
+            }
+        }
     }
 }
 
@@ -240,12 +318,12 @@ impl EpubBuilder {
 
         // ZIPで梱包
         self.emit_progress("packaging", 0, 1);
-        let file_size = self.package_epub()?;
+        let (output_path, file_size) = self.package_epub()?;
         self.emit_progress("packaging", 1, 1);
 
         Ok(EpubGenerateResponse {
             success: true,
-            output_path: self.config.output_path.clone(),
+            output_path: output_path.to_string_lossy().to_string(),
             page_count: self.config.pages.len(),
             file_size,
             image_profile_summary: Some(image_profile_summary),
@@ -678,7 +756,7 @@ svg {
     }
 
     /// ZIPで梱包してEPUBファイルを生成
-    fn package_epub(&self) -> Result<u64, String> {
+    fn package_epub(&self) -> Result<(PathBuf, u64), String> {
         let output_path = Path::new(&self.config.output_path);
 
         // 親ディレクトリを作成
@@ -687,8 +765,7 @@ svg {
                 .map_err(|e| format!("Failed to create output directory: {}", e))?;
         }
 
-        let file =
-            File::create(output_path).map_err(|e| format!("Failed to create EPUB file: {}", e))?;
+        let (output_path, file) = create_unique_output_file(output_path)?;
 
         let mut zip = ZipWriter::new(file);
 
@@ -793,9 +870,9 @@ svg {
 
         // ファイルサイズを取得
         let metadata =
-            fs::metadata(output_path).map_err(|e| format!("Failed to get file size: {}", e))?;
+            fs::metadata(&output_path).map_err(|e| format!("Failed to get file size: {}", e))?;
 
-        Ok(metadata.len())
+        Ok((output_path, metadata.len()))
     }
 
     fn add_file_to_zip(

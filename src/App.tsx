@@ -183,6 +183,12 @@ type ProjectSaveResult = {
   copied_files: number;
 };
 
+type ProjectSavePathResult = {
+  file_path: string;
+  project_dir: string;
+  dialog_path: string;
+};
+
 const PROJECT_FILE_EXTENSION = 'daiw';
 const DEFAULT_PROJECT_NAME = '新規プロジェクト';
 
@@ -1095,7 +1101,16 @@ function App() {
     });
   }, [shouldConfirmUnsavedChanges]);
 
-  const saveProjectToPath = useCallback(async (targetPath: string): Promise<boolean> => {
+  const resolveProjectDialogPath = useCallback(async (path: string): Promise<string> => {
+    try {
+      const result = await invoke<ProjectSavePathResult>('get_available_project_save_path', { filePath: path });
+      return result.dialog_path;
+    } catch {
+      return path;
+    }
+  }, []);
+
+  const saveProjectToPath = useCallback(async (targetPath: string, allowOverwrite = false): Promise<boolean> => {
     const filePath = ensureProjectExtension(targetPath);
     const projectFile = buildProjectFile(
       filePath,
@@ -1109,7 +1124,11 @@ function App() {
     );
 
     try {
-      const result = await invoke<ProjectSaveResult>('save_project', { filePath, project: projectFile });
+      const result = await invoke<ProjectSaveResult>('save_project', {
+        filePath,
+        project: projectFile,
+        allowOverwrite,
+      });
       await invoke('add_recent_file', { path: result.file_path, name: projectFile.name }).catch((error) => {
         console.warn('最近使ったファイルへの追加に失敗:', error);
       });
@@ -1142,10 +1161,11 @@ function App() {
     // 既定の保存先: <Desktop>\Script_Output\台割\Project\<作品名>.daiw
     const projectBaseDir = await join(fallbackDir, 'Script_Output', '台割', 'Project');
     await invoke('ensure_dir', { path: projectBaseDir }).catch(() => {});
-    const defaultPath = currentProjectPath ?? await join(
+    const requestedDefaultPath = currentProjectPath ?? await join(
       projectBaseDir,
       `${sanitizeFileName(projectName || DEFAULT_PROJECT_NAME)}.${PROJECT_FILE_EXTENSION}`
     );
+    const defaultPath = await resolveProjectDialogPath(requestedDefaultPath);
     const selected = await save({
       title: 'プロジェクトを保存',
       defaultPath,
@@ -1159,11 +1179,11 @@ function App() {
 
     if (!selected) return false;
     return saveProjectToPath(selected);
-  }, [currentProjectPath, projectName, saveProjectToPath]);
+  }, [currentProjectPath, projectName, resolveProjectDialogPath, saveProjectToPath]);
 
   const handleSaveProject = useCallback(async (): Promise<boolean> => {
     if (currentProjectPath) {
-      return saveProjectToPath(currentProjectPath);
+      return saveProjectToPath(currentProjectPath, true);
     }
     return handleSaveProjectAs();
   }, [currentProjectPath, handleSaveProjectAs, saveProjectToPath]);
@@ -1386,18 +1406,18 @@ function App() {
       const pdfChapters = chapters
         .map((chapter) => {
           const region = resolveBleedRegion(bleedSettings, chapter.type, chapter.id);
-          const options = buildProcessOptions(region, {
-            resizeMode: 'none',
-            resizePercent: 50,
-            jpgQuality: 100,
-          });
           return {
             name: chapter.name,
             chapter_type: chapter.type,
             pages: chapter.pages.map((page) => ({
               source_path: page.filePath ?? null,
               page_type: page.pageType,
-              options: page.filePath ? options : null,
+              options: page.filePath ? buildProcessOptions(region, {
+                resizeMode: 'none',
+                resizePercent: 50,
+                jpgQuality: 100,
+                colorMode: page.imageColorMode,
+              }) : null,
             })),
           };
         })
@@ -2127,7 +2147,7 @@ function App() {
     // 保存時はプロジェクトと一緒に保存: EPUB生成に合わせてプロジェクトも保存（既定は 台割\Project）。
     try {
       if (currentProjectPath) {
-        await saveProjectToPath(currentProjectPath);
+        await saveProjectToPath(currentProjectPath, true);
       } else {
         const desktopForProj = await desktopDir();
         const projDir = await join(desktopForProj, 'Script_Output', '台割', 'Project');
@@ -2198,6 +2218,8 @@ function App() {
       // ぼかし半径(px): アクション/JSON由来。カラー原稿の0化はバックエンドが
       // 実際の色内容(R≈G≈B)で自動判定する（RGBモードの白黒原稿はぼかし対象）。
       const blurForPsd = (srcPath: string) => {
+        const info = psdChapterInfo.get(srcPath);
+        if (info?.color === 'RGB' || info?.color === 'CMYK') return 0;
         const region = regionForPsd(srcPath);
         const r = region?.blurRadius ?? 0;
         return r > 0 ? r : 0;
@@ -2280,7 +2302,7 @@ function App() {
                     applyBlur: blur > 0,
                     blurRadius: blur,
                     blurBackgroundOnly: true,
-                    blurSkipIfColor: true,
+                    blurSkipIfColor: false,
                   },
                 };
               }),

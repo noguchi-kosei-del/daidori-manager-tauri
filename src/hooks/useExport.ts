@@ -37,6 +37,10 @@ export function resolveBleedRegion(
   return bleedSettings.body ?? null;
 }
 
+function isAutoZeroBlurColorMode(colorMode?: string): boolean {
+  return colorMode === 'RGB' || colorMode === 'CMYK';
+}
+
 // BleedRegion + グローバル設定 → Rust ProcessOptions (camelCase JSON)
 export function buildProcessOptions(
   region: BleedRegion | null,
@@ -48,20 +52,22 @@ export function buildProcessOptions(
     jpegBlurEnabled?: boolean;
     jpegBlurRadius?: number;
     jpegBlurBackgroundOnly?: boolean;
+    colorMode?: string;
   }
 ) {
   // ぼかし半径: アクション/JSON由来(region.blurRadius)を優先、無ければ手動設定(jpegBlur*)。
   const regionBlur = region?.blurRadius ?? 0;
   const manualBlur = options.jpegBlurEnabled ? (options.jpegBlurRadius ?? 0) : 0;
-  const effBlur = regionBlur > 0 ? regionBlur : manualBlur;
+  const effBlur = isAutoZeroBlurColorMode(options.colorMode)
+    ? 0
+    : (regionBlur > 0 ? regionBlur : manualBlur);
   const applyBlur = effBlur > 0;
   const blurFields = {
     applyBlur,
     blurRadius: applyBlur ? effBlur : 0,
     // テキスト保護（背景のみ）。region由来は既定で背景のみ、手動時は設定値に従う。
     blurBackgroundOnly: regionBlur > 0 ? true : !!options.jpegBlurBackgroundOnly,
-    // カラー原稿はぼかしを使わない: 実際の色内容(R≈G≈B)でバックエンドが自動判定して0化。
-    blurSkipIfColor: true,
+    blurSkipIfColor: false,
   };
   if (!region || region.tachikiriType === 'none') {
     return {
@@ -425,7 +431,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
               path: p.path,
               outputPath: outputPath,
               outputName: p.outputName,
-              options: buildProcessOptions(region, options),
+              options: buildProcessOptions(region, { ...options, colorMode: p.colorMode }),
             };
           }),
         };

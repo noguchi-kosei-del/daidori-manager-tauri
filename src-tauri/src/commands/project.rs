@@ -16,6 +16,13 @@ pub struct ProjectSaveResult {
     pub copied_files: usize,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ProjectSavePathResult {
+    pub file_path: String,
+    pub project_dir: String,
+    pub dialog_path: String,
+}
+
 fn safe_file_name(name: &str, fallback: &str) -> String {
     let sanitized: String = name
         .chars()
@@ -48,7 +55,10 @@ fn ensure_project_extension(path: &Path) -> PathBuf {
     }
 }
 
-fn project_bundle_paths(requested_path: &str) -> Result<(PathBuf, PathBuf), String> {
+fn project_bundle_paths(
+    requested_path: &str,
+    allow_overwrite: bool,
+) -> Result<(PathBuf, PathBuf), String> {
     let project_file_candidate = ensure_project_extension(Path::new(requested_path));
     let stem = project_file_candidate
         .file_stem()
@@ -59,18 +69,58 @@ fn project_bundle_paths(requested_path: &str) -> Result<(PathBuf, PathBuf), Stri
         .parent()
         .ok_or_else(|| "プロジェクト保存先の親フォルダを取得できません".to_string())?;
 
-    let project_dir = if parent
+    let path_is_inside_named_dir = parent
         .file_name()
         .and_then(|s| s.to_str())
         .map(|name| name.eq_ignore_ascii_case(&stem))
-        .unwrap_or(false)
-    {
+        .unwrap_or(false);
+
+    let project_dir = if path_is_inside_named_dir {
         parent.to_path_buf()
     } else {
         parent.join(&stem)
     };
     let project_file = project_dir.join(format!("{}.{}", stem, PROJECT_EXTENSION));
-    Ok((project_dir, project_file))
+    if allow_overwrite {
+        return Ok((project_dir, project_file));
+    }
+
+    let bundle_parent = if path_is_inside_named_dir {
+        parent
+            .parent()
+            .ok_or_else(|| "プロジェクト保存先の親フォルダを取得できません".to_string())?
+    } else {
+        parent
+    };
+
+    let mut counter = 0;
+    loop {
+        let candidate_stem = if counter == 0 {
+            stem.clone()
+        } else {
+            format!("{}({})", stem, counter)
+        };
+        let candidate_dir = bundle_parent.join(&candidate_stem);
+        let candidate_file =
+            candidate_dir.join(format!("{}.{}", candidate_stem, PROJECT_EXTENSION));
+        let sibling_file = bundle_parent.join(format!("{}.{}", candidate_stem, PROJECT_EXTENSION));
+
+        if !candidate_dir.exists() && !candidate_file.exists() && !sibling_file.exists() {
+            return Ok((candidate_dir, candidate_file));
+        }
+        counter += 1;
+    }
+}
+
+fn project_dialog_path(project_dir: &Path, project_file: &Path) -> Result<PathBuf, String> {
+    let file_name = project_file
+        .file_name()
+        .ok_or_else(|| "プロジェクトファイル名を取得できません".to_string())?;
+
+    Ok(project_dir
+        .parent()
+        .map(|parent| parent.join(file_name))
+        .unwrap_or_else(|| PathBuf::from(file_name)))
 }
 
 fn relative_path(path: &Path, base: &Path) -> String {
@@ -215,11 +265,25 @@ fn write_project_file_atomic(path: &Path, project: &ProjectFile) -> Result<(), S
 
 // プロジェクトをフォルダ形式で保存（.daiw + リンクファイルコピー）
 #[tauri::command]
+pub fn get_available_project_save_path(file_path: String) -> Result<ProjectSavePathResult, String> {
+    let (project_dir, project_file) = project_bundle_paths(&file_path, false)?;
+    let dialog_path = project_dialog_path(&project_dir, &project_file)?;
+
+    Ok(ProjectSavePathResult {
+        file_path: project_file.to_string_lossy().to_string(),
+        project_dir: project_dir.to_string_lossy().to_string(),
+        dialog_path: dialog_path.to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
 pub async fn save_project(
     file_path: String,
     mut project: ProjectFile,
+    allow_overwrite: Option<bool>,
 ) -> Result<ProjectSaveResult, String> {
-    let (project_dir, project_file) = project_bundle_paths(&file_path)?;
+    let (project_dir, project_file) =
+        project_bundle_paths(&file_path, allow_overwrite.unwrap_or(false))?;
     fs::create_dir_all(&project_dir)
         .map_err(|e| format!("プロジェクトフォルダ作成エラー: {}", e))?;
 
