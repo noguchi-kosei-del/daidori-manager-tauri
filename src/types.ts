@@ -373,6 +373,8 @@ export interface SavedEpubState {
   hybridCssProfile?: HybridCssProfile;
   allowMissingColophon?: boolean;
   imageColorPolicy?: EpubImageColorPolicy;
+  /** 19.3: PSD変換エンジン（高速ネイティブ/高品質Photoshop）も保存・復元の対象にする */
+  colorEngine?: EpubColorEngine;
   pageOverrides?: SavedEpubPageOverride[];
   split?: SavedEpubSplitState;
 }

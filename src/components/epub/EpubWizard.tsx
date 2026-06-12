@@ -131,6 +131,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
       setImageColorPolicy(saved.imageColorPolicy);
       setColorMode(saved.imageColorPolicy === 'auto' ? 'auto' : 'custom');
     }
+    if (saved?.colorEngine) setColorEngine(saved.colorEngine);
     if (saved?.hybridCssProfile) setHybridCssProfile(saved.hybridCssProfile);
     if (saved?.allowMissingColophon !== undefined) setAllowMissingColophon(saved.allowMissingColophon);
     if (saved?.pageDirection) setPageDirection(saved.pageDirection);
@@ -216,6 +217,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
       hybridCssProfile,
       allowMissingColophon,
       imageColorPolicy: colorMode === 'auto' ? 'auto' : imageColorPolicy,
+      colorEngine,
       split: {
         enabled: splitEnabled,
         baseName: splitBaseName,
@@ -244,6 +246,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     allowMissingColophon,
     colorMode,
     imageColorPolicy,
+    colorEngine,
     splitEnabled,
     splitBaseName,
     splitSuffixStart,
