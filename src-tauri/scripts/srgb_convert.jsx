@@ -157,6 +157,34 @@ function isUntaggedDoc(doc) {
     }
 }
 
+// 透明部分を白で埋めてからレイヤー統合する。
+// 単純な doc.flatten() だと環境によって透明域が黒で埋まり、断ち切り/回転後に
+// 黒い余白が出ることがある。最背面に白レイヤーを敷いてから統合することで確実に白にする。
+function flattenOntoWhite(doc) {
+    try {
+        // Bitmap は透明概念が無いのでそのまま統合
+        if (doc.mode === DocumentMode.BITMAP) {
+            doc.flatten();
+            return;
+        }
+        // 最背面に白レイヤーを追加
+        var bg = doc.artLayers.add();
+        bg.move(doc.layers[doc.layers.length - 1], ElementPlacement.PLACEAFTER);
+        doc.activeLayer = bg;
+        doc.selection.selectAll();
+        var white = new SolidColor();
+        white.rgb.red = 255;
+        white.rgb.green = 255;
+        white.rgb.blue = 255;
+        doc.selection.fill(white);
+        doc.selection.deselect();
+        doc.flatten();
+    } catch (e) {
+        // 失敗時は通常の統合にフォールバック
+        try { doc.flatten(); } catch (e2) {}
+    }
+}
+
 /* -----------------------------------------------------
   Process Single File
  ----------------------------------------------------- */
@@ -184,25 +212,33 @@ function processFile(fileConfig, globalSettings) {
         // 0. 断ち切り等のPhotoshopアクションを実行（切り抜き＝幾何処理を最初に確定）。
         //    レイヤー依存のアクションにも対応するため flatten より前に実行する。
         //    アクションに「保存」「閉じる」が含まれていても処理を引き継げるよう、
-        //    実行前にドキュメントへ中間PSDのパスを与えておく:
-        //      - アクションの「保存(Ctrl+S)」はこの中間PSDを上書きするのでダイアログが出ない
-        //      - アクションがドキュメントを閉じても、中間PSDを再オープンして続行できる
+        //    実行前にドキュメントへ中間ファイルのパスを **asCopy=false で関連付け** する:
+        //      - これによりアクションの保存先（Ctrl+S / パス無しの別名保存）が中間ファイルへ向かい、
+        //        保存ダイアログ・エクスプローラー（保存先選択）が出ない
+        //      - アクションがドキュメントを閉じても、中間ファイルを再オープンして加工結果を引き継げる
+        //    PSDは「互換性を最大化」ダイアログが出るため TIFF(LZW) を使う。
         if (globalSettings.runAction && globalSettings.actionName) {
-            // 中間PSDの保存先を用意し、ドキュメントに実パスを与える
             var workFolder = new Folder(Folder.temp + "/daidori_srgb_work");
             if (!workFolder.exists) workFolder.create();
             var workBase = String(fileConfig.outputName).replace(/\.[^.]+$/, "");
-            workFile = new File(workFolder.fsName + "/work_" + workBase + ".psd");
+            workFile = new File(workFolder.fsName + "/work_" + workBase + ".tif");
             if (workFile.exists) { try { workFile.remove(); } catch (eRmW) {} }
             try {
-                var workPsdOpts = new PhotoshopSaveOptions();
-                workPsdOpts.embedColorProfile = true;
-                workPsdOpts.layers = true;
-                workPsdOpts.alphaChannels = true;
-                doc.saveAs(workFile, workPsdOpts, true, Extension.LOWERCASE);
+                var workTiff = new TiffSaveOptions();
+                workTiff.imageCompression = TIFFEncoding.TIFFLZW;
+                workTiff.layers = true;
+                workTiff.alphaChannels = true;
+                workTiff.embedColorProfile = true;
+                workTiff.byteOrder = ByteOrder.IBM;
+                // asCopy=false: ドキュメントを中間ファイルに関連付ける（保存先の付け替え）
+                doc.saveAs(workFile, workTiff, false, Extension.LOWERCASE);
             } catch (eSaveWork) {
                 // 中間保存に失敗してもアクションは実行する（閉じられた場合のみ復旧不可）
             }
+
+            // ダイアログ抑止を直前で再アサート（app.open 等でリセットされる可能性に備える）
+            app.displayDialogs = DialogModes.NO;
+            app.playbackDisplayDialogs = DialogModes.NO;
 
             var docCountBefore = app.documents.length;
             var actionError = null;
@@ -229,7 +265,7 @@ function processFile(fileConfig, globalSettings) {
                 // ドキュメントは開いたまま（保存・閉じるを含まないアクション）→ そのまま続行
                 doc = app.activeDocument;
             } else {
-                // アクションが保存・閉じるを実行 → アクションのSaveで更新された中間PSDを再オープン
+                // アクションが保存・閉じるを実行 → アクションの保存で更新された中間ファイルを再オープン
                 if (!workFile || !workFile.exists) {
                     return {
                         fileName: fileName,
@@ -243,8 +279,10 @@ function processFile(fileConfig, globalSettings) {
         }
 
         // 1. レイヤー統合。ブレンドモード等の見た目を確定させてから色変換する
-        //    （レイヤーを残したままのプロファイル変換は合成結果が変わることがある）
-        doc.flatten();
+        //    （レイヤーを残したままのプロファイル変換は合成結果が変わることがある）。
+        //    透明部分を「黒」ではなく「白」で埋めてから統合する（断ち切り/回転で生じた
+        //    透明域が黒余白になるのを防ぐ。縮小前に行うので縁の黒フリンジも出ない）。
+        flattenOntoWhite(doc);
 
         // 2. カラーモードを sRGB(RGB) を基準に正規化:
         //    - 未タグRGB    → 慣例どおり sRGB とみなしてタグ付けのみ（画素は変更しない。
