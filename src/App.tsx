@@ -2173,6 +2173,8 @@ function App() {
               refWidth: Math.round(metadata.actionCropRect.right),
               refHeight: Math.round(metadata.actionCropRect.bottom),
               isProportional: true,
+              // 中央揃え: 切り抜きサイズ比率のみを使い各PSDの中心に配置（余白を均等化）
+              centered: true,
             }
           : undefined;
       const cropBoundsForPsd = (srcPath: string) => {

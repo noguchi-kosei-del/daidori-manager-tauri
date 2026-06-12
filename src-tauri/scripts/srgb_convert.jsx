@@ -16,6 +16,11 @@
 
 var originalDialogs = app.displayDialogs;
 app.displayDialogs = DialogModes.NO;
+// アクション再生中のダイアログ（保存オプション/保存先確認/上書き確認等）を抑止し、
+// 全て「はい/既定値」で自動進行させる。これが無いと .atn の Save As 等で
+// ポップアップ・エクスプローラーが毎回出る。
+var originalPlaybackDialogs = app.playbackDisplayDialogs;
+app.playbackDisplayDialogs = DialogModes.NO;
 app.preferences.rulerUnits = Units.PIXELS;
 
 var SRGB_PROFILE = "sRGB IEC61966-2.1";
@@ -110,6 +115,7 @@ function main() {
     resultFile.close();
 
     app.displayDialogs = originalDialogs;
+    app.playbackDisplayDialogs = originalPlaybackDialogs;
 }
 
 function writeProgress(tempFolder, current, total) {
@@ -199,12 +205,27 @@ function processFile(fileConfig, globalSettings) {
             if (cb.isProportional && cb.refWidth > 0 && cb.refHeight > 0) {
                 var pdocW = doc.width.as("px");
                 var pdocH = doc.height.as("px");
-                var sx = pdocW / cb.refWidth;
-                var sy = pdocH / cb.refHeight;
-                var cL = Math.round(cb.left * sx);
-                var cT = Math.round(cb.top * sy);
-                var cR = Math.round(cb.right * sx);
-                var cB = Math.round(cb.bottom * sy);
+                var cL, cT, cR, cB;
+                if (cb.centered) {
+                    // 中央揃え: 切り抜きサイズの比率だけを使い、各PSDの中心に配置する
+                    // （左右・上下の余白を均等にする）。アクション比率断ち切り用。
+                    var cw = (cb.right - cb.left) * pdocW / cb.refWidth;
+                    var ch = (cb.bottom - cb.top) * pdocH / cb.refHeight;
+                    if (cw > pdocW) cw = pdocW;
+                    if (ch > pdocH) ch = pdocH;
+                    cL = Math.round((pdocW - cw) / 2);
+                    cT = Math.round((pdocH - ch) / 2);
+                    cR = Math.round(cL + cw);
+                    cB = Math.round(cT + ch);
+                } else {
+                    // 通常: 絶対座標を比率でスケーリング（左上原点で右下方向へ）
+                    var sx = pdocW / cb.refWidth;
+                    var sy = pdocH / cb.refHeight;
+                    cL = Math.round(cb.left * sx);
+                    cT = Math.round(cb.top * sy);
+                    cR = Math.round(cb.right * sx);
+                    cB = Math.round(cb.bottom * sy);
+                }
                 if (cL < 0) cL = 0; if (cT < 0) cT = 0;
                 if (cR > pdocW) cR = pdocW; if (cB > pdocH) cB = pdocH;
                 if (cR < cL) cR = cL; if (cB < cT) cB = cT;
@@ -226,6 +247,9 @@ function processFile(fileConfig, globalSettings) {
         //    - アクションが「上書き保存→閉じる」まで実行 → 元ファイルが加工結果で上書き
         //      されているので、元ファイルを再オープンして続行する
         if (globalSettings.runAction && globalSettings.actionName) {
+            // ダイアログ抑止を直前で再アサート（保存先確認/オプションを自動進行）
+            app.displayDialogs = DialogModes.NO;
+            app.playbackDisplayDialogs = DialogModes.NO;
             var docCountBefore = app.documents.length;
             try {
                 app.doAction(globalSettings.actionName, globalSettings.actionSet || "");
