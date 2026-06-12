@@ -1,6 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, type ReactNode } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { useStore } from '../../store';
 import { useBleedStore } from '../../bleedStore';
 import { useSlidingIndicator } from '../../hooks';
@@ -9,6 +8,14 @@ import { BleedEditorModal } from '../modals/BleedEditorModal';
 import type { BleedRegion } from '../modals/ExportModal';
 import type { Chapter, Page, ThumbnailResult } from '../../types';
 import { NoPageIcon, ScissorsIcon } from '../../icons';
+
+// 断ち切り方式 → 日本語ラベル（サマリ表示用）
+const BLEED_METHOD_LABELS: Record<string, string> = {
+  none: '断ち切らない',
+  region: '範囲を描いて断ち切る',
+  'action-ratio': 'アクションの比率（中央揃え）',
+  action: 'アクションそのまま実行',
+};
 
 // 断ち切りモードの処理タイプ → 日本語ラベル
 const TACHIKIRI_LABELS: Record<string, string> = {
@@ -66,78 +73,12 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
     bodyRegion,
     perChapterRegions,
     method,
-    actionSetPath,
-    actionName,
     setMode,
     setCoverRegion,
     setBodyRegion,
     setChapterRegion,
-    setMethod,
-    setActionSetPath,
-    setActionName,
-    setActionCropRect,
     reset,
   } = useBleedStore();
-
-  // 断ち切り方式=アクション系のとき .atn からアクション名・切り抜き矩形を読む
-  const [atnActions, setAtnActions] = useState<string[]>([]);
-  const [atnSetName, setAtnSetName] = useState('');
-  const [atnError, setAtnError] = useState('');
-  const [atnCrops, setAtnCrops] = useState<{ name: string; left: number; top: number; right: number; bottom: number }[]>([]);
-
-  useEffect(() => {
-    if (!actionSetPath) {
-      setAtnActions([]); setAtnSetName(''); setAtnError(''); setAtnCrops([]);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const info = await invoke<{ setName: string | null; actions: string[]; actionCrops?: { name: string; left: number; top: number; right: number; bottom: number }[] }>('read_atn_actions', { path: actionSetPath });
-        if (cancelled) return;
-        const actions = info.actions ?? [];
-        setAtnActions(actions);
-        setAtnSetName(info.setName ?? '');
-        setAtnCrops(info.actionCrops ?? []);
-        setAtnError('');
-        if (actionName && !actions.includes(actionName)) setActionName(actions.length === 1 ? actions[0] : '');
-      } catch (e) {
-        if (cancelled) return;
-        setAtnActions([]); setAtnSetName(''); setAtnCrops([]); setAtnError(String(e));
-      }
-    })();
-    return () => { cancelled = true; };
-  // actionName を依存に入れると入力のたび再取得するため除外（パス変更時のみ再取得）
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [actionSetPath]);
-
-  // 選択アクションの矩形を bleedStore に反映（出力時の比率断ち切りに使う）
-  const selectedActionCrop = useMemo(
-    () => atnCrops.find((c) => c.name === actionName) ?? null,
-    [atnCrops, actionName],
-  );
-  useEffect(() => {
-    if (method === 'action-ratio' && selectedActionCrop) {
-      setActionCropRect({
-        left: selectedActionCrop.left,
-        top: selectedActionCrop.top,
-        right: selectedActionCrop.right,
-        bottom: selectedActionCrop.bottom,
-      });
-    } else {
-      setActionCropRect(null);
-    }
-  }, [method, selectedActionCrop, setActionCropRect]);
-
-  const handleSelectActionSet = useCallback(async () => {
-    const selected = await openDialog({
-      title: 'Photoshopアクションセット(.atn)を選択',
-      multiple: false,
-      directory: false,
-      filters: [{ name: 'Photoshopアクション', extensions: ['atn'] }],
-    });
-    if (typeof selected === 'string') setActionSetPath(selected);
-  }, [setActionSetPath]);
 
   // 一括/本文ごとトグルのスライドインジケーター
   const { containerRef: modeToggleRef, rect: modeIndicator } = useSlidingIndicator<HTMLDivElement>(mode);
@@ -262,66 +203,26 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
             <ScissorsIcon size={18} />
             <span>断ち切り設定</span>
           </div>
-          {method === 'region' && (
-            <div className="bleed-tab-mode" ref={modeToggleRef}>
-              <SlidingIndicator rect={modeIndicator} className="bleed-tab-mode-indicator" />
-              <button
-                type="button"
-                className={`bleed-tab-mode-btn ${mode === 'bulk' ? 'active' : ''}`}
-                onClick={() => setMode('bulk')}
-              >
-                一括（表紙＋本文）
-              </button>
-              <button
-                type="button"
-                className={`bleed-tab-mode-btn ${mode === 'per-chapter' ? 'active' : ''}`}
-                onClick={() => setMode('per-chapter')}
-              >
-                本文ごと
-              </button>
-            </div>
-          )}
+          <div className="bleed-tab-mode" ref={modeToggleRef}>
+            <SlidingIndicator rect={modeIndicator} className="bleed-tab-mode-indicator" />
+            <button
+              type="button"
+              className={`bleed-tab-mode-btn ${mode === 'bulk' ? 'active' : ''}`}
+              onClick={() => setMode('bulk')}
+            >
+              一括（表紙＋本文）
+            </button>
+            <button
+              type="button"
+              className={`bleed-tab-mode-btn ${mode === 'per-chapter' ? 'active' : ''}`}
+              onClick={() => setMode('per-chapter')}
+            >
+              本文ごと
+            </button>
+          </div>
         </div>
 
-        {method === 'none' ? (
-          <div className="spread-viewer-empty">
-            <NoPageIcon size={48} />
-            <p>断ち切りを行いません</p>
-          </div>
-        ) : method === 'action' || method === 'action-ratio' ? (
-          <div className="bleed-action-panel">
-            <div className="form-group">
-              <label>アクションセット（.atnファイル）</label>
-              <div className="input-with-button">
-                <input type="text" value={actionSetPath} placeholder="エクスプローラーで .atn を選択..." readOnly />
-                <button type="button" className="btn-secondary btn-small" onClick={() => void handleSelectActionSet()}>参照</button>
-              </div>
-            </div>
-            {atnSetName && <div className="form-hint">セット名: {atnSetName}</div>}
-            <div className="form-group">
-              <label>アクション名</label>
-              {atnActions.length > 0 ? (
-                <select value={atnActions.includes(actionName) ? actionName : ''} onChange={(e) => setActionName(e.target.value)}>
-                  <option value="">（アクションを選択してください）</option>
-                  {atnActions.map((a) => <option key={a} value={a}>{a}</option>)}
-                </select>
-              ) : (
-                <input type="text" value={actionName} onChange={(e) => setActionName(e.target.value)} placeholder="例: 断ち切り" />
-              )}
-            </div>
-            {atnError && <div className="form-hint" style={{ color: 'var(--color-error, #dc2626)' }}>.atnの解析に失敗しました（手入力してください）: {atnError}</div>}
-            {method === 'action-ratio' && selectedActionCrop && selectedActionCrop.right > 0 && (
-              <div className="form-hint">
-                抽出した切り抜き比率: 横 {((selectedActionCrop.right - selectedActionCrop.left) / selectedActionCrop.right * 100).toFixed(1)}% / 縦 {((selectedActionCrop.bottom - selectedActionCrop.top) / selectedActionCrop.bottom * 100).toFixed(1)}%（想定原稿 {Math.round(selectedActionCrop.right)}×{Math.round(selectedActionCrop.bottom)}px 基準）。各画像の中央で比率切り抜きします。
-              </div>
-            )}
-            <div className="form-hint">
-              {method === 'action-ratio'
-                ? '※ アクションは実行せず、切り抜き座標から比率だけを使って各画像の中央で断ち切ります（サイズ違いに自動追従・保存ダイアログ無し）。おすすめ。EPUBは高品質(Photoshop)時のみ適用。'
-                : '※ 選んだアクションをそのまま実行して断ち切ります。固定座標のためサイズ違いでズレることがあります。EPUBは高品質(Photoshop)時のみ。TIFF出力では適用されません。'}
-            </div>
-          </div>
-        ) : targets.length === 0 ? (
+        {targets.length === 0 ? (
           <div className="spread-viewer-empty">
             <NoPageIcon size={48} />
             <p>断ち切りを設定できる画像ページがありません</p>
@@ -390,33 +291,25 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
         </div>
         <div className="sidebar-content">
           <div className="bleed-summary-panel">
-            <h3 className="bleed-summary-title">断ち切り設定</h3>
-            <div className="bleed-summary-method">
-              <label>方式</label>
-              <select value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
-                <option value="none">断ち切らない</option>
-                <option value="region">範囲を描いて断ち切る</option>
-                <option value="action-ratio">アクションの比率で断ち切る（中央揃え）</option>
-                <option value="action">アクションをそのまま実行（EPUB高品質のみ）</option>
-              </select>
-            </div>
+            <h3 className="bleed-summary-title">断ち切りサマリ</h3>
             <p className="bleed-summary-note">
+              各ページの「設定/編集」を開いて、方式（範囲 / アクションの比率 / アクションそのまま）と断ち切りを設定します。
               ここで設定した断ち切りは「出力」タブのすべての出力（JPEG / TIFF / PDF）に適用されます。
               プロジェクトファイルには保存されません。
             </p>
-            {method === 'region' && (
+            <div className="bleed-summary-stat">
+              <span>方式</span>
+              <span>{BLEED_METHOD_LABELS[method] ?? method}</span>
+            </div>
             <div className="bleed-summary-stat">
               <span>適用範囲</span>
               <span>{mode === 'bulk' ? '一括（表紙＋本文）' : '本文ごと'}</span>
             </div>
-            )}
-            {method === 'region' && (
-              <div className="bleed-summary-stat">
-                <span>設定済み</span>
-                <span>{configuredCount} / {targets.length}</span>
-              </div>
-            )}
-            {method === 'region' && configuredCount > 0 && (
+            <div className="bleed-summary-stat">
+              <span>設定済み</span>
+              <span>{configuredCount} / {targets.length}</span>
+            </div>
+            {configuredCount > 0 && (
               <button type="button" className="btn-secondary btn-small bleed-summary-clear" onClick={reset}>
                 すべて解除
               </button>

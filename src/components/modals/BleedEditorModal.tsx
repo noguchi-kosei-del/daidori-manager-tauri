@@ -1,10 +1,12 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { invoke } from '@tauri-apps/api/core';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { BleedRegion, TachikiriType, BleedColor, BLEED_COLOR_MAP } from './ExportModal';
 import { LockIcon, UnlockIcon, ResetIcon, AlertTriangleIcon } from '../../icons';
 import { useModalAnimation } from '../../hooks';
+import { useBleedStore } from '../../bleedStore';
 
 // 6モードカード定義（Tachimi準拠）
 const TACHIKIRI_CARDS: { value: TachikiriType; label: string }[] = [
@@ -97,6 +99,74 @@ export function BleedEditorModal({
   const [strokeColor, setStrokeColor] = useState<BleedColor>('black');
   const [fillColor, setFillColor] = useState<BleedColor>('white');
   const [fillOpacity, setFillOpacity] = useState(50);
+
+  // 断ち切り方式（断ち切りタブに一本化。グローバル設定をこの編集画面で選ぶ）
+  const method = useBleedStore((s) => s.method);
+  const setMethod = useBleedStore((s) => s.setMethod);
+  const actionSetPath = useBleedStore((s) => s.actionSetPath);
+  const setActionSetPath = useBleedStore((s) => s.setActionSetPath);
+  const actionName = useBleedStore((s) => s.actionName);
+  const setActionName = useBleedStore((s) => s.setActionName);
+  const setActionCropRect = useBleedStore((s) => s.setActionCropRect);
+  const [atnActions, setAtnActions] = useState<string[]>([]);
+  const [atnSetName, setAtnSetName] = useState('');
+  const [atnError, setAtnError] = useState('');
+  const [atnCrops, setAtnCrops] = useState<{ name: string; left: number; top: number; right: number; bottom: number }[]>([]);
+
+  // 選択した .atn からアクション名・切り抜き矩形を取得
+  useEffect(() => {
+    if (!actionSetPath) {
+      setAtnActions([]); setAtnSetName(''); setAtnError(''); setAtnCrops([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const info = await invoke<{ setName: string | null; actions: string[]; actionCrops?: { name: string; left: number; top: number; right: number; bottom: number }[] }>('read_atn_actions', { path: actionSetPath });
+        if (cancelled) return;
+        const actions = info.actions ?? [];
+        setAtnActions(actions);
+        setAtnSetName(info.setName ?? '');
+        setAtnCrops(info.actionCrops ?? []);
+        setAtnError('');
+        if (actionName && !actions.includes(actionName)) setActionName(actions.length === 1 ? actions[0] : '');
+      } catch (e) {
+        if (cancelled) return;
+        setAtnActions([]); setAtnSetName(''); setAtnCrops([]); setAtnError(String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actionSetPath]);
+
+  const selectedActionCrop = useMemo(
+    () => atnCrops.find((c) => c.name === actionName) ?? null,
+    [atnCrops, actionName],
+  );
+  // 比率方式のとき選択アクションの矩形を bleedStore に反映（出力時に使う）
+  useEffect(() => {
+    if (method === 'action-ratio' && selectedActionCrop) {
+      setActionCropRect({
+        left: selectedActionCrop.left,
+        top: selectedActionCrop.top,
+        right: selectedActionCrop.right,
+        bottom: selectedActionCrop.bottom,
+      });
+    } else {
+      setActionCropRect(null);
+    }
+  }, [method, selectedActionCrop, setActionCropRect]);
+
+  const handleSelectActionSet = useCallback(async () => {
+    const selected = await openDialog({
+      title: 'Photoshopアクションセット(.atn)を選択',
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'Photoshopアクション', extensions: ['atn'] }],
+    });
+    if (typeof selected === 'string') setActionSetPath(selected);
+  }, [setActionSetPath]);
+  const isActionMethod = method === 'action' || method === 'action-ratio';
 
   // リセット
   useEffect(() => {
@@ -573,7 +643,59 @@ export function BleedEditorModal({
 
           {/* サイドパネル */}
           <div className="bleed-editor-panel">
-            <div className="bleed-editor-panel-title">断ち切り範囲</div>
+            <div className="bleed-editor-panel-title">断ち切り設定</div>
+            {/* 断ち切り方式（全出力共通・断ち切りタブに一本化） */}
+            <div className="bleed-editor-method">
+              <label>方式</label>
+              <select value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
+                <option value="none">断ち切らない</option>
+                <option value="region">範囲を描いて断ち切る</option>
+                <option value="action-ratio">アクションの比率で断ち切る（中央揃え）</option>
+                <option value="action">アクションをそのまま実行（EPUB高品質のみ）</option>
+              </select>
+            </div>
+
+            {isActionMethod && (
+              <div className="bleed-editor-action">
+                <div className="form-group">
+                  <label>アクションセット（.atnファイル）</label>
+                  <div className="input-with-button">
+                    <input type="text" value={actionSetPath} placeholder="エクスプローラーで .atn を選択..." readOnly />
+                    <button type="button" className="btn-secondary btn-small" onClick={() => void handleSelectActionSet()}>参照</button>
+                  </div>
+                </div>
+                {atnSetName && <div className="bleed-editor-hint">セット名: {atnSetName}</div>}
+                <div className="form-group">
+                  <label>アクション名</label>
+                  {atnActions.length > 0 ? (
+                    <select value={atnActions.includes(actionName) ? actionName : ''} onChange={(e) => setActionName(e.target.value)}>
+                      <option value="">（アクションを選択してください）</option>
+                      {atnActions.map((a) => <option key={a} value={a}>{a}</option>)}
+                    </select>
+                  ) : (
+                    <input type="text" value={actionName} onChange={(e) => setActionName(e.target.value)} placeholder="例: 断ち切り" />
+                  )}
+                </div>
+                {atnError && <div className="bleed-editor-hint" style={{ color: 'var(--color-error, #dc2626)' }}>.atnの解析に失敗しました（手入力してください）: {atnError}</div>}
+                {method === 'action-ratio' && selectedActionCrop && selectedActionCrop.right > 0 && (
+                  <div className="bleed-editor-hint">
+                    抽出した切り抜き比率: 横 {((selectedActionCrop.right - selectedActionCrop.left) / selectedActionCrop.right * 100).toFixed(1)}% / 縦 {((selectedActionCrop.bottom - selectedActionCrop.top) / selectedActionCrop.bottom * 100).toFixed(1)}%（想定原稿 {Math.round(selectedActionCrop.right)}×{Math.round(selectedActionCrop.bottom)}px 基準）。各画像の中央で比率切り抜きします。
+                  </div>
+                )}
+                <div className="bleed-editor-hint">
+                  {method === 'action-ratio'
+                    ? '※ アクションは実行せず、切り抜き座標の比率だけを使い各画像の中央で断ち切ります（サイズ違いに自動追従・保存ダイアログ無し）。おすすめ。'
+                    : '※ 選んだアクションをそのまま実行して断ち切ります。固定座標のためサイズ違いでズレることがあります。EPUBは高品質(Photoshop)時のみ・TIFF出力では適用されません。'}
+                </div>
+                <div className="bleed-editor-hint">この設定は全ページ・全出力（JPEG / TIFF / EPUB）に共通で適用されます。下の「{applyLabel}」で閉じてください。</div>
+              </div>
+            )}
+
+            {method === 'none' && (
+              <div className="bleed-editor-hint">断ち切りを行いません。下の「{applyLabel}」で閉じてください。</div>
+            )}
+
+            {method === 'region' && (<>
             {originalSize && (
               <div className="bleed-editor-image-size">元画像: {originalSize.width} x {originalSize.height}</div>
             )}
@@ -673,18 +795,28 @@ export function BleedEditorModal({
                 </>
               )}
             </div>
+            </>)}
           </div>
         </div>
 
         <div className="bleed-editor-footer">
           <div style={{ flex: 1 }} />
           <button className="btn-secondary btn-small" onClick={() => setShowCancelConfirm(true)}>キャンセル</button>
-          <button className="btn-primary btn-small" onClick={onSkip} disabled={!!hasValidSelection}>
-            {skipLabel}
-          </button>
-          <button className="btn-primary btn-small" onClick={() => region && onApply(region)} disabled={!canApply}>
-            {applyLabel}
-          </button>
+          {method === 'region' ? (
+            <>
+              <button className="btn-primary btn-small" onClick={onSkip} disabled={!!hasValidSelection}>
+                {skipLabel}
+              </button>
+              <button className="btn-primary btn-small" onClick={() => region && onApply(region)} disabled={!canApply}>
+                {applyLabel}
+              </button>
+            </>
+          ) : (
+            // アクション/なしは全出力共通設定。ここでは閉じるだけ（設定は即時 bleedStore に反映済み）
+            <button className="btn-primary btn-small" onClick={onCancel}>
+              {applyLabel}
+            </button>
+          )}
         </div>
     </>
   );
