@@ -57,6 +57,10 @@ pub struct ProcessOptions {
     /// true: 背景のみ（PSDテキストレイヤーをマスクに文字をシャープ保持）、false: 全体ぼかし。
     #[serde(default)]
     pub blur_background_only: bool,
+    /// true: 実質的にカラーの画像（R≠G≠B）はぼかしを自動でスキップする。
+    /// PSDのカラーモードではなく実際の色内容で判定するため、RGBモードの白黒原稿はぼかし対象になる。
+    #[serde(default)]
+    pub blur_skip_if_color: bool,
 }
 
 impl Default for ProcessOptions {
@@ -81,6 +85,7 @@ impl Default for ProcessOptions {
             apply_blur: false,
             blur_radius: 0.0,
             blur_background_only: false,
+            blur_skip_if_color: false,
         }
     }
 }

@@ -2178,14 +2178,12 @@ function App() {
           isProportional: true,
         };
       };
-      // ぼかし半径(px): アクション/JSON由来。カラー原稿(RGB/CMYK)は自動的に0。
+      // ぼかし半径(px): アクション/JSON由来。カラー原稿の0化はバックエンドが
+      // 実際の色内容(R≈G≈B)で自動判定する（RGBモードの白黒原稿はぼかし対象）。
       const blurForPsd = (srcPath: string) => {
         const region = regionForPsd(srcPath);
         const r = region?.blurRadius ?? 0;
-        if (!(r > 0)) return 0;
-        const color = psdChapterInfo.get(srcPath)?.color;
-        const isColor = color === 'RGB' || color === 'CMYK';
-        return isColor ? 0 : r;
+        return r > 0 ? r : 0;
       };
 
       if (psdSourcePaths.length > 0) {
@@ -2265,6 +2263,7 @@ function App() {
                     applyBlur: blur > 0,
                     blurRadius: blur,
                     blurBackgroundOnly: true,
+                    blurSkipIfColor: true,
                   },
                 };
               }),

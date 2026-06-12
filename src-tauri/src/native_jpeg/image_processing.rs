@@ -148,7 +148,12 @@ pub fn process_single_image(
 
     // ぼかし（ガウス）は断ち切り/リサイズより前（原寸）で適用する。
     // 増渕さん.atn の「ぼかし → 切り抜き → 画像サイズ」と同じ順序。
-    let img = if options.apply_blur && options.blur_radius > 0.0 {
+    // カラー原稿はぼかしを使わない: blur_skip_if_color が真なら実際の色内容で判定して
+    // 本物のカラー画像のみスキップ（RGBモードの白黒原稿はぼかし対象）。
+    let want_blur = options.apply_blur && options.blur_radius > 0.0;
+    let skip_for_color =
+        want_blur && options.blur_skip_if_color && super::blur::is_effectively_color(&img);
+    let img = if want_blur && !skip_for_color {
         super::blur::apply_blur(
             input_path,
             &img,

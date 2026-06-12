@@ -48,22 +48,20 @@ export function buildProcessOptions(
     jpegBlurEnabled?: boolean;
     jpegBlurRadius?: number;
     jpegBlurBackgroundOnly?: boolean;
-    // このページがカラー(RGB/CMYK)か。カラーはぼかしを自動的に 0 にする。
-    pageIsColor?: boolean;
   }
 ) {
   // ぼかし半径: アクション/JSON由来(region.blurRadius)を優先、無ければ手動設定(jpegBlur*)。
   const regionBlur = region?.blurRadius ?? 0;
   const manualBlur = options.jpegBlurEnabled ? (options.jpegBlurRadius ?? 0) : 0;
-  let effBlur = regionBlur > 0 ? regionBlur : manualBlur;
-  // カラー原稿はぼかしを使わない（自動的に 0）
-  if (options.pageIsColor) effBlur = 0;
+  const effBlur = regionBlur > 0 ? regionBlur : manualBlur;
   const applyBlur = effBlur > 0;
   const blurFields = {
     applyBlur,
     blurRadius: applyBlur ? effBlur : 0,
     // テキスト保護（背景のみ）。region由来は既定で背景のみ、手動時は設定値に従う。
     blurBackgroundOnly: regionBlur > 0 ? true : !!options.jpegBlurBackgroundOnly,
+    // カラー原稿はぼかしを使わない: 実際の色内容(R≈G≈B)でバックエンドが自動判定して0化。
+    blurSkipIfColor: true,
   };
   if (!region || region.tachikiriType === 'none') {
     return {
@@ -408,12 +406,11 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
         const config = {
           files: convertiblePages.map(p => {
             const region = resolveBleedRegion(bleedSettings, p.chapterType, p.chapterId);
-            const pageIsColor = p.colorMode === 'RGB' || p.colorMode === 'CMYK';
             return {
               path: p.path,
               outputPath: outputPath,
               outputName: p.outputName,
-              options: buildProcessOptions(region, { ...options, pageIsColor }),
+              options: buildProcessOptions(region, options),
             };
           }),
         };

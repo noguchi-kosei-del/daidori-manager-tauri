@@ -150,3 +150,38 @@ pub fn apply_blur(
 pub fn has_text_mask(path: &Path) -> bool {
     text_layers_rgba(path).is_some()
 }
+
+/// 画像が実質的にカラーか（R/G/B に有意な差がある画素が一定割合あるか）を判定する。
+///
+/// PSD の「カラーモード」が RGB でも、内容が白黒/グレースケール（各画素 R=G=B）なら false を返す。
+/// → RGBモードで保存された白黒漫画原稿を「モノクロ」と正しく扱える（ぼかし対象になる）。
+/// 本物のカラー原稿のみ true。サンプリングで高速判定する。
+pub fn is_effectively_color(img: &DynamicImage) -> bool {
+    let rgb = img.to_rgb8();
+    let (w, h) = rgb.dimensions();
+    let total = (w as usize) * (h as usize);
+    if total == 0 {
+        return false;
+    }
+    // 最大 ~200k 画素をサンプリング（全画素走査は重いので間引く）
+    let step = (total / 200_000).max(1);
+    let raw = rgb.as_raw();
+    let mut color_px = 0usize;
+    let mut sampled = 0usize;
+    let mut i = 0usize;
+    while i < total {
+        let o = i * 3;
+        let r = raw[o] as i32;
+        let g = raw[o + 1] as i32;
+        let b = raw[o + 2] as i32;
+        // JPEG/アンチエイリアスの微差は無視（>24 のみカラー画素とみなす）
+        let d = (r - g).abs().max((g - b).abs()).max((r - b).abs());
+        if d > 24 {
+            color_px += 1;
+        }
+        sampled += 1;
+        i += step;
+    }
+    // 有意なカラー画素が 0.5% を超えたらカラー原稿と判定
+    sampled > 0 && (color_px as f64 / sampled as f64) > 0.005
+}
