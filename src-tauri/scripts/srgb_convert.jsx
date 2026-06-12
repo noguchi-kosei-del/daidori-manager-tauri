@@ -16,6 +16,10 @@
 
 var originalDialogs = app.displayDialogs;
 app.displayDialogs = DialogModes.NO;
+// アクション再生中のダイアログ（保存オプション/上書き確認等）も抑止する。
+// これが無いと、アクション内の Save As 等でダイアログ/エクスプローラーが出る。
+var originalPlaybackDialogs = app.playbackDisplayDialogs;
+app.playbackDisplayDialogs = DialogModes.NO;
 app.preferences.rulerUnits = Units.PIXELS;
 
 var SRGB_PROFILE = "sRGB IEC61966-2.1";
@@ -110,6 +114,19 @@ function main() {
     resultFile.close();
 
     app.displayDialogs = originalDialogs;
+    app.playbackDisplayDialogs = originalPlaybackDialogs;
+
+    // アクション用の中間ファイル置き場を掃除
+    try {
+        var workFolder = new Folder(Folder.temp + "/daidori_srgb_work");
+        if (workFolder.exists) {
+            var leftovers = workFolder.getFiles();
+            for (var li = 0; li < leftovers.length; li++) {
+                try { leftovers[li].remove(); } catch (eLo) {}
+            }
+            try { workFolder.remove(); } catch (eWf) {}
+        }
+    } catch (eClean) {}
 }
 
 function writeProgress(tempFolder, current, total) {
@@ -146,6 +163,7 @@ function isUntaggedDoc(doc) {
 function processFile(fileConfig, globalSettings) {
     var filePath = fileConfig.path;
     var fileName = decodeURI(new File(filePath).name);
+    var workFile = null; // アクション用の中間PSD（保存/閉じる対応）。最後に掃除する
 
     try {
         var file = new File(filePath);
@@ -165,30 +183,62 @@ function processFile(fileConfig, globalSettings) {
 
         // 0. 断ち切り等のPhotoshopアクションを実行（切り抜き＝幾何処理を最初に確定）。
         //    レイヤー依存のアクションにも対応するため flatten より前に実行する。
-        //    アクションが「保存・閉じる」を含むとEPUB用のJPEG保存ができないため、
-        //    ドキュメントが閉じられた場合はエラーとして返す。
+        //    アクションに「保存」「閉じる」が含まれていても処理を引き継げるよう、
+        //    実行前にドキュメントへ中間PSDのパスを与えておく:
+        //      - アクションの「保存(Ctrl+S)」はこの中間PSDを上書きするのでダイアログが出ない
+        //      - アクションがドキュメントを閉じても、中間PSDを再オープンして続行できる
         if (globalSettings.runAction && globalSettings.actionName) {
+            // 中間PSDの保存先を用意し、ドキュメントに実パスを与える
+            var workFolder = new Folder(Folder.temp + "/daidori_srgb_work");
+            if (!workFolder.exists) workFolder.create();
+            var workBase = String(fileConfig.outputName).replace(/\.[^.]+$/, "");
+            workFile = new File(workFolder.fsName + "/work_" + workBase + ".psd");
+            if (workFile.exists) { try { workFile.remove(); } catch (eRmW) {} }
+            try {
+                var workPsdOpts = new PhotoshopSaveOptions();
+                workPsdOpts.embedColorProfile = true;
+                workPsdOpts.layers = true;
+                workPsdOpts.alphaChannels = true;
+                doc.saveAs(workFile, workPsdOpts, true, Extension.LOWERCASE);
+            } catch (eSaveWork) {
+                // 中間保存に失敗してもアクションは実行する（閉じられた場合のみ復旧不可）
+            }
+
             var docCountBefore = app.documents.length;
+            var actionError = null;
             try {
                 app.doAction(globalSettings.actionName, globalSettings.actionSet || "");
             } catch (eAct) {
-                return {
-                    fileName: fileName,
-                    success: false,
-                    error: "アクション実行に失敗しました（セット: '" +
-                        (globalSettings.actionSet || "") + "' / アクション: '" +
-                        globalSettings.actionName + "'）: " + (eAct.message || String(eAct))
-                };
+                actionError = "アクション実行に失敗しました（セット: '" +
+                    (globalSettings.actionSet || "") + "' / アクション: '" +
+                    globalSettings.actionName + "'）: " + (eAct.message || String(eAct));
             }
-            if (app.documents.length < docCountBefore) {
-                return {
-                    fileName: fileName,
-                    success: false,
-                    error: "アクションがドキュメントを閉じました。EPUB用アクションには「保存」「閉じる」を含めないでください（断ち切り・切り抜き等の加工のみ）。"
-                };
+
+            if (actionError) {
+                // 開いている可能性のあるドキュメントを閉じてからエラー返却
+                try {
+                    while (app.documents.length > 0) {
+                        app.activeDocument.close(SaveOptions.DONOTSAVECHANGES);
+                    }
+                } catch (eCloseAll) {}
+                try { if (workFile && workFile.exists) workFile.remove(); } catch (eRm2) {}
+                return { fileName: fileName, success: false, error: actionError };
             }
-            // アクションが activeDocument を変えるケースに備えて同期し、モードも読み直す
-            try { doc = app.activeDocument; } catch (eDoc) {}
+
+            if (app.documents.length >= docCountBefore && app.documents.length > 0) {
+                // ドキュメントは開いたまま（保存・閉じるを含まないアクション）→ そのまま続行
+                doc = app.activeDocument;
+            } else {
+                // アクションが保存・閉じるを実行 → アクションのSaveで更新された中間PSDを再オープン
+                if (!workFile || !workFile.exists) {
+                    return {
+                        fileName: fileName,
+                        success: false,
+                        error: "アクションがドキュメントを閉じましたが、中間ファイルが見つかりませんでした。"
+                    };
+                }
+                doc = app.open(workFile);
+            }
             mode = doc.mode;
         }
 
@@ -268,6 +318,8 @@ function processFile(fileConfig, globalSettings) {
         doc.saveAs(outputFile, jpgOpts, true, Extension.LOWERCASE);
 
         doc.close(SaveOptions.DONOTSAVECHANGES);
+        // 中間PSDを掃除（閉じた後でないと削除できない）
+        try { if (workFile && workFile.exists) workFile.remove(); } catch (eRmDone) {}
 
         return {
             fileName: fileName,
@@ -282,6 +334,7 @@ function processFile(fileConfig, globalSettings) {
                 app.activeDocument.close(SaveOptions.DONOTSAVECHANGES);
             }
         } catch (e2) {}
+        try { if (workFile && workFile.exists) workFile.remove(); } catch (eRmErr) {}
         return { fileName: fileName, success: false, error: String(e) };
     }
 }

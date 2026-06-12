@@ -686,7 +686,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                           </div>
                         )}
                         <div className="form-hint">
-                          ※ 各PSDを開いてアクション（断ち切り・切り抜き等）を実行→sRGB変換→JPEG保存します。<b>アクションには「保存」「閉じる」を含めないでください</b>（含むとそのページは失敗扱いになります）。
+                          ※ 各PSDを開いてアクション（断ち切り・切り抜き等）を実行→sRGB変換→JPEG保存します。<b>アクションに「保存」「閉じる」が含まれていてもOK</b>（中間ファイル経由で引き継ぎ、保存ダイアログも出ません）。最終的なEPUB用JPEGはアプリが書き出します。
                         </div>
                       </div>
                     )}
