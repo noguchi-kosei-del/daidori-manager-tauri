@@ -319,7 +319,8 @@ fn parse_atn_action_names(bytes: &[u8]) -> Vec<String> {
 
 /// Photoshop アクションセット(.atn)ファイルのヘッダからセット名を解析する。
 /// ATN形式: [4byte version][4byte 名前長(UTF-16単位数, BE, 終端null含む)][UTF-16BE 名前...]
-fn parse_atn_set_name(path: &str) -> Option<String> {
+/// EPUB の Photoshop 変換（srgb_convert）からも同じ補完に再利用するため pub(crate)。
+pub(crate) fn parse_atn_set_name(path: &str) -> Option<String> {
     let bytes = fs::read(path).ok()?;
     if bytes.len() < 8 {
         return None;
@@ -350,7 +351,7 @@ fn parse_atn_set_name(path: &str) -> Option<String> {
 }
 
 /// ファイルパスから拡張子を除いたファイル名を取得（.atn セット名のフォールバック用）
-fn filename_stem(path: &str) -> Option<String> {
+pub(crate) fn filename_stem(path: &str) -> Option<String> {
     Path::new(path)
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())

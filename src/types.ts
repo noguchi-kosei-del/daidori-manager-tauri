@@ -305,10 +305,21 @@ export interface EpubMetadata {
    * フロント専用フィールド。Rust の generate_epub は無視する。
    */
   colorEngine?: EpubColorEngine;
+  /**
+   * EPUB生成時にPSDへ実行するPhotoshopアクション（断ち切り等）。
+   * colorEngine==='photoshop' のときのみ有効。フロント専用フィールド。
+   */
+  photoshopAction?: EpubPhotoshopAction;
 }
 
 /** EPUB画像変換エンジン（19.3 実験: 高速ネイティブ / 高品質Photoshop） */
 export type EpubColorEngine = 'native' | 'photoshop';
+
+/** EPUB生成時にPSDへ実行するPhotoshopアクション（断ち切り等） */
+export interface EpubPhotoshopAction {
+  actionSetPath: string; // 選択した .atn ファイルのフルパス
+  actionName: string;    // 実行するアクション名
+}
 
 export interface EpubSplitRange {
   startIndex: number;
@@ -375,6 +386,10 @@ export interface SavedEpubState {
   imageColorPolicy?: EpubImageColorPolicy;
   /** 19.3: PSD変換エンジン（高速ネイティブ/高品質Photoshop）も保存・復元の対象にする */
   colorEngine?: EpubColorEngine;
+  /** EPUB生成時のPSD断ち切りアクション（有効時のみ保持） */
+  photoshopActionEnabled?: boolean;
+  photoshopActionSetPath?: string;
+  photoshopActionName?: string;
   pageOverrides?: SavedEpubPageOverride[];
   split?: SavedEpubSplitState;
 }

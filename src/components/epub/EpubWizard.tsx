@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { save } from '@tauri-apps/plugin-dialog';
+import { save, open } from '@tauri-apps/plugin-dialog';
 import { desktopDir, join } from '@tauri-apps/api/path';
 import {
   EpubMetadata,
@@ -63,6 +63,13 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
   const [imageColorPolicy, setImageColorPolicy] = useState<EpubImageColorPolicy>('auto');
   // 19.3 実験: PSD→JPEG中間変換のエンジン。既定は高速ネイティブ。
   const [colorEngine, setColorEngine] = useState<EpubColorEngine>('native');
+  // PSD断ち切りアクション（colorEngine==='photoshop' のときのみ有効）
+  const [psdActionEnabled, setPsdActionEnabled] = useState(false);
+  const [psdActionSetPath, setPsdActionSetPath] = useState('');
+  const [psdActionName, setPsdActionName] = useState('');
+  const [psdAtnActions, setPsdAtnActions] = useState<string[]>([]);
+  const [psdAtnSetName, setPsdAtnSetName] = useState('');
+  const [psdAtnError, setPsdAtnError] = useState('');
   const [colorMode, setColorMode] = useState<'auto' | 'custom'>('auto');
   const [hybridCssProfile, setHybridCssProfile] = useState<HybridCssProfile>('current');
   const [allowMissingColophon, setAllowMissingColophon] = useState(false);
@@ -132,6 +139,9 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
       setColorMode(saved.imageColorPolicy === 'auto' ? 'auto' : 'custom');
     }
     if (saved?.colorEngine) setColorEngine(saved.colorEngine);
+    if (saved?.photoshopActionEnabled !== undefined) setPsdActionEnabled(saved.photoshopActionEnabled);
+    if (saved?.photoshopActionSetPath !== undefined) setPsdActionSetPath(saved.photoshopActionSetPath);
+    if (saved?.photoshopActionName !== undefined) setPsdActionName(saved.photoshopActionName);
     if (saved?.hybridCssProfile) setHybridCssProfile(saved.hybridCssProfile);
     if (saved?.allowMissingColophon !== undefined) setAllowMissingColophon(saved.allowMissingColophon);
     if (saved?.pageDirection) setPageDirection(saved.pageDirection);
@@ -218,6 +228,9 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
       allowMissingColophon,
       imageColorPolicy: colorMode === 'auto' ? 'auto' : imageColorPolicy,
       colorEngine,
+      photoshopActionEnabled: psdActionEnabled,
+      photoshopActionSetPath: psdActionSetPath || undefined,
+      photoshopActionName: psdActionName || undefined,
       split: {
         enabled: splitEnabled,
         baseName: splitBaseName,
@@ -247,6 +260,9 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     colorMode,
     imageColorPolicy,
     colorEngine,
+    psdActionEnabled,
+    psdActionSetPath,
+    psdActionName,
     splitEnabled,
     splitBaseName,
     splitSuffixStart,
@@ -320,6 +336,49 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     } catch { /* ignore */ }
   };
 
+  // 選択した .atn からアクション名一覧を取得（ドロップダウン用。TIFF変換と同じ read_atn_actions を再利用）
+  useEffect(() => {
+    if (!psdActionSetPath) {
+      setPsdAtnActions([]);
+      setPsdAtnSetName('');
+      setPsdAtnError('');
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const info = await invoke<{ setName: string | null; actions: string[] }>('read_atn_actions', { path: psdActionSetPath });
+        if (cancelled) return;
+        const actions = info.actions ?? [];
+        setPsdAtnActions(actions);
+        setPsdAtnSetName(info.setName ?? '');
+        setPsdAtnError('');
+        setPsdActionName((prev) => {
+          if (prev && actions.includes(prev)) return prev;
+          if (actions.length === 1) return actions[0];
+          return '';
+        });
+      } catch (e) {
+        if (cancelled) return;
+        setPsdAtnActions([]);
+        setPsdAtnSetName('');
+        setPsdAtnError(String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [psdActionSetPath]);
+
+  // アクションセット(.atn)ファイルをエクスプローラーで選択
+  const handleSelectPsdActionSet = async () => {
+    const selected = await open({
+      title: 'Photoshopアクションセット(.atn)を選択',
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'Photoshopアクション', extensions: ['atn'] }],
+    });
+    if (typeof selected === 'string') setPsdActionSetPath(selected);
+  };
+
   const thumbSrc = (page: (typeof epubPages)[number]): string | null => {
     if (page.isBlank) return null;
     const p = page.thumbnailPath || page.sourcePath;
@@ -387,6 +446,10 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
       hybridCssProfile: outputFormat === 'hybrid' ? hybridCssProfile : undefined,
       imageColorPolicy: colorMode === 'auto' ? 'auto' : imageColorPolicy,
       colorEngine,
+      photoshopAction:
+        colorEngine === 'photoshop' && psdActionEnabled && psdActionName.trim()
+          ? { actionSetPath: psdActionSetPath, actionName: psdActionName.trim() }
+          : undefined,
     };
     try {
       await onGenerate(metadata, outputPath, splitEnabled ? {
@@ -567,6 +630,68 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                   </div>
                   <div className="form-hint">高速＝内蔵エンジンでPSDをJPEG化（ICC埋め込みのみ）。高品質＝Photoshopの「プロファイル変換」でsRGBへ厳密に色変換（相対的な色域を維持＋黒点補正）。Photoshop未インストール時は自動で高速に切替。</div>
                 </div>
+                {colorEngine === 'photoshop' && (
+                  <div className="form-group">
+                    <label className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={psdActionEnabled}
+                        onChange={(e) => setPsdActionEnabled(e.target.checked)}
+                      />
+                      断ち切りをPhotoshopアクションで適用
+                      <span className="option-note"> - 各PSDに .atn のアクションを実行してから変換</span>
+                    </label>
+                    {psdActionEnabled && (
+                      <div className="action-settings">
+                        <div className="form-group">
+                          <label>アクションセット（.atnファイル）</label>
+                          <div className="input-with-button">
+                            <input
+                              type="text"
+                              value={psdActionSetPath}
+                              placeholder="エクスプローラーで .atn を選択..."
+                              readOnly
+                            />
+                            <button type="button" className="btn-secondary btn-small" onClick={handleSelectPsdActionSet}>
+                              参照
+                            </button>
+                          </div>
+                        </div>
+                        {psdAtnSetName && <div className="form-hint">セット名: {psdAtnSetName}</div>}
+                        <div className="form-group">
+                          <label>アクション名</label>
+                          {psdAtnActions.length > 0 ? (
+                            <select
+                              className="select-full"
+                              value={psdAtnActions.includes(psdActionName) ? psdActionName : ''}
+                              onChange={(e) => setPsdActionName(e.target.value)}
+                            >
+                              <option value="">（アクションを選択してください）</option>
+                              {psdAtnActions.map((a) => (
+                                <option key={a} value={a}>{a}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              type="text"
+                              value={psdActionName}
+                              onChange={(e) => setPsdActionName(e.target.value)}
+                              placeholder="例: 断ち切り"
+                            />
+                          )}
+                        </div>
+                        {psdAtnError && (
+                          <div className="form-hint" style={{ color: 'var(--color-error, #dc2626)' }}>
+                            .atnの解析に失敗しました（手入力してください）: {psdAtnError}
+                          </div>
+                        )}
+                        <div className="form-hint">
+                          ※ 各PSDを開いてアクション（断ち切り・切り抜き等）を実行→sRGB変換→JPEG保存します。<b>アクションには「保存」「閉じる」を含めないでください</b>（含むとそのページは失敗扱いになります）。
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {(colorMode === 'custom' || outputFormat === 'hybrid') && (
                   <details className="epub-advanced" open={colorMode === 'custom'}>
                     <summary>詳細設定</summary>

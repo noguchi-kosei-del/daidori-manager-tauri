@@ -2189,10 +2189,18 @@ function App() {
               // preNormalized コピー経路ではこれが最終EPUB画質になるため、
               // q12 だと容量が倍近くなる一方で画質差はわずか → 11 をバランス点とする。
               // dither / maxPixels は Rust 側の既定（true / 5.6MP）を使用。
+              // photoshopAction があれば断ち切り等のアクションを各PSDに実行（色変換より前）。
               globalSettings: {
                 jpegQuality: 11,
                 intent: 'relative',
                 blackPointCompensation: true,
+                ...(metadata.photoshopAction
+                  ? {
+                      runAction: true,
+                      actionSetPath: metadata.photoshopAction.actionSetPath,
+                      actionName: metadata.photoshopAction.actionName,
+                    }
+                  : {}),
               },
             };
             convertResponse = await invoke('run_photoshop_srgb_convert', {

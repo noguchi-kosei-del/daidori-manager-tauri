@@ -51,6 +51,18 @@ function main() {
     var results = [];
     var totalFiles = config.files.length;
 
+    // 断ち切り等のアクションセット(.atn)を事前に読み込む（各ページの処理で doAction する）
+    if (globalSettings.runAction && globalSettings.actionSetPath) {
+        try {
+            var atnFile = new File(globalSettings.actionSetPath);
+            if (atnFile.exists) {
+                app.load(atnFile);
+            }
+        } catch (eLoad) {
+            // 既に読込済み等は無視（doAction時にエラーが出れば各ファイル結果に反映される）
+        }
+    }
+
     // プログレスウィンドウ
     var progressWin = new Window("palette", "sRGB変換", undefined, { closeButton: false });
     progressWin.orientation = "column";
@@ -151,7 +163,36 @@ function processFile(fileConfig, globalSettings) {
         var dither = (globalSettings.dither === false) ? false : true;
         var maxPixels = globalSettings.maxPixels || 0;
 
-        // 1. レイヤー統合を最初に行い、ブレンドモード等の見た目を確定させてから色変換する
+        // 0. 断ち切り等のPhotoshopアクションを実行（切り抜き＝幾何処理を最初に確定）。
+        //    レイヤー依存のアクションにも対応するため flatten より前に実行する。
+        //    アクションが「保存・閉じる」を含むとEPUB用のJPEG保存ができないため、
+        //    ドキュメントが閉じられた場合はエラーとして返す。
+        if (globalSettings.runAction && globalSettings.actionName) {
+            var docCountBefore = app.documents.length;
+            try {
+                app.doAction(globalSettings.actionName, globalSettings.actionSet || "");
+            } catch (eAct) {
+                return {
+                    fileName: fileName,
+                    success: false,
+                    error: "アクション実行に失敗しました（セット: '" +
+                        (globalSettings.actionSet || "") + "' / アクション: '" +
+                        globalSettings.actionName + "'）: " + (eAct.message || String(eAct))
+                };
+            }
+            if (app.documents.length < docCountBefore) {
+                return {
+                    fileName: fileName,
+                    success: false,
+                    error: "アクションがドキュメントを閉じました。EPUB用アクションには「保存」「閉じる」を含めないでください（断ち切り・切り抜き等の加工のみ）。"
+                };
+            }
+            // アクションが activeDocument を変えるケースに備えて同期し、モードも読み直す
+            try { doc = app.activeDocument; } catch (eDoc) {}
+            mode = doc.mode;
+        }
+
+        // 1. レイヤー統合。ブレンドモード等の見た目を確定させてから色変換する
         //    （レイヤーを残したままのプロファイル変換は合成結果が変わることがある）
         doc.flatten();
 

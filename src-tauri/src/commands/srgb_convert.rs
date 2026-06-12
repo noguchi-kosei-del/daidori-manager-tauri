@@ -51,6 +51,19 @@ pub struct SrgbGlobalSettings {
     /// 再リサイズ・再エンコードを不要にする（pre_normalized コピー経路）。0 で無効。
     #[serde(default = "default_max_pixels")]
     pub max_pixels: u64,
+    /// 断ち切り等のPhotoshopアクションを各ページに実行するか（TIFF変換と同じ仕組み）。
+    /// アクションは色変換・縮小より前に実行する（切り抜き＝幾何処理を先に確定）。
+    #[serde(default)]
+    pub run_action: bool,
+    /// 選択した .atn ファイルのフルパス（処理開始時に app.load で読み込む）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_set_path: Option<String>,
+    /// 実行するアクションのセット名（action_set_path から解析して補完）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_set: Option<String>,
+    /// 実行するアクション名
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_name: Option<String>,
 }
 
 fn default_jpeg_quality() -> u8 {
@@ -77,6 +90,10 @@ impl Default for SrgbGlobalSettings {
             black_point_compensation: default_bpc(),
             dither: default_dither(),
             max_pixels: default_max_pixels(),
+            run_action: false,
+            action_set_path: None,
+            action_set: None,
+            action_name: None,
         }
     }
 }
@@ -144,6 +161,22 @@ pub async fn run_photoshop_srgb_convert(
     let mut config_with_output = config;
     for file_config in &mut config_with_output.files {
         file_config.output_path = final_output_dir.clone();
+    }
+
+    // アクションセット(.atn)が指定されていれば、ヘッダからセット名を解析して action_set に補完。
+    // 解析失敗時はファイル名（拡張子なし）でフォールバック（tiff.rs と同じ仕組みを再利用）。
+    if config_with_output.global_settings.run_action {
+        if let Some(atn_path) = config_with_output.global_settings.action_set_path.clone() {
+            if !atn_path.is_empty() {
+                let set_name = super::tiff::parse_atn_set_name(&atn_path)
+                    .or_else(|| super::tiff::filename_stem(&atn_path));
+                eprintln!(
+                    "sRGB Convert - Action set '.atn': {} -> set name: {:?}",
+                    atn_path, set_name
+                );
+                config_with_output.global_settings.action_set = set_name;
+            }
+        }
     }
 
     // 設定ファイルを書き込み（UTF-8 BOM付き）
