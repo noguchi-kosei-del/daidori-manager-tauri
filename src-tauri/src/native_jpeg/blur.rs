@@ -124,12 +124,24 @@ pub fn apply_blur(
         return blurred;
     }
 
+    const ALPHA_THRESHOLD: u8 = 16;
+    // 安全策: テキストマスクが画像の過大な割合（>50%）を覆う場合は、マスクが不正
+    // （例: グレースケールPSDで psd クレートがアルファを誤生成）とみなし、全体ぼかしに倒す。
+    // これがないと「シャープ上書き」が画面全体に及び、ぼかしが全く見えなくなる。
+    let text_px = text_rgba
+        .chunks_exact(4)
+        .filter(|p| p[3] > ALPHA_THRESHOLD)
+        .count();
+    let total_px = (w as usize) * (h as usize);
+    if total_px == 0 || text_px * 2 > total_px {
+        return blurred;
+    }
+
     let sharp = img.to_rgba8();
     let sharp_raw = sharp.as_raw();
     let mut out = blurred.to_rgba8();
     // 文字グリフ部分を元のシャープ画素で（グリフのアルファに応じて）上書き。
     // 閾値未満のごく薄い縁はぼかし側のまま残す（境界のにじみ抑制）。
-    const ALPHA_THRESHOLD: u8 = 16;
     for (i, px) in out.pixels_mut().enumerate() {
         let a = text_rgba[i * 4 + 3];
         if a <= ALPHA_THRESHOLD {

@@ -176,7 +176,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
       // PSD・JPEGファイルを抽出（Photoshopで開いてTIFFに変換）
       // EPUB_maker連携用にページ情報も保持
       const convertibleTypes = ['psd', 'jpg', 'jpeg'];
-      const convertiblePages: { path: string; outputName: string; pageType: string; chapterType: string; chapterId: string; chapterName?: string; label?: string }[] = [];
+      const convertiblePages: { path: string; outputName: string; pageType: string; chapterType: string; chapterId: string; chapterName?: string; label?: string; colorMode?: string }[] = [];
       const usedTiffOutputNames = new Set<string>();
 
       if (renameMode === 'unified') {
@@ -190,6 +190,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
               chapterId: item.chapter.id,
               chapterName: item.chapter.name,
               label: item.page.label,
+              colorMode: item.page.imageColorMode,
             });
           }
         });
@@ -211,6 +212,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
                 chapterId: chapter.id,
                 chapterName: chapter.name,
                 label: page.label,
+                colorMode: page.imageColorMode,
               });
             }
           });
@@ -225,12 +227,23 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
       try {
         const useTiffResize = !!(tiffResizeEnabled && tiffTargetWidth > 0 && tiffTargetHeight > 0);
         const useTiffBlur = !!(tiffBlurEnabled && tiffBlurRadius > 0);
+        // 断ち切りタブ(アクション/JSON)由来のぼかしを各ページに適用するための実効ぼかし半径。
+        // カラー原稿(RGB/CMYK)はぼかし0。グレースケール原稿はPhotoshopがグレースケール・600ppiを維持して
+        // 背景ガウスぼかしを適用する。region由来を優先し、無ければ手動(tiffBlur)設定。
+        const effTiffBlurFor = (p: { chapterType: string; chapterId: string; colorMode?: string }) => {
+          if (p.colorMode === 'RGB' || p.colorMode === 'CMYK') return 0; // カラーはぼかし0
+          const region = resolveBleedRegion(bleedSettings, p.chapterType, p.chapterId);
+          const regionBlur = region?.blurRadius ?? 0;
+          return regionBlur > 0 ? regionBlur : (useTiffBlur ? tiffBlurRadius : 0);
+        };
+        const anyTiffBlur = convertiblePages.some((p) => effTiffBlurFor(p) > 0);
         const config = {
           globalSettings: {
             flattenImage: true,
-            // ぼかし「背景のみ」: テキスト/背景を分離して背景だけぼかす（テキストはシャープ維持）
-            separateTextAndBackground: useTiffBlur && tiffBlurBackgroundOnly,
-            reorganizeText: useTiffBlur && tiffBlurBackgroundOnly,
+            // ぼかし「背景のみ」: テキスト/背景を分離して背景だけぼかす（テキストはシャープ維持）。
+            // 手動ぼかし(背景のみ) もしくは 断ち切りタブ由来のぼかしがあるとき有効化。
+            separateTextAndBackground: (useTiffBlur && tiffBlurBackgroundOnly) || anyTiffBlur,
+            reorganizeText: (useTiffBlur && tiffBlurBackgroundOnly) || anyTiffBlur,
             // サイズ統一: 指定ピクセルへ自動リサイズ（JSX step 13 が targetWidth/targetHeight を見て実行）
             ...(useTiffResize ? { targetWidth: tiffTargetWidth, targetHeight: tiffTargetHeight } : {}),
             // 処理の途中で実行するPhotoshopアクション（ぼかし・切り抜き等の加工。リサイズより前に実行）
@@ -247,13 +260,15 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
           files: convertiblePages.map(p => {
             // 断ち切りは範囲方式に統一（action-ratio も .atn から範囲を読み込んで範囲として扱う）
             const cropBounds = resolveTiffCropBounds(bleedSettings, p.chapterType, p.chapterId);
+            // ぼかし: 断ち切りタブ由来(アクション/JSON)を優先。カラーは0。グレースケールは維持してぼかし。
+            const effBlur = effTiffBlurFor(p);
             return {
               path: p.path,
               outputPath: outputPath,
               outputName: p.outputName,
               // ぼかし（背景ぼかし）。JSX step 9 が applyBlur/blurRadius を見て背景レイヤーに適用
-              applyBlur: useTiffBlur,
-              blurRadius: useTiffBlur ? tiffBlurRadius : 0,
+              applyBlur: effBlur > 0,
+              blurRadius: effBlur,
               ...(cropBounds && { cropBounds }),
             };
           }),
