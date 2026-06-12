@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { save } from '@tauri-apps/plugin-dialog';
+import { save, open } from '@tauri-apps/plugin-dialog';
 import { desktopDir, join } from '@tauri-apps/api/path';
 import { invoke } from '@tauri-apps/api/core';
 import { Chapter, CHAPTER_TYPE_LABELS, CHAPTER_TYPE_COLORS } from '../../types';
@@ -104,6 +104,18 @@ export interface ExportOptions {
   bleedSettings?: BleedSettings;
   // 断ち切りモード（Photoshop変換時のみ使用）
   bleedMode: BleedMode;
+  // 処理の最後に実行するPhotoshopアクション（TIFF変換時のみ・サイズ統一など）
+  runAction: boolean;
+  actionSetPath: string;  // 選択した .atn ファイルのフルパス（空なら読込済みセットを使用）
+  actionName: string;
+  // TIFF変換時のサイズ統一（指定ピクセルへ自動リサイズ）
+  tiffResizeEnabled: boolean;
+  tiffTargetWidth: number;
+  tiffTargetHeight: number;
+  // TIFF変換時のぼかし（ガウス）
+  tiffBlurEnabled: boolean;
+  tiffBlurRadius: number;
+  tiffBlurBackgroundOnly: boolean; // true: テキスト/背景を分離し背景のみぼかす
 }
 
 // エクスポートモーダル
@@ -139,7 +151,89 @@ export function ExportModal({
   const [prefix, setPrefix] = useState('');
   const [perChapterSettings, setPerChapterSettings] = useState<Record<string, ChapterRenameSettings>>({});
   const [bleedMode, setBleedMode] = useState<BleedMode>('bulk');
+  // 処理の最後に実行するPhotoshopアクション（サイズ統一など）。設定はlocalStorageに永続化
+  const [runAction, setRunAction] = useState(false);
+  const [actionSetPath, setActionSetPath] = useState('');
+  const [actionName, setActionName] = useState('');
+  const [atnActions, setAtnActions] = useState<string[]>([]); // .atn内のアクション名一覧
+  const [atnSetName, setAtnSetName] = useState('');           // .atnのセット名（表示用）
+  const [atnError, setAtnError] = useState('');               // .atn解析エラー
+  // TIFF変換時のサイズ統一（指定ピクセルへリサイズ）
+  const [tiffResizeEnabled, setTiffResizeEnabled] = useState(false);
+  const [tiffWidthText, setTiffWidthText] = useState('2250');
+  const [tiffHeightText, setTiffHeightText] = useState('3000');
+  // TIFF変換時のぼかし（背景ぼかし）
+  const [tiffBlurEnabled, setTiffBlurEnabled] = useState(false);
+  const [tiffBlurRadiusText, setTiffBlurRadiusText] = useState('10');
+  const [tiffBlurBackgroundOnly, setTiffBlurBackgroundOnly] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
+
+  // アクション設定をlocalStorageから復元
+  useEffect(() => {
+    if (!isOpen) return;
+    try {
+      const saved = localStorage.getItem('daidori_tiff_action');
+      if (saved) {
+        const obj = JSON.parse(saved);
+        if (typeof obj.runAction === 'boolean') setRunAction(obj.runAction);
+        if (typeof obj.actionSetPath === 'string') setActionSetPath(obj.actionSetPath);
+        if (typeof obj.actionName === 'string') setActionName(obj.actionName);
+        if (typeof obj.tiffResizeEnabled === 'boolean') setTiffResizeEnabled(obj.tiffResizeEnabled);
+        if (typeof obj.tiffWidthText === 'string') setTiffWidthText(obj.tiffWidthText);
+        if (typeof obj.tiffHeightText === 'string') setTiffHeightText(obj.tiffHeightText);
+        if (typeof obj.tiffBlurEnabled === 'boolean') setTiffBlurEnabled(obj.tiffBlurEnabled);
+        if (typeof obj.tiffBlurRadiusText === 'string') setTiffBlurRadiusText(obj.tiffBlurRadiusText);
+        if (typeof obj.tiffBlurBackgroundOnly === 'boolean') setTiffBlurBackgroundOnly(obj.tiffBlurBackgroundOnly);
+      }
+    } catch {
+      // 破損データは無視
+    }
+  }, [isOpen]);
+
+  // 選択した .atn からアクション名一覧を取得（ドロップダウン用）
+  useEffect(() => {
+    if (!actionSetPath) {
+      setAtnActions([]);
+      setAtnSetName('');
+      setAtnError('');
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const info = await invoke<{ setName: string | null; actions: string[] }>('read_atn_actions', { path: actionSetPath });
+        if (cancelled) return;
+        setAtnActions(info.actions ?? []);
+        setAtnSetName(info.setName ?? '');
+        setAtnError('');
+        // 既存のアクション名が一覧に無ければ、1件だけのときは自動選択
+        setActionName((prev) => {
+          if (prev && (info.actions ?? []).includes(prev)) return prev;
+          if ((info.actions ?? []).length === 1) return info.actions[0];
+          return (info.actions ?? []).includes(prev) ? prev : '';
+        });
+      } catch (e) {
+        if (cancelled) return;
+        setAtnActions([]);
+        setAtnSetName('');
+        setAtnError(String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [actionSetPath]);
+
+  // アクションセット(.atn)ファイルをエクスプローラーで選択
+  const handleSelectActionSet = async () => {
+    const selected = await open({
+      title: 'Photoshopアクションセット(.atn)を選択',
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'Photoshopアクション', extensions: ['atn'] }],
+    });
+    if (typeof selected === 'string') {
+      setActionSetPath(selected);
+    }
+  };
 
   // 初期化：デフォルトの出力パスを設定
   useEffect(() => {
@@ -230,8 +324,17 @@ export function ExportModal({
 
   const handleExport = async () => {
     if (!outputPath) return;
+    // アクション設定を永続化（次回のために記憶）
+    try {
+      localStorage.setItem('daidori_tiff_action', JSON.stringify({ runAction, actionSetPath, actionName, tiffResizeEnabled, tiffWidthText, tiffHeightText, tiffBlurEnabled, tiffBlurRadiusText, tiffBlurBackgroundOnly }));
+    } catch {
+      // 保存失敗は無視
+    }
+    const tiffTargetWidth = Math.max(0, parseInt(tiffWidthText, 10) || 0);
+    const tiffTargetHeight = Math.max(0, parseInt(tiffHeightText, 10) || 0);
+    const tiffBlurRadius = Math.max(0, parseFloat(tiffBlurRadiusText) || 0);
     setIsExporting(true);
-    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, resizeMode, resizePercent, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode });
+    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, resizeMode, resizePercent, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode, runAction, actionSetPath, actionName: actionName.trim(), tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight, tiffBlurEnabled, tiffBlurRadius, tiffBlurBackgroundOnly });
     setIsExporting(false);
     if (!embedded) onClose();
   };
@@ -378,6 +481,165 @@ export function ExportModal({
                   移動
                   <span className="radio-description">元ファイルを整理</span>
                 </label>
+              </div>
+            </div>
+          )}
+
+          {/* TIFF変換オプション（0602由来: サイズ統一・背景ぼかし・Photoshopアクション実行） */}
+          {convertToTiff && (
+            <div className="form-group">
+              <label className="section-heading">TIFF変換オプション</label>
+              <div className="tiff-options">
+                <div className="tiff-note">
+                  ※ LZW圧縮、レイヤー統合で出力（カラーモードは元ファイルを維持）
+                </div>
+                <label className="checkbox-label" style={{ marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={tiffResizeEnabled}
+                    onChange={(e) => {
+                      setTiffResizeEnabled(e.target.checked);
+                      // サイズ統一とアクションは同時に使えない（アクションが保存・閉じるを行いアプリ処理を奪うため）
+                      if (e.target.checked) setRunAction(false);
+                    }}
+                  />
+                  サイズを統一（指定ピクセルに自動リサイズ＋自動保存）
+                  <span className="option-note"> - 全ページを同じ寸法に揃えてアプリが自動保存（推奨）</span>
+                </label>
+                {tiffResizeEnabled && (
+                  <div className="action-settings">
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label>幅 (px)</label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          value={tiffWidthText}
+                          onChange={(e) => setTiffWidthText(e.target.value.replace(/[^0-9]/g, ''))}
+                          placeholder="例: 2250"
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>高さ (px)</label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          value={tiffHeightText}
+                          onChange={(e) => setTiffHeightText(e.target.value.replace(/[^0-9]/g, ''))}
+                          placeholder="例: 3000"
+                        />
+                      </div>
+                    </div>
+                    <div className="tiff-note">
+                      ※ 全ページを指定した幅×高さ(px)に拡大縮小して揃えます（縦横比が異なるページは指定寸法に合わせて変形します）。
+                    </div>
+                  </div>
+                )}
+                <label className="checkbox-label" style={{ marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={tiffBlurEnabled}
+                    onChange={(e) => setTiffBlurEnabled(e.target.checked)}
+                  />
+                  ぼかし（ガウス）を適用
+                  <span className="option-note"> - 背景をぼかす加工をアプリが自動実行</span>
+                </label>
+                {tiffBlurEnabled && (
+                  <div className="action-settings">
+                    <div className="form-group">
+                      <label>ぼかし半径 (px)</label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={tiffBlurRadiusText}
+                        onChange={(e) => setTiffBlurRadiusText(e.target.value.replace(/[^0-9.]/g, ''))}
+                        placeholder="例: 10"
+                      />
+                    </div>
+                    <label className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={tiffBlurBackgroundOnly}
+                        onChange={(e) => setTiffBlurBackgroundOnly(e.target.checked)}
+                      />
+                      テキストを保護（背景のみぼかす）
+                      <span className="option-note"> - テキストグループ（#text#/写植 等）を分離して背景だけぼかす</span>
+                    </label>
+                    <div className="tiff-note">
+                      ※ ぼかしは原寸（リサイズ前）で適用されます。半径はアクションで使っていた値に合わせて調整してください。
+                    </div>
+                  </div>
+                )}
+                <label className={`checkbox-label ${tiffResizeEnabled ? 'disabled' : ''}`} style={{ marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={runAction && !tiffResizeEnabled}
+                    disabled={tiffResizeEnabled}
+                    onChange={(e) => {
+                      setRunAction(e.target.checked);
+                      if (e.target.checked) setTiffResizeEnabled(false);
+                    }}
+                  />
+                  処理の途中でPhotoshopアクションを実行（任意）
+                  <span className="option-note">
+                    {tiffResizeEnabled
+                      ? ' - 「サイズを統一」と同時には使えません（アクションが保存・閉じるを行いアプリの保存・リサイズを奪うため）'
+                      : ' - ぼかし等の加工用。ただし保存・閉じるを含むアクションはアプリの自動保存と競合します'}
+                  </span>
+                </label>
+                {runAction && (
+                  <div className="action-settings">
+                    <div className="form-group">
+                      <label>アクションセット（.atnファイル）</label>
+                      <div className="input-with-button">
+                        <input
+                          type="text"
+                          value={actionSetPath}
+                          placeholder="エクスプローラーで .atn を選択..."
+                          readOnly
+                        />
+                        <button className="btn-secondary btn-small" onClick={handleSelectActionSet}>
+                          参照
+                        </button>
+                      </div>
+                    </div>
+                    {atnSetName && (
+                      <div className="tiff-note">セット名: {atnSetName}</div>
+                    )}
+                    <div className="form-group">
+                      <label>アクション名</label>
+                      {atnActions.length > 0 ? (
+                        <select
+                          className="select-full"
+                          value={atnActions.includes(actionName) ? actionName : ''}
+                          onChange={(e) => setActionName(e.target.value)}
+                        >
+                          <option value="">（アクションを選択してください）</option>
+                          {atnActions.map((a) => (
+                            <option key={a} value={a}>{a}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          value={actionName}
+                          onChange={(e) => setActionName(e.target.value)}
+                          placeholder="例: サイズ統一"
+                        />
+                      )}
+                    </div>
+                    {atnError && (
+                      <div className="tiff-note" style={{ color: 'var(--color-error, #dc2626)' }}>
+                        .atnの解析に失敗しました（手入力してください）: {atnError}
+                      </div>
+                    )}
+                    <div className="tiff-note">
+                      ※ 選択した .atn を処理開始時にPhotoshopへ読み込み、リサイズ前に各ページへ実行します。サイズ統一とTIFF保存はアプリが自動で行うため、<b>アクションには「保存」「閉じる」を含めないでください</b>（ぼかし・切り抜き等の加工のみ）。アクションが画像を閉じた場合はアプリ側の保存・リサイズはスキップされます。
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

@@ -46,6 +46,18 @@ function main() {
     var results = [];
     var totalFiles = config.files.length;
 
+    // 指定されたアクションセット(.atn)を事前に読み込む（処理の最後に各ページへ実行するため）
+    if (globalSettings.runAction && globalSettings.actionSetPath) {
+        try {
+            var atnFile = new File(globalSettings.actionSetPath);
+            if (atnFile.exists) {
+                app.load(atnFile);
+            }
+        } catch (eLoad) {
+            // 既に読み込み済みの場合などは無視（doAction時にエラーが出れば各ファイル結果に反映される）
+        }
+    }
+
     // プログレスウィンドウを作成
     var progressWin = new Window("palette", "TIFF変換", undefined, { closeButton: false });
     progressWin.orientation = "column";
@@ -299,7 +311,30 @@ function processFile(fileConfig, globalSettings) {
         // 12. Crop (if specified)
         if (!fileConfig.skipCrop && fileConfig.cropBounds) {
             var cb = fileConfig.cropBounds;
-            if (cb.isMargin) {
+            if (cb.isProportional && cb.refWidth > 0 && cb.refHeight > 0) {
+                // 比率方式: 参照ページの絶対座標を、各画像の実サイズに対する比率でスケーリング。
+                // サイズ違いのPSDでも断ち切り範囲が同じ相対位置に揃う（黒余白/見切れを防止）。
+                var pdocW = doc.width.as("px");
+                var pdocH = doc.height.as("px");
+                var sx = pdocW / cb.refWidth;
+                var sy = pdocH / cb.refHeight;
+                var cL = Math.round(cb.left * sx);
+                var cT = Math.round(cb.top * sy);
+                var cR = Math.round(cb.right * sx);
+                var cB = Math.round(cb.bottom * sy);
+                // 画像範囲内にクランプ（座標が画像をはみ出すと黒余白になるため）
+                if (cL < 0) cL = 0; if (cT < 0) cT = 0;
+                if (cR > pdocW) cR = pdocW; if (cB > pdocH) cB = pdocH;
+                if (cR < cL) cR = cL; if (cB < cT) cB = cT;
+                if (cR - cL > 0 && cB - cT > 0) {
+                    doc.crop([
+                        new UnitValue(cL, "px"),
+                        new UnitValue(cT, "px"),
+                        new UnitValue(cR, "px"),
+                        new UnitValue(cB, "px")
+                    ]);
+                }
+            } else if (cb.isMargin) {
                 // マージン方式: 各辺からの切り落とし幅
                 var docW = doc.width.as("px");
                 var docH = doc.height.as("px");
@@ -322,7 +357,43 @@ function processFile(fileConfig, globalSettings) {
             }
         }
 
-        // 13. Resize
+        // 12.5 Photoshopアクションを実行（ぼかし・切り抜き等の加工）。
+        // 最終的なサイズ統一はこの後のリサイズ(step 13)で確定させるため、アクションはリサイズより前に実行する。
+        // アクションが「保存・閉じる」まで含む場合は、それで完結とみなしアプリ側の保存・リサイズをスキップする。
+        var actionClosedDoc = false;
+        var preActionColorMode = getColorModeName(doc.mode);
+        if (globalSettings.runAction && globalSettings.actionName) {
+            var docCountBefore = app.documents.length;
+            try {
+                app.doAction(globalSettings.actionName, globalSettings.actionSet || "");
+            } catch (eAct) {
+                throw new Error(
+                    "アクション実行に失敗しました（セット: '" +
+                    (globalSettings.actionSet || "") + "' / アクション: '" +
+                    globalSettings.actionName + "'）: " + (eAct.message || String(eAct))
+                );
+            }
+            // アクションがドキュメントを閉じた（=保存・閉じるまで完結）かどうかを判定
+            if (app.documents.length < docCountBefore) {
+                actionClosedDoc = true;
+            }
+        }
+
+        // アクションが保存・クローズまで行った場合は、アプリ側の保存処理をスキップして成功扱い
+        if (actionClosedDoc) {
+            return {
+                fileName: fileName,
+                success: true,
+                outputPath: "(アクションが保存・クローズしました)",
+                colorMode: preActionColorMode
+            };
+        }
+
+        // アクションがドキュメントを閉じていない場合、活性ドキュメントを処理対象に同期
+        // （アクションが新規ドキュメントを開く等で activeDocument が変わるケースに対応）
+        try { doc = app.activeDocument; } catch (eDoc) {}
+
+        // 13. Resize（指定ピクセルへ拡大縮小。サイズ統一の最終確定ステップ）
         if (globalSettings.targetWidth && globalSettings.targetHeight) {
             var targetW = new UnitValue(globalSettings.targetWidth, "px");
             var targetH = new UnitValue(globalSettings.targetHeight, "px");

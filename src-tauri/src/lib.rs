@@ -47,7 +47,7 @@ use commands::project::{load_project, save_project, validate_pages};
 use commands::recent::add_recent_file;
 use commands::srgb_convert::run_photoshop_srgb_convert;
 use commands::tachimi::{detect_tachimi_exe, generate_tachimi_chapter_pdfs};
-use commands::tiff::{check_photoshop_installed, run_photoshop_tiff_convert};
+use commands::tiff::{check_photoshop_installed, read_atn_actions, run_photoshop_tiff_convert};
 use thumbnail::generate_thumbnail;
 
 /// スプラッシュウィンドウを一定時間表示した後、閉じてメインウィンドウを表示する
@@ -143,6 +143,7 @@ pub fn run() {
             open_file_with_default_app,
             check_photoshop_installed,
             run_photoshop_tiff_convert,
+            read_atn_actions,
             run_native_jpeg_convert,
             run_photoshop_srgb_convert,
             generate_epub,
