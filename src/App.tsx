@@ -2155,19 +2155,17 @@ function App() {
       }
 
       // 断ち切りは「断ち切り」タブ(bleedStore)に一本化。method で出し分け:
-      //  - 'region'      : 描いた範囲（PSDのチャプター種別で表紙/本文）
-      //  - 'action-ratio': アクション矩形の比率（全PSD共通・中央揃え）
-      //  - 'action'      : 後段で runAction（cropBounds は使わない）
-      //  - 'none'        : 断ち切らない
-      // region/action-ratio は srgb_convert.jsx の比率方式クロップで各PSDの実サイズに追従。
+      //  - 'region' / 'action-ratio' : 範囲（描いた or .atnから読み込んだ）でクロップ。
+      //    どちらも getBleedSettings の範囲を使い、srgb_convert.jsx の比率方式で実サイズに追従。
+      //  - 'action' : 後段で runAction（cropBounds は使わない）
+      //  - 'none'   : 断ち切らない
       const bleedState = useBleedStore.getState();
       const bleedMethod = bleedState.method;
       const epubBleedSettings =
-        bleedMethod === 'region' ? bleedState.getBleedSettings() : undefined;
-      const actionRatioBounds =
-        bleedMethod === 'action-ratio' ? bleedState.getActionRatioCropBounds() : undefined;
+        bleedMethod === 'region' || bleedMethod === 'action-ratio'
+          ? bleedState.getBleedSettings()
+          : undefined;
       const cropBoundsForPsd = (srcPath: string) => {
-        if (actionRatioBounds) return actionRatioBounds;
         if (!epubBleedSettings) return undefined;
         const info = psdChapterInfo.get(srcPath);
         if (!info) return undefined;

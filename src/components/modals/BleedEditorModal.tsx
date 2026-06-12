@@ -107,7 +107,6 @@ export function BleedEditorModal({
   const setActionSetPath = useBleedStore((s) => s.setActionSetPath);
   const actionName = useBleedStore((s) => s.actionName);
   const setActionName = useBleedStore((s) => s.setActionName);
-  const setActionCropRect = useBleedStore((s) => s.setActionCropRect);
   const [atnActions, setAtnActions] = useState<string[]>([]);
   const [atnSetName, setAtnSetName] = useState('');
   const [atnError, setAtnError] = useState('');
@@ -143,19 +142,6 @@ export function BleedEditorModal({
     () => atnCrops.find((c) => c.name === actionName) ?? null,
     [atnCrops, actionName],
   );
-  // 比率方式のとき選択アクションの矩形を bleedStore に反映（出力時に使う）
-  useEffect(() => {
-    if (method === 'action-ratio' && selectedActionCrop) {
-      setActionCropRect({
-        left: selectedActionCrop.left,
-        top: selectedActionCrop.top,
-        right: selectedActionCrop.right,
-        bottom: selectedActionCrop.bottom,
-      });
-    } else {
-      setActionCropRect(null);
-    }
-  }, [method, selectedActionCrop, setActionCropRect]);
 
   const handleSelectActionSet = useCallback(async () => {
     const selected = await openDialog({
@@ -167,6 +153,39 @@ export function BleedEditorModal({
     if (typeof selected === 'string') setActionSetPath(selected);
   }, [setActionSetPath]);
   const isActionMethod = method === 'action' || method === 'action-ratio';
+
+  // アクションの切り抜き比率を、この画像の中央に当てはめた選択範囲（元画像px）
+  const computeActionSelection = useCallback(() => {
+    if (!selectedActionCrop || !originalSize) return null;
+    const { left, top, right, bottom } = selectedActionCrop;
+    if (!(right > 0) || !(bottom > 0)) return null;
+    const cw = ((right - left) / right) * originalSize.width;
+    const ch = ((bottom - top) / bottom) * originalSize.height;
+    const selLeft = Math.round((originalSize.width - cw) / 2);
+    const selTop = Math.round((originalSize.height - ch) / 2);
+    return { left: selLeft, top: selTop, right: Math.round(selLeft + cw), bottom: Math.round(selTop + ch) };
+  }, [selectedActionCrop, originalSize]);
+
+  // 比率方式: 範囲が未設定なら .atn の比率から中央配置の範囲を自動で入れてビューアに表示
+  useEffect(() => {
+    if (method !== 'action-ratio' || selection) return;
+    const sel = computeActionSelection();
+    if (sel) {
+      setSelection(sel);
+      setGuidesLocked(true);
+      setTachikiriType((t) => (t === 'none' ? 'crop_only' : t));
+    }
+  }, [method, computeActionSelection, selection]);
+
+  // アクションの比率から範囲を読み込む（手動再適用ボタン用）
+  const loadActionSelection = useCallback(() => {
+    const sel = computeActionSelection();
+    if (sel) {
+      setSelection(sel);
+      setGuidesLocked(true);
+      setTachikiriType((t) => (t === 'none' ? 'crop_only' : t));
+    }
+  }, [computeActionSelection]);
 
   // リセット
   useEffect(() => {
@@ -678,16 +697,20 @@ export function BleedEditorModal({
                 </div>
                 {atnError && <div className="bleed-editor-hint" style={{ color: 'var(--color-error, #dc2626)' }}>.atnの解析に失敗しました（手入力してください）: {atnError}</div>}
                 {method === 'action-ratio' && selectedActionCrop && selectedActionCrop.right > 0 && (
-                  <div className="bleed-editor-hint">
-                    抽出した切り抜き比率: 横 {((selectedActionCrop.right - selectedActionCrop.left) / selectedActionCrop.right * 100).toFixed(1)}% / 縦 {((selectedActionCrop.bottom - selectedActionCrop.top) / selectedActionCrop.bottom * 100).toFixed(1)}%（想定原稿 {Math.round(selectedActionCrop.right)}×{Math.round(selectedActionCrop.bottom)}px 基準）。各画像の中央で比率切り抜きします。
-                  </div>
+                  <>
+                    <div className="bleed-editor-hint">
+                      抽出した切り抜き比率: 横 {((selectedActionCrop.right - selectedActionCrop.left) / selectedActionCrop.right * 100).toFixed(1)}% / 縦 {((selectedActionCrop.bottom - selectedActionCrop.top) / selectedActionCrop.bottom * 100).toFixed(1)}%（想定原稿 {Math.round(selectedActionCrop.right)}×{Math.round(selectedActionCrop.bottom)}px 基準）
+                    </div>
+                    <button type="button" className="btn-secondary btn-small" onClick={loadActionSelection} disabled={!originalSize}>
+                      アクションの比率で範囲を入れ直す
+                    </button>
+                  </>
                 )}
                 <div className="bleed-editor-hint">
                   {method === 'action-ratio'
-                    ? '※ アクションは実行せず、切り抜き座標の比率だけを使い各画像の中央で断ち切ります（サイズ違いに自動追従・保存ダイアログ無し）。おすすめ。'
-                    : '※ 選んだアクションをそのまま実行して断ち切ります。固定座標のためサイズ違いでズレることがあります。EPUBは高品質(Photoshop)時のみ・TIFF出力では適用されません。'}
+                    ? '※ アクションの切り抜き比率を、各画像の中央に当てはめた範囲としてビューアに表示します。ガイドや処理タイプで調整して「' + applyLabel + '」で確定してください（サイズ違いに自動追従）。'
+                    : '※ 選んだアクションをそのまま実行して断ち切ります。固定座標のためサイズ違いでズレることがあります。EPUBは高品質(Photoshop)時のみ・TIFF出力では適用されません。下の「' + applyLabel + '」で閉じてください。'}
                 </div>
-                <div className="bleed-editor-hint">この設定は全ページ・全出力（JPEG / TIFF / EPUB）に共通で適用されます。下の「{applyLabel}」で閉じてください。</div>
               </div>
             )}
 
@@ -695,7 +718,7 @@ export function BleedEditorModal({
               <div className="bleed-editor-hint">断ち切りを行いません。下の「{applyLabel}」で閉じてください。</div>
             )}
 
-            {method === 'region' && (<>
+            {(method === 'region' || method === 'action-ratio') && (<>
             {originalSize && (
               <div className="bleed-editor-image-size">元画像: {originalSize.width} x {originalSize.height}</div>
             )}
@@ -802,7 +825,7 @@ export function BleedEditorModal({
         <div className="bleed-editor-footer">
           <div style={{ flex: 1 }} />
           <button className="btn-secondary btn-small" onClick={() => setShowCancelConfirm(true)}>キャンセル</button>
-          {method === 'region' ? (
+          {method === 'region' || method === 'action-ratio' ? (
             <>
               <button className="btn-primary btn-small" onClick={onSkip} disabled={!!hasValidSelection}>
                 {skipLabel}
@@ -812,7 +835,7 @@ export function BleedEditorModal({
               </button>
             </>
           ) : (
-            // アクション/なしは全出力共通設定。ここでは閉じるだけ（設定は即時 bleedStore に反映済み）
+            // 「アクションそのまま実行」「なし」は全出力共通設定。ここでは閉じるだけ（即時 bleedStore 反映済み）
             <button className="btn-primary btn-small" onClick={onCancel}>
               {applyLabel}
             </button>
