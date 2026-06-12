@@ -99,6 +99,8 @@ export function BleedEditorModal({
   const [strokeColor, setStrokeColor] = useState<BleedColor>('black');
   const [fillColor, setFillColor] = useState<BleedColor>('white');
   const [fillOpacity, setFillOpacity] = useState(50);
+  // アクション/JSON から取り込んだぼかし半径(px)。0 でぼかしなし。
+  const [blurRadius, setBlurRadius] = useState(0);
 
   // 断ち切り方式（断ち切りタブに一本化。グローバル設定をこの編集画面で選ぶ）
   const method = useBleedStore((s) => s.method);
@@ -110,7 +112,7 @@ export function BleedEditorModal({
   const [atnActions, setAtnActions] = useState<string[]>([]);
   const [atnSetName, setAtnSetName] = useState('');
   const [atnError, setAtnError] = useState('');
-  const [atnCrops, setAtnCrops] = useState<{ name: string; left: number; top: number; right: number; bottom: number }[]>([]);
+  const [atnCrops, setAtnCrops] = useState<{ name: string; left: number; top: number; right: number; bottom: number; blurRadius?: number }[]>([]);
 
   // 選択した .atn からアクション名・切り抜き矩形を取得
   useEffect(() => {
@@ -121,7 +123,7 @@ export function BleedEditorModal({
     let cancelled = false;
     (async () => {
       try {
-        const info = await invoke<{ setName: string | null; actions: string[]; actionCrops?: { name: string; left: number; top: number; right: number; bottom: number }[] }>('read_atn_actions', { path: actionSetPath });
+        const info = await invoke<{ setName: string | null; actions: string[]; actionCrops?: { name: string; left: number; top: number; right: number; bottom: number; blurRadius?: number }[] }>('read_atn_actions', { path: actionSetPath });
         if (cancelled) return;
         const actions = info.actions ?? [];
         setAtnActions(actions);
@@ -152,7 +154,109 @@ export function BleedEditorModal({
     });
     if (typeof selected === 'string') setActionSetPath(selected);
   }, [setActionSetPath]);
-  const isActionMethod = method === 'action' || method === 'action-ratio';
+
+  // --- JSONの縮尺（CLLENN共有JSON）方式 ---
+  type CllennRange = { label: string; bounds: { left: number; top: number; right: number; bottom: number }; docWidth: number; docHeight: number; blurRadius: number };
+  const [cllennDir, setCllennDir] = useState('');
+  const [jsonLabels, setJsonLabels] = useState<string[]>([]);
+  const [jsonLabel, setJsonLabel] = useState('');
+  const [jsonWorks, setJsonWorks] = useState<{ name: string; path: string }[]>([]);
+  const [jsonWorkPath, setJsonWorkPath] = useState('');
+  const [jsonRanges, setJsonRanges] = useState<CllennRange[]>([]);
+  const [jsonRangeIdx, setJsonRangeIdx] = useState(0);
+  const [jsonError, setJsonError] = useState('');
+
+  // json 方式選択時: 固定フォルダのパスとレーベル一覧を取得
+  useEffect(() => {
+    if (method !== 'json') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const dir = await invoke<string>('get_cllenn_json_dir');
+        if (!cancelled) setCllennDir(dir);
+        const labels = await invoke<string[]>('list_cllenn_labels');
+        if (!cancelled) { setJsonLabels(labels); setJsonError(''); }
+      } catch (e) {
+        if (!cancelled) { setJsonLabels([]); setJsonError(String(e)); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [method]);
+
+  // レーベル選択 → 作品一覧
+  useEffect(() => {
+    if (method !== 'json' || !jsonLabel) { setJsonWorks([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const works = await invoke<{ name: string; path: string }[]>('list_cllenn_works', { label: jsonLabel });
+        if (!cancelled) { setJsonWorks(works); setJsonError(''); }
+      } catch (e) {
+        if (!cancelled) { setJsonWorks([]); setJsonError(String(e)); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [method, jsonLabel]);
+
+  // 作品選択 → 範囲(selectionRanges)一覧
+  useEffect(() => {
+    if (method !== 'json' || !jsonWorkPath) { setJsonRanges([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const ranges = await invoke<CllennRange[]>('read_cllenn_ranges', { path: jsonWorkPath });
+        if (!cancelled) { setJsonRanges(ranges); setJsonRangeIdx(ranges.length > 0 ? ranges.length - 1 : 0); setJsonError(''); }
+      } catch (e) {
+        if (!cancelled) { setJsonRanges([]); setJsonError(String(e)); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [method, jsonWorkPath]);
+
+  const selectedJsonRange = useMemo(
+    () => (jsonRanges.length > 0 ? jsonRanges[Math.min(jsonRangeIdx, jsonRanges.length - 1)] ?? null : null),
+    [jsonRanges, jsonRangeIdx],
+  );
+
+  // 選択中の JSON 範囲を、この画像サイズに合わせた選択範囲(元画像px)へ変換
+  const computeJsonSelection = useCallback(() => {
+    if (!selectedJsonRange || !originalSize) return null;
+    const { bounds, docWidth, docHeight } = selectedJsonRange;
+    if (!(docWidth > 0) || !(docHeight > 0)) return null;
+    const sx = originalSize.width / docWidth;
+    const sy = originalSize.height / docHeight;
+    const left = Math.round(bounds.left * sx);
+    const top = Math.round(bounds.top * sy);
+    const right = Math.round(bounds.right * sx);
+    const bottom = Math.round(bounds.bottom * sy);
+    if (!(right > left) || !(bottom > top)) return null;
+    return { left: Math.max(0, left), top: Math.max(0, top), right, bottom };
+  }, [selectedJsonRange, originalSize]);
+
+  // JSON範囲を読み込む（範囲＋ぼかし半径をビューアに反映）
+  const loadJsonSelection = useCallback(() => {
+    const sel = computeJsonSelection();
+    if (sel) {
+      setSelection(sel);
+      setGuidesLocked(true);
+      setTachikiriType((t) => (t === 'none' ? 'crop_only' : t));
+      setBlurRadius(selectedJsonRange?.blurRadius ?? 0);
+    }
+  }, [computeJsonSelection, selectedJsonRange]);
+
+  // json 方式: 範囲が未設定なら自動でビューアに表示
+  useEffect(() => {
+    if (method !== 'json' || selection) return;
+    const sel = computeJsonSelection();
+    if (sel) {
+      setSelection(sel);
+      setGuidesLocked(true);
+      setTachikiriType((t) => (t === 'none' ? 'crop_only' : t));
+      setBlurRadius(selectedJsonRange?.blurRadius ?? 0);
+    }
+  }, [method, computeJsonSelection, selection, selectedJsonRange]);
+
+  const isActionMethod = method === 'action-ratio';
 
   // アクションの切り抜き比率を、この画像の中央に当てはめた選択範囲（元画像px）
   const computeActionSelection = useCallback(() => {
@@ -174,8 +278,9 @@ export function BleedEditorModal({
       setSelection(sel);
       setGuidesLocked(true);
       setTachikiriType((t) => (t === 'none' ? 'crop_only' : t));
+      setBlurRadius(selectedActionCrop?.blurRadius ?? 0);
     }
-  }, [method, computeActionSelection, selection]);
+  }, [method, computeActionSelection, selection, selectedActionCrop]);
 
   // アクションの比率から範囲を読み込む（手動再適用ボタン用）
   const loadActionSelection = useCallback(() => {
@@ -184,8 +289,9 @@ export function BleedEditorModal({
       setSelection(sel);
       setGuidesLocked(true);
       setTachikiriType((t) => (t === 'none' ? 'crop_only' : t));
+      setBlurRadius(selectedActionCrop?.blurRadius ?? 0);
     }
-  }, [computeActionSelection]);
+  }, [computeActionSelection, selectedActionCrop]);
 
   // リセット
   useEffect(() => {
@@ -201,6 +307,7 @@ export function BleedEditorModal({
         setStrokeColor(initialRegion.strokeColor);
         setFillColor(initialRegion.fillColor);
         setFillOpacity(initialRegion.fillOpacity);
+        setBlurRadius(initialRegion.blurRadius ?? 0);
         if (initialRegion.tachikiriType !== 'none' && initialRegion.right > initialRegion.left && initialRegion.bottom > initialRegion.top) {
           setSelection({
             left: initialRegion.left,
@@ -222,6 +329,7 @@ export function BleedEditorModal({
         setStrokeColor('black');
         setFillColor('white');
         setFillOpacity(50);
+        setBlurRadius(0);
       }
     }
     // originalFilePath は依存に入れない（ページ送りで選択・設定がリセットされないように）
@@ -525,6 +633,7 @@ export function BleedEditorModal({
       strokeColor,
       fillColor,
       fillOpacity,
+      blurRadius: blurRadius > 0 ? blurRadius : undefined,
     };
     if (tachikiriType === 'none') {
       return { left: 0, top: 0, right: 0, bottom: 0, ...base };
@@ -670,7 +779,7 @@ export function BleedEditorModal({
                 <option value="none">断ち切らない</option>
                 <option value="region">範囲を描いて断ち切る</option>
                 <option value="action-ratio">アクションの比率で断ち切る（中央揃え）</option>
-                <option value="action">アクションをそのまま実行（EPUB高品質のみ）</option>
+                <option value="json">JSONの縮尺を利用する</option>
               </select>
             </div>
 
@@ -696,10 +805,13 @@ export function BleedEditorModal({
                   )}
                 </div>
                 {atnError && <div className="bleed-editor-hint" style={{ color: 'var(--color-error, #dc2626)' }}>.atnの解析に失敗しました（手入力してください）: {atnError}</div>}
-                {method === 'action-ratio' && selectedActionCrop && selectedActionCrop.right > 0 && (
+                {selectedActionCrop && selectedActionCrop.right > 0 && (
                   <>
                     <div className="bleed-editor-hint">
                       抽出した切り抜き比率: 横 {((selectedActionCrop.right - selectedActionCrop.left) / selectedActionCrop.right * 100).toFixed(1)}% / 縦 {((selectedActionCrop.bottom - selectedActionCrop.top) / selectedActionCrop.bottom * 100).toFixed(1)}%（想定原稿 {Math.round(selectedActionCrop.right)}×{Math.round(selectedActionCrop.bottom)}px 基準）
+                    </div>
+                    <div className="bleed-editor-hint">
+                      アクションのぼかし半径: {(selectedActionCrop.blurRadius ?? 0) > 0 ? `${selectedActionCrop.blurRadius}px` : 'なし'}（カラー原稿は自動で0）
                     </div>
                     <button type="button" className="btn-secondary btn-small" onClick={loadActionSelection} disabled={!originalSize}>
                       アクションの比率で範囲を入れ直す
@@ -707,9 +819,54 @@ export function BleedEditorModal({
                   </>
                 )}
                 <div className="bleed-editor-hint">
-                  {method === 'action-ratio'
-                    ? '※ アクションの切り抜き比率を、各画像の中央に当てはめた範囲としてビューアに表示します。ガイドや処理タイプで調整して「' + applyLabel + '」で確定してください（サイズ違いに自動追従）。'
-                    : '※ 選んだアクションをそのまま実行して断ち切ります。固定座標のためサイズ違いでズレることがあります。EPUBは高品質(Photoshop)時のみ・TIFF出力では適用されません。下の「' + applyLabel + '」で閉じてください。'}
+                  ※ アクションからは数値（切り抜き比率とぼかし半径）だけを取り出し、アプリのネイティブ処理で断ち切り・ぼかしを行います（Photoshopアクションは実行しません）。各画像の中央に当てはめた範囲をビューアに表示するので、ガイドや処理タイプで調整して「{applyLabel}」で確定してください（サイズ違いに自動追従）。
+                </div>
+              </div>
+            )}
+
+            {method === 'json' && (
+              <div className="bleed-editor-action">
+                <div className="bleed-editor-hint">
+                  参照元（固定）: <span style={{ wordBreak: 'break-all' }}>{cllennDir || '取得中...'}</span>
+                </div>
+                <div className="form-group">
+                  <label>レーベル</label>
+                  <select value={jsonLabel} onChange={(e) => { setJsonLabel(e.target.value); setJsonWorkPath(''); setJsonRanges([]); }}>
+                    <option value="">（レーベルを選択）</option>
+                    {jsonLabels.map((l) => <option key={l} value={l}>{l}</option>)}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>作品</label>
+                  <select value={jsonWorkPath} onChange={(e) => setJsonWorkPath(e.target.value)} disabled={!jsonLabel || jsonWorks.length === 0}>
+                    <option value="">（作品を選択）</option>
+                    {jsonWorks.map((w) => <option key={w.path} value={w.path}>{w.name}</option>)}
+                  </select>
+                </div>
+                {jsonRanges.length > 0 && (
+                  <div className="form-group">
+                    <label>範囲（ラベル）</label>
+                    <select value={String(jsonRangeIdx)} onChange={(e) => { setJsonRangeIdx(Number(e.target.value)); setSelection(null); }}>
+                      {jsonRanges.map((r, i) => <option key={i} value={String(i)}>{r.label}</option>)}
+                    </select>
+                  </div>
+                )}
+                {selectedJsonRange && (
+                  <>
+                    <div className="bleed-editor-hint">
+                      断ち切り範囲: {Math.round(selectedJsonRange.bounds.left)},{Math.round(selectedJsonRange.bounds.top)} – {Math.round(selectedJsonRange.bounds.right)},{Math.round(selectedJsonRange.bounds.bottom)}（基準 {Math.round(selectedJsonRange.docWidth)}×{Math.round(selectedJsonRange.docHeight)}px）
+                    </div>
+                    <div className="bleed-editor-hint">
+                      JSONのぼかし半径: {(selectedJsonRange.blurRadius ?? 0) > 0 ? `${selectedJsonRange.blurRadius}px` : 'なし'}（カラー原稿は自動で0）
+                    </div>
+                    <button type="button" className="btn-secondary btn-small" onClick={loadJsonSelection} disabled={!originalSize}>
+                      JSONの範囲を入れ直す
+                    </button>
+                  </>
+                )}
+                {jsonError && <div className="bleed-editor-hint" style={{ color: 'var(--color-error, #dc2626)' }}>{jsonError}</div>}
+                <div className="bleed-editor-hint">
+                  ※ CLLENNの共有JSON（縮尺）から断ち切り範囲とぼかし半径を取り出し、アプリのネイティブ処理で断ち切り・ぼかしを行います。ガイドや処理タイプで調整して「{applyLabel}」で確定してください（サイズ違いに自動追従）。
                 </div>
               </div>
             )}
@@ -718,7 +875,7 @@ export function BleedEditorModal({
               <div className="bleed-editor-hint">断ち切りを行いません。下の「{applyLabel}」で閉じてください。</div>
             )}
 
-            {(method === 'region' || method === 'action-ratio') && (<>
+            {(method === 'region' || method === 'action-ratio' || method === 'json') && (<>
             {originalSize && (
               <div className="bleed-editor-image-size">元画像: {originalSize.width} x {originalSize.height}</div>
             )}
@@ -825,7 +982,7 @@ export function BleedEditorModal({
         <div className="bleed-editor-footer">
           <div style={{ flex: 1 }} />
           <button className="btn-secondary btn-small" onClick={() => setShowCancelConfirm(true)}>キャンセル</button>
-          {method === 'region' || method === 'action-ratio' ? (
+          {method === 'region' || method === 'action-ratio' || method === 'json' ? (
             <>
               <button className="btn-primary btn-small" onClick={onSkip} disabled={!!hasValidSelection}>
                 {skipLabel}
@@ -835,7 +992,7 @@ export function BleedEditorModal({
               </button>
             </>
           ) : (
-            // 「アクションそのまま実行」「なし」は全出力共通設定。ここでは閉じるだけ（即時 bleedStore 反映済み）
+            // 「断ち切らない」は全出力共通設定。ここでは閉じるだけ（即時 bleedStore 反映済み）
             <button className="btn-primary btn-small" onClick={onCancel}>
               {applyLabel}
             </button>

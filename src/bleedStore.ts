@@ -6,12 +6,13 @@ import type { BleedRegion, BleedSettings } from './components/modals/ExportModal
 
 export type BleedScopeMode = 'bulk' | 'per-chapter';
 
-// 断ち切り方式（断ち切りタブに一本化）。
+// 断ち切り方式（断ち切りタブに一本化）。アクション/JSONは「数値（断ち切り範囲＋ぼかし半径）を
+// 引いてくるだけ」で、適用はアプリのネイティブ処理（比率断ち切り＋ガウスぼかし）が行う。
 //  'none'        : 断ち切らない
 //  'region'      : このタブで描いた範囲で断ち切る（従来の既定）
-//  'action-ratio': Photoshopアクションの切り抜き座標から比率を割り出して中央で断ち切る
-//  'action'      : Photoshopアクションをそのまま実行して断ち切る（EPUB高品質のみ）
-export type BleedMethod = 'none' | 'region' | 'action-ratio' | 'action';
+//  'action-ratio': Photoshopアクション(.atn)から切り抜き比率＋ぼかし半径を取り出して中央で断ち切る
+//  'json'        : CLLENNの共有JSON（縮尺）から断ち切り範囲＋ぼかし半径を取り出して断ち切る
+export type BleedMethod = 'none' | 'region' | 'action-ratio' | 'json';
 
 const ZERO_REGION: BleedRegion = {
   left: 0, top: 0, right: 0, bottom: 0,
@@ -84,9 +85,9 @@ export const useBleedStore = create<BleedStoreState>((set, get) => ({
 
   getBleedSettings: () => {
     const { method, mode, coverRegion, bodyRegion, perChapterRegions } = get();
-    // 'region' と 'action-ratio' は描いた/読み込んだ範囲を断ち切りに使う。
-    // 'action-ratio' は .atn から範囲を初期化したうえで範囲方式と同じ編集・出力経路を通る。
-    if (method !== 'region' && method !== 'action-ratio') return undefined;
+    // 'region' / 'action-ratio' / 'json' はいずれも「範囲＋ぼかし半径」を持つ BleedRegion を
+    // 断ち切りに使う（action-ratio は .atn、json は CLLENN JSON から範囲を初期化）。
+    if (method !== 'region' && method !== 'action-ratio' && method !== 'json') return undefined;
     const hasAny =
       coverRegion || bodyRegion || Object.keys(perChapterRegions).length > 0;
     if (!hasAny) return undefined;

@@ -267,6 +267,8 @@ pub struct AtnActionCrop {
     pub top: f64,
     pub right: f64,
     pub bottom: f64,
+    /// アクション内のガウスぼかし半径(px)。複数ある場合は最初の値。無ければ 0。
+    pub blur_radius: f64,
 }
 
 /// .atn 解析結果（フロントのドロップダウン用）
@@ -413,7 +415,33 @@ fn extract_action_crop_rect(data: &[u8]) -> Option<(f64, f64, f64, f64)> {
     })
 }
 
-/// アクションごとの切り抜き矩形を解析する。
+/// バイト範囲内の gaussianBlur 記述子からぼかし半径(px)を取り出す。
+/// `Rds `(Radius) の UnitFloat `#Pxl` を探す。複数ある場合は最初の値。無ければ None。
+fn extract_action_blur_radius(data: &[u8]) -> Option<f64> {
+    let mut p = 0usize;
+    while p + 20 <= data.len() {
+        if &data[p..p + 4] == b"Rds " && &data[p + 4..p + 8] == b"UntF" && &data[p + 8..p + 12] == b"#Pxl"
+        {
+            let val = f64::from_be_bytes([
+                data[p + 12],
+                data[p + 13],
+                data[p + 14],
+                data[p + 15],
+                data[p + 16],
+                data[p + 17],
+                data[p + 18],
+                data[p + 19],
+            ]);
+            if val.is_finite() && val > 0.0 && val < 10_000.0 {
+                return Some(val);
+            }
+        }
+        p += 1;
+    }
+    None
+}
+
+/// アクションごとの切り抜き矩形とぼかし半径を解析する。
 fn parse_atn_action_crops(bytes: &[u8]) -> Vec<AtnActionCrop> {
     let names = find_action_names_with_pos(bytes);
     let mut result = Vec::new();
@@ -423,14 +451,17 @@ fn parse_atn_action_crops(bytes: &[u8]) -> Vec<AtnActionCrop> {
         } else {
             bytes.len()
         };
+        let segment = &bytes[*start..end];
         let (left, top, right, bottom) =
-            extract_action_crop_rect(&bytes[*start..end]).unwrap_or((0.0, 0.0, 0.0, 0.0));
+            extract_action_crop_rect(segment).unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let blur_radius = extract_action_blur_radius(segment).unwrap_or(0.0);
         result.push(AtnActionCrop {
             name: name.clone(),
             left,
             top,
             right,
             bottom,
+            blur_radius,
         });
     }
     result

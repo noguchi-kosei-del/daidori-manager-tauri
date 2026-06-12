@@ -75,7 +75,7 @@ fn text_layers_rgba(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
     };
 
     // レイヤー index ごとにテキスト判定を事前計算（flatten のフィルタで idx 参照）
-    let is_text: Vec<bool> = layers.iter().map(|l| is_text_layer(l)).collect();
+    let is_text: Vec<bool> = layers.iter().map(is_text_layer).collect();
     if !is_text.iter().any(|&b| b) {
         return None;
     }

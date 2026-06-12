@@ -14,7 +14,7 @@ const BLEED_METHOD_LABELS: Record<string, string> = {
   none: '断ち切らない',
   region: '範囲を描いて断ち切る',
   'action-ratio': 'アクションの比率（中央揃え）',
-  action: 'アクションそのまま実行',
+  json: 'JSONの縮尺を利用する',
 };
 
 // 断ち切りモードの処理タイプ → 日本語ラベル
@@ -293,7 +293,8 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
           <div className="bleed-summary-panel">
             <h3 className="bleed-summary-title">断ち切りサマリ</h3>
             <p className="bleed-summary-note">
-              各ページの「設定/編集」を開いて、方式（範囲 / アクションの比率 / アクションそのまま）と断ち切りを設定します。
+              各ページの「設定/編集」を開いて、方式（範囲 / アクションの比率 / JSONの縮尺）と断ち切りを設定します。
+              アクション・JSONからは数値（断ち切り範囲＋ぼかし半径）だけを取り込み、アプリのネイティブ処理で断ち切り・ぼかしを行います。
               ここで設定した断ち切りは「出力」タブのすべての出力（JPEG / TIFF / PDF）に適用されます。
               プロジェクトファイルには保存されません。
             </p>
@@ -309,6 +310,18 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
               <span>設定済み</span>
               <span>{configuredCount} / {targets.length}</span>
             </div>
+            {(() => {
+              const blurs = [coverRegion?.blurRadius, bodyRegion?.blurRadius, ...Object.values(perChapterRegions).map((r) => r.blurRadius)]
+                .filter((b): b is number => typeof b === 'number' && b > 0);
+              if (blurs.length === 0) return null;
+              const uniq = Array.from(new Set(blurs)).sort((a, b) => a - b);
+              return (
+                <div className="bleed-summary-stat">
+                  <span>ぼかし</span>
+                  <span>{uniq.map((b) => `${b}px`).join(' / ')}（カラーは0）</span>
+                </div>
+              );
+            })()}
             {configuredCount > 0 && (
               <button type="button" className="btn-secondary btn-small bleed-summary-clear" onClick={reset}>
                 すべて解除

@@ -48,14 +48,22 @@ export function buildProcessOptions(
     jpegBlurEnabled?: boolean;
     jpegBlurRadius?: number;
     jpegBlurBackgroundOnly?: boolean;
+    // このページがカラー(RGB/CMYK)か。カラーはぼかしを自動的に 0 にする。
+    pageIsColor?: boolean;
   }
 ) {
-  const blurRadius = options.jpegBlurRadius ?? 0;
-  const applyBlur = !!options.jpegBlurEnabled && blurRadius > 0;
+  // ぼかし半径: アクション/JSON由来(region.blurRadius)を優先、無ければ手動設定(jpegBlur*)。
+  const regionBlur = region?.blurRadius ?? 0;
+  const manualBlur = options.jpegBlurEnabled ? (options.jpegBlurRadius ?? 0) : 0;
+  let effBlur = regionBlur > 0 ? regionBlur : manualBlur;
+  // カラー原稿はぼかしを使わない（自動的に 0）
+  if (options.pageIsColor) effBlur = 0;
+  const applyBlur = effBlur > 0;
   const blurFields = {
     applyBlur,
-    blurRadius: applyBlur ? blurRadius : 0,
-    blurBackgroundOnly: !!options.jpegBlurBackgroundOnly,
+    blurRadius: applyBlur ? effBlur : 0,
+    // テキスト保護（背景のみ）。region由来は既定で背景のみ、手動時は設定値に従う。
+    blurBackgroundOnly: regionBlur > 0 ? true : !!options.jpegBlurBackgroundOnly,
   };
   if (!region || region.tachikiriType === 'none') {
     return {
@@ -358,7 +366,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
     if (convertToJpg) {
       // 画像ファイルを持つ全ページを抽出（PSD/JPEG/PNG/TIFF 区別なし）
       // EPUB_maker連携用にページ情報も保持
-      const convertiblePages: { path: string; outputName: string; pageType: string; chapterType: string; chapterId: string; chapterName?: string; label?: string }[] = [];
+      const convertiblePages: { path: string; outputName: string; pageType: string; chapterType: string; chapterId: string; chapterName?: string; label?: string; colorMode?: string }[] = [];
 
       if (renameMode === 'unified') {
         allPages.forEach((item, index) => {
@@ -371,6 +379,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
               chapterId: item.chapter.id,
               chapterName: item.chapter.name,
               label: item.page.label,
+              colorMode: item.page.imageColorMode,
             });
           }
         });
@@ -388,6 +397,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
                 chapterId: chapter.id,
                 chapterName: chapter.name,
                 label: page.label,
+                colorMode: page.imageColorMode,
               });
             }
           });
@@ -398,11 +408,12 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
         const config = {
           files: convertiblePages.map(p => {
             const region = resolveBleedRegion(bleedSettings, p.chapterType, p.chapterId);
+            const pageIsColor = p.colorMode === 'RGB' || p.colorMode === 'CMYK';
             return {
               path: p.path,
               outputPath: outputPath,
               outputName: p.outputName,
-              options: buildProcessOptions(region, options),
+              options: buildProcessOptions(region, { ...options, pageIsColor }),
             };
           }),
         };

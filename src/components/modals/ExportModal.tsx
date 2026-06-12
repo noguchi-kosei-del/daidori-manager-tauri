@@ -57,6 +57,9 @@ export interface BleedRegion {
   strokeColor: BleedColor;
   fillColor: BleedColor;
   fillOpacity: number; // 0-100
+  // アクション/JSONから取り込んだぼかし半径(px)。0/未指定でぼかしなし。
+  // カラー原稿は出力時に自動で0扱い（ネイティブ経路）。
+  blurRadius?: number;
 }
 
 // BleedRegion → BleedMargins 変換（TIFF=Photoshopはクロップのみ対応）

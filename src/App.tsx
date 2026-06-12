@@ -2140,36 +2140,33 @@ function App() {
       let psdEngineUsed: 'native' | 'photoshop' = 'native';
       let psdEngineFellBack = false;
       const psdSourcePaths: string[] = [];
-      // 断ち切り(内蔵比率クロップ)用に、各ユニークPSDが最初に現れたチャプター種別/IDを記録
-      const psdChapterInfo = new Map<string, { type: string; id: string }>();
+      // 断ち切り(内蔵比率クロップ)用に、各ユニークPSDが最初に現れたチャプター種別/ID/カラーモードを記録
+      const psdChapterInfo = new Map<string, { type: string; id: string; color?: string }>();
       for (const chapter of chapters) {
         for (const page of chapter.pages) {
           if (page.fileType === 'psd' && page.filePath) {
             // 同一PSDが複数ページから参照される可能性もあるので、ユニーク化
             if (!psdSourcePaths.includes(page.filePath)) {
               psdSourcePaths.push(page.filePath);
-              psdChapterInfo.set(page.filePath, { type: chapter.type, id: chapter.id });
+              psdChapterInfo.set(page.filePath, { type: chapter.type, id: chapter.id, color: page.imageColorMode });
             }
           }
         }
       }
 
-      // 断ち切りは「断ち切り」タブ(bleedStore)に一本化。method で出し分け:
-      //  - 'region' / 'action-ratio' : 範囲（描いた or .atnから読み込んだ）でクロップ。
-      //    どちらも getBleedSettings の範囲を使い、srgb_convert.jsx の比率方式で実サイズに追従。
-      //  - 'action' : 後段で runAction（cropBounds は使わない）
-      //  - 'none'   : 断ち切らない
+      // 断ち切りは「断ち切り」タブ(bleedStore)に一本化。range/action-ratio/json いずれも
+      // getBleedSettings() が「範囲＋ぼかし半径」を持つ BleedRegion を返し、比率方式で実サイズに追従。
+      // アクション/JSONは数値（断ち切り範囲＋ぼかし半径）を引くだけで、適用はアプリが行う。
       const bleedState = useBleedStore.getState();
-      const bleedMethod = bleedState.method;
-      const epubBleedSettings =
-        bleedMethod === 'region' || bleedMethod === 'action-ratio'
-          ? bleedState.getBleedSettings()
-          : undefined;
-      const cropBoundsForPsd = (srcPath: string) => {
-        if (!epubBleedSettings) return undefined;
+      const epubBleedSettings = bleedState.getBleedSettings();
+      const regionForPsd = (srcPath: string) => {
+        if (!epubBleedSettings) return null;
         const info = psdChapterInfo.get(srcPath);
-        if (!info) return undefined;
-        const region = resolveBleedRegion(epubBleedSettings, info.type, info.id);
+        if (!info) return null;
+        return resolveBleedRegion(epubBleedSettings, info.type, info.id);
+      };
+      const cropBoundsForPsd = (srcPath: string) => {
+        const region = regionForPsd(srcPath);
         if (!region || region.tachikiriType === 'none') return undefined;
         return {
           left: Math.max(0, Math.round(region.left)),
@@ -2180,6 +2177,15 @@ function App() {
           refHeight: Math.round(region.refHeight),
           isProportional: true,
         };
+      };
+      // ぼかし半径(px): アクション/JSON由来。カラー原稿(RGB/CMYK)は自動的に0。
+      const blurForPsd = (srcPath: string) => {
+        const region = regionForPsd(srcPath);
+        const r = region?.blurRadius ?? 0;
+        if (!(r > 0)) return 0;
+        const color = psdChapterInfo.get(srcPath)?.color;
+        const isColor = color === 'RGB' || color === 'CMYK';
+        return isColor ? 0 : r;
       };
 
       if (psdSourcePaths.length > 0) {
@@ -2222,18 +2228,10 @@ function App() {
               // preNormalized コピー経路ではこれが最終EPUB画質になるため、
               // q12 だと容量が倍近くなる一方で画質差はわずか → 11 をバランス点とする。
               // dither / maxPixels は Rust 側の既定（true / 5.6MP）を使用。
-              // 断ち切り方式='action' のとき断ち切りアクションを各PSDに実行（色変換より前）。
               globalSettings: {
                 jpegQuality: 11,
                 intent: 'relative',
                 blackPointCompensation: true,
-                ...(bleedMethod === 'action' && bleedState.actionName
-                  ? {
-                      runAction: true,
-                      actionSetPath: bleedState.actionSetPath,
-                      actionName: bleedState.actionName,
-                    }
-                  : {}),
               },
             };
             convertResponse = await invoke('run_photoshop_srgb_convert', {
@@ -2241,24 +2239,35 @@ function App() {
               outputDir: epubJpegDir,
             });
           } else {
-            // ネイティブ: 断ち切りなし・原寸・高品質（Photoshop不要）
+            // ネイティブ: 比率断ち切り＋ぼかし（アクション/JSON由来の数値）を適用・原寸・高品質（Photoshop不要）
             const config = {
-              files: psdSourcePaths.map((path, i) => ({
-                path,
-                outputPath: epubJpegDir,
-                outputName: `psd_${String(i).padStart(4, '0')}.jpg`,
-                options: {
-                  cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0,
-                  tachikiriType: 'none',
-                  strokeColor: 'black',
-                  fillColor: 'white',
-                  fillOpacity: 50,
-                  referenceWidth: 0, referenceHeight: 0,
-                  resizeMode: 'none',
-                  resizePercent: 50,
-                  jpegQuality: 95,
-                },
-              })),
+              files: psdSourcePaths.map((path, i) => {
+                const cb = cropBoundsForPsd(path);
+                const blur = blurForPsd(path);
+                return {
+                  path,
+                  outputPath: epubJpegDir,
+                  outputName: `psd_${String(i).padStart(4, '0')}.jpg`,
+                  options: {
+                    cropLeft: cb ? cb.left : 0,
+                    cropTop: cb ? cb.top : 0,
+                    cropRight: cb ? cb.right : 0,
+                    cropBottom: cb ? cb.bottom : 0,
+                    tachikiriType: cb ? 'crop_only' : 'none',
+                    strokeColor: 'black',
+                    fillColor: 'white',
+                    fillOpacity: 50,
+                    referenceWidth: cb ? cb.refWidth : 0,
+                    referenceHeight: cb ? cb.refHeight : 0,
+                    resizeMode: 'none',
+                    resizePercent: 50,
+                    jpegQuality: 95,
+                    applyBlur: blur > 0,
+                    blurRadius: blur,
+                    blurBackgroundOnly: true,
+                  },
+                };
+              }),
             };
             convertResponse = await invoke('run_native_jpeg_convert', {
               config,
