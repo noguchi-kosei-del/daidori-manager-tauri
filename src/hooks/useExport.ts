@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { Chapter, Page } from '../types';
 import type { ExportOptions, BleedRegion, BleedSettings } from '../components/modals/ExportModal';
+import { useBleedStore } from '../bleedStore';
 
 interface AllPageItem {
   page: Page;
@@ -220,7 +221,12 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
             actionName: actionName ?? '',
           },
           files: convertiblePages.map(p => {
-            const cropBounds = resolveTiffCropBounds(bleedSettings, p.chapterType, p.chapterId);
+            // 断ち切りタブの方式: action-ratio は全ファイル共通の比率(中央揃え)、それ以外は範囲
+            const bleed = useBleedStore.getState();
+            const cropBounds =
+              bleed.method === 'action-ratio'
+                ? bleed.getActionRatioCropBounds()
+                : resolveTiffCropBounds(bleedSettings, p.chapterType, p.chapterId);
             return {
               path: p.path,
               outputPath: outputPath,

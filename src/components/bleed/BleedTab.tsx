@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, type ReactNode } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { useStore } from '../../store';
 import { useBleedStore } from '../../bleedStore';
 import { useSlidingIndicator } from '../../hooks';
@@ -64,12 +65,79 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
     coverRegion,
     bodyRegion,
     perChapterRegions,
+    method,
+    actionSetPath,
+    actionName,
     setMode,
     setCoverRegion,
     setBodyRegion,
     setChapterRegion,
+    setMethod,
+    setActionSetPath,
+    setActionName,
+    setActionCropRect,
     reset,
   } = useBleedStore();
+
+  // 断ち切り方式=アクション系のとき .atn からアクション名・切り抜き矩形を読む
+  const [atnActions, setAtnActions] = useState<string[]>([]);
+  const [atnSetName, setAtnSetName] = useState('');
+  const [atnError, setAtnError] = useState('');
+  const [atnCrops, setAtnCrops] = useState<{ name: string; left: number; top: number; right: number; bottom: number }[]>([]);
+
+  useEffect(() => {
+    if (!actionSetPath) {
+      setAtnActions([]); setAtnSetName(''); setAtnError(''); setAtnCrops([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const info = await invoke<{ setName: string | null; actions: string[]; actionCrops?: { name: string; left: number; top: number; right: number; bottom: number }[] }>('read_atn_actions', { path: actionSetPath });
+        if (cancelled) return;
+        const actions = info.actions ?? [];
+        setAtnActions(actions);
+        setAtnSetName(info.setName ?? '');
+        setAtnCrops(info.actionCrops ?? []);
+        setAtnError('');
+        if (actionName && !actions.includes(actionName)) setActionName(actions.length === 1 ? actions[0] : '');
+      } catch (e) {
+        if (cancelled) return;
+        setAtnActions([]); setAtnSetName(''); setAtnCrops([]); setAtnError(String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  // actionName を依存に入れると入力のたび再取得するため除外（パス変更時のみ再取得）
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actionSetPath]);
+
+  // 選択アクションの矩形を bleedStore に反映（出力時の比率断ち切りに使う）
+  const selectedActionCrop = useMemo(
+    () => atnCrops.find((c) => c.name === actionName) ?? null,
+    [atnCrops, actionName],
+  );
+  useEffect(() => {
+    if (method === 'action-ratio' && selectedActionCrop) {
+      setActionCropRect({
+        left: selectedActionCrop.left,
+        top: selectedActionCrop.top,
+        right: selectedActionCrop.right,
+        bottom: selectedActionCrop.bottom,
+      });
+    } else {
+      setActionCropRect(null);
+    }
+  }, [method, selectedActionCrop, setActionCropRect]);
+
+  const handleSelectActionSet = useCallback(async () => {
+    const selected = await openDialog({
+      title: 'Photoshopアクションセット(.atn)を選択',
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'Photoshopアクション', extensions: ['atn'] }],
+    });
+    if (typeof selected === 'string') setActionSetPath(selected);
+  }, [setActionSetPath]);
 
   // 一括/本文ごとトグルのスライドインジケーター
   const { containerRef: modeToggleRef, rect: modeIndicator } = useSlidingIndicator<HTMLDivElement>(mode);
@@ -194,26 +262,75 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
             <ScissorsIcon size={18} />
             <span>断ち切り設定</span>
           </div>
-          <div className="bleed-tab-mode" ref={modeToggleRef}>
-            <SlidingIndicator rect={modeIndicator} className="bleed-tab-mode-indicator" />
-            <button
-              type="button"
-              className={`bleed-tab-mode-btn ${mode === 'bulk' ? 'active' : ''}`}
-              onClick={() => setMode('bulk')}
-            >
-              一括（表紙＋本文）
-            </button>
-            <button
-              type="button"
-              className={`bleed-tab-mode-btn ${mode === 'per-chapter' ? 'active' : ''}`}
-              onClick={() => setMode('per-chapter')}
-            >
-              本文ごと
-            </button>
+          <div className="bleed-tab-method">
+            <label>方式</label>
+            <select value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
+              <option value="none">断ち切らない</option>
+              <option value="region">このタブで範囲を描いて断ち切る</option>
+              <option value="action-ratio">Photoshopアクションの比率で断ち切る（中央揃え）</option>
+              <option value="action">Photoshopアクションをそのまま実行（EPUB高品質のみ）</option>
+            </select>
           </div>
+          {method === 'region' && (
+            <div className="bleed-tab-mode" ref={modeToggleRef}>
+              <SlidingIndicator rect={modeIndicator} className="bleed-tab-mode-indicator" />
+              <button
+                type="button"
+                className={`bleed-tab-mode-btn ${mode === 'bulk' ? 'active' : ''}`}
+                onClick={() => setMode('bulk')}
+              >
+                一括（表紙＋本文）
+              </button>
+              <button
+                type="button"
+                className={`bleed-tab-mode-btn ${mode === 'per-chapter' ? 'active' : ''}`}
+                onClick={() => setMode('per-chapter')}
+              >
+                本文ごと
+              </button>
+            </div>
+          )}
         </div>
 
-        {targets.length === 0 ? (
+        {method === 'none' ? (
+          <div className="spread-viewer-empty">
+            <NoPageIcon size={48} />
+            <p>断ち切りを行いません</p>
+          </div>
+        ) : method === 'action' || method === 'action-ratio' ? (
+          <div className="bleed-action-panel">
+            <div className="form-group">
+              <label>アクションセット（.atnファイル）</label>
+              <div className="input-with-button">
+                <input type="text" value={actionSetPath} placeholder="エクスプローラーで .atn を選択..." readOnly />
+                <button type="button" className="btn-secondary btn-small" onClick={() => void handleSelectActionSet()}>参照</button>
+              </div>
+            </div>
+            {atnSetName && <div className="form-hint">セット名: {atnSetName}</div>}
+            <div className="form-group">
+              <label>アクション名</label>
+              {atnActions.length > 0 ? (
+                <select value={atnActions.includes(actionName) ? actionName : ''} onChange={(e) => setActionName(e.target.value)}>
+                  <option value="">（アクションを選択してください）</option>
+                  {atnActions.map((a) => <option key={a} value={a}>{a}</option>)}
+                </select>
+              ) : (
+                <input type="text" value={actionName} onChange={(e) => setActionName(e.target.value)} placeholder="例: 断ち切り" />
+              )}
+            </div>
+            {atnError && <div className="form-hint" style={{ color: 'var(--color-error, #dc2626)' }}>.atnの解析に失敗しました（手入力してください）: {atnError}</div>}
+            {method === 'action-ratio' && selectedActionCrop && selectedActionCrop.right > 0 && (
+              <div className="form-hint">
+                抽出した切り抜き比率: 横 {((selectedActionCrop.right - selectedActionCrop.left) / selectedActionCrop.right * 100).toFixed(1)}% / 縦 {((selectedActionCrop.bottom - selectedActionCrop.top) / selectedActionCrop.bottom * 100).toFixed(1)}%（想定原稿 {Math.round(selectedActionCrop.right)}×{Math.round(selectedActionCrop.bottom)}px 基準）。各画像の中央で比率切り抜きします。
+              </div>
+            )}
+            <div className="form-hint">
+              {method === 'action-ratio'
+                ? '※ アクションは実行せず、切り抜き座標から比率だけを使って各画像の中央で断ち切ります（サイズ違いに自動追従・保存ダイアログ無し）。おすすめ。EPUBは高品質(Photoshop)時のみ適用。'
+                : '※ 選んだアクションをそのまま実行して断ち切ります。固定座標のためサイズ違いでズレることがあります。EPUBは高品質(Photoshop)時のみ。TIFF出力では適用されません。'}
+            </div>
+          </div>
+        ) : targets.length === 0 ? (
           <div className="spread-viewer-empty">
             <NoPageIcon size={48} />
             <p>断ち切りを設定できる画像ページがありません</p>

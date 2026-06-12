@@ -305,37 +305,11 @@ export interface EpubMetadata {
    * フロント専用フィールド。Rust の generate_epub は無視する。
    */
   colorEngine?: EpubColorEngine;
-  /**
-   * EPUB生成時にPSDへ実行するPhotoshopアクション（断ち切り等）。
-   * colorEngine==='photoshop' かつ tachikiriMode==='action' のときのみ有効。フロント専用。
-   */
-  photoshopAction?: EpubPhotoshopAction;
-  /**
-   * EPUBの断ち切り方式（colorEngine==='photoshop' のときのみ）。
-   * 'none': 断ち切らない / 'bleed': 断ち切りタブの範囲で比率クロップ（TIFF/PDFと同じ内蔵方式）
-   * / 'action': Photoshopアクションをそのまま実行して断ち切る
-   * / 'action-ratio': Photoshopアクションの切り抜き座標から比率を割り出し、内蔵クロップで断ち切る。
-   * フロント専用。
-   */
-  tachikiriMode?: EpubTachikiriMode;
-  /**
-   * 'action-ratio' のとき使う、アクションの切り抜き矩形（想定原稿上の絶対座標px）。
-   * 各PSDの実サイズに合わせて比率スケーリングする（refWidth=right, refHeight=bottom）。
-   */
-  actionCropRect?: { left: number; top: number; right: number; bottom: number };
+  // 断ち切りは「断ち切り」タブ(bleedStore)に一本化したため、EpubMetadata では保持しない。
 }
-
-/** EPUB断ち切り方式（なし / 内蔵比率 / アクションそのまま / アクションの比率） */
-export type EpubTachikiriMode = 'none' | 'bleed' | 'action' | 'action-ratio';
 
 /** EPUB画像変換エンジン（19.3 実験: 高速ネイティブ / 高品質Photoshop） */
 export type EpubColorEngine = 'native' | 'photoshop';
-
-/** EPUB生成時にPSDへ実行するPhotoshopアクション（断ち切り等） */
-export interface EpubPhotoshopAction {
-  actionSetPath: string; // 選択した .atn ファイルのフルパス
-  actionName: string;    // 実行するアクション名
-}
 
 export interface EpubSplitRange {
   startIndex: number;
@@ -402,11 +376,6 @@ export interface SavedEpubState {
   imageColorPolicy?: EpubImageColorPolicy;
   /** 19.3: PSD変換エンジン（高速ネイティブ/高品質Photoshop）も保存・復元の対象にする */
   colorEngine?: EpubColorEngine;
-  /** EPUB断ち切り方式（none/bleed/action） */
-  tachikiriMode?: EpubTachikiriMode;
-  /** EPUB生成時のPSD断ち切りアクション（action時のみ保持） */
-  photoshopActionSetPath?: string;
-  photoshopActionName?: string;
   pageOverrides?: SavedEpubPageOverride[];
   split?: SavedEpubSplitState;
 }

@@ -150,7 +150,8 @@ export function ExportModal({
   const [digitsText, setDigitsText] = useState('4');
   const [prefix, setPrefix] = useState('');
   const [perChapterSettings, setPerChapterSettings] = useState<Record<string, ChapterRenameSettings>>({});
-  const [bleedMode, setBleedMode] = useState<BleedMode>('bulk');
+  // 断ち切りモード（一括/本文ごと）は「断ち切り」タブで管理。互換のため bulk 固定で渡す。
+  const bleedMode: BleedMode = 'bulk';
   // 処理の最後に実行するPhotoshopアクション（サイズ統一など）。設定はlocalStorageに永続化
   const [runAction, setRunAction] = useState(false);
   const [actionSetPath, setActionSetPath] = useState('');
@@ -644,37 +645,10 @@ export function ExportModal({
             </div>
           )}
 
-          {!embedded && (convertToTiff || convertToJpg) && (
-            <div className="form-group">
-              <label>断ち切り設定</label>
-              <div className="radio-group">
-                <label className="radio-label">
-                  <input
-                    type="radio"
-                    name="bleedMode"
-                    checked={bleedMode === 'bulk'}
-                    onChange={() => setBleedMode('bulk')}
-                  />
-                  一括断ち切り
-                  <span className="radio-description">表紙と本文で1回ずつ設定</span>
-                </label>
-                <label className="radio-label">
-                  <input
-                    type="radio"
-                    name="bleedMode"
-                    checked={bleedMode === 'per-chapter'}
-                    onChange={() => setBleedMode('per-chapter')}
-                  />
-                  本文ごと
-                  <span className="radio-description">各本文チャプターごとに個別設定</span>
-                </label>
-              </div>
-            </div>
-          )}
-          {embedded && (convertToTiff || convertToJpg) && (
+          {(convertToTiff || convertToJpg) && (
             <div className="form-group">
               <div className="tiff-note">
-                ※ 断ち切りは「断ち切り」タブで設定した内容が適用されます
+                ※ 断ち切りは「断ち切り」タブで設定した内容（方式・範囲）が適用されます
               </div>
             </div>
           )}

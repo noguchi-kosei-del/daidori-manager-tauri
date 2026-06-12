@@ -316,12 +316,25 @@ function processFile(fileConfig, globalSettings) {
                 // サイズ違いのPSDでも断ち切り範囲が同じ相対位置に揃う（黒余白/見切れを防止）。
                 var pdocW = doc.width.as("px");
                 var pdocH = doc.height.as("px");
-                var sx = pdocW / cb.refWidth;
-                var sy = pdocH / cb.refHeight;
-                var cL = Math.round(cb.left * sx);
-                var cT = Math.round(cb.top * sy);
-                var cR = Math.round(cb.right * sx);
-                var cB = Math.round(cb.bottom * sy);
+                var cL, cT, cR, cB;
+                if (cb.centered) {
+                    // 中央揃え: 切り抜きサイズの比率だけを使い各画像の中心に配置（余白均等）
+                    var cw = (cb.right - cb.left) * pdocW / cb.refWidth;
+                    var ch = (cb.bottom - cb.top) * pdocH / cb.refHeight;
+                    if (cw > pdocW) cw = pdocW;
+                    if (ch > pdocH) ch = pdocH;
+                    cL = Math.round((pdocW - cw) / 2);
+                    cT = Math.round((pdocH - ch) / 2);
+                    cR = Math.round(cL + cw);
+                    cB = Math.round(cT + ch);
+                } else {
+                    var sx = pdocW / cb.refWidth;
+                    var sy = pdocH / cb.refHeight;
+                    cL = Math.round(cb.left * sx);
+                    cT = Math.round(cb.top * sy);
+                    cR = Math.round(cb.right * sx);
+                    cB = Math.round(cb.bottom * sy);
+                }
                 // 画像範囲内にクランプ（座標が画像をはみ出すと黒余白になるため）
                 if (cL < 0) cL = 0; if (cT < 0) cT = 0;
                 if (cR > pdocW) cR = pdocW; if (cB > pdocH) cB = pdocH;

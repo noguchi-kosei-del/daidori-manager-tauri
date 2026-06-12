@@ -2154,29 +2154,18 @@ function App() {
         }
       }
 
-      // 断ち切り cropBounds の算出。
-      //  - 'bleed': 断ち切りタブ(bleedStore)の範囲（PSDのチャプター種別で表紙/本文を出し分け）
-      //  - 'action-ratio': アクションの切り抜き矩形を比率化（全PSD共通。refは矩形の右下＝想定原稿）
-      // どちらも srgb_convert.jsx の比率方式クロップで各PSDの実サイズに追従する。
+      // 断ち切りは「断ち切り」タブ(bleedStore)に一本化。method で出し分け:
+      //  - 'region'      : 描いた範囲（PSDのチャプター種別で表紙/本文）
+      //  - 'action-ratio': アクション矩形の比率（全PSD共通・中央揃え）
+      //  - 'action'      : 後段で runAction（cropBounds は使わない）
+      //  - 'none'        : 断ち切らない
+      // region/action-ratio は srgb_convert.jsx の比率方式クロップで各PSDの実サイズに追従。
+      const bleedState = useBleedStore.getState();
+      const bleedMethod = bleedState.method;
       const epubBleedSettings =
-        metadata.tachikiriMode === 'bleed'
-          ? useBleedStore.getState().getBleedSettings()
-          : undefined;
+        bleedMethod === 'region' ? bleedState.getBleedSettings() : undefined;
       const actionRatioBounds =
-        metadata.tachikiriMode === 'action-ratio' && metadata.actionCropRect &&
-        metadata.actionCropRect.right > 0 && metadata.actionCropRect.bottom > 0
-          ? {
-              left: Math.max(0, Math.round(metadata.actionCropRect.left)),
-              top: Math.max(0, Math.round(metadata.actionCropRect.top)),
-              right: Math.round(metadata.actionCropRect.right),
-              bottom: Math.round(metadata.actionCropRect.bottom),
-              refWidth: Math.round(metadata.actionCropRect.right),
-              refHeight: Math.round(metadata.actionCropRect.bottom),
-              isProportional: true,
-              // 中央揃え: 切り抜きサイズ比率のみを使い各PSDの中心に配置（余白を均等化）
-              centered: true,
-            }
-          : undefined;
+        bleedMethod === 'action-ratio' ? bleedState.getActionRatioCropBounds() : undefined;
       const cropBoundsForPsd = (srcPath: string) => {
         if (actionRatioBounds) return actionRatioBounds;
         if (!epubBleedSettings) return undefined;
@@ -2235,16 +2224,16 @@ function App() {
               // preNormalized コピー経路ではこれが最終EPUB画質になるため、
               // q12 だと容量が倍近くなる一方で画質差はわずか → 11 をバランス点とする。
               // dither / maxPixels は Rust 側の既定（true / 5.6MP）を使用。
-              // photoshopAction があれば断ち切り等のアクションを各PSDに実行（色変換より前）。
+              // 断ち切り方式='action' のとき断ち切りアクションを各PSDに実行（色変換より前）。
               globalSettings: {
                 jpegQuality: 11,
                 intent: 'relative',
                 blackPointCompensation: true,
-                ...(metadata.photoshopAction
+                ...(bleedMethod === 'action' && bleedState.actionName
                   ? {
                       runAction: true,
-                      actionSetPath: metadata.photoshopAction.actionSetPath,
-                      actionName: metadata.photoshopAction.actionName,
+                      actionSetPath: bleedState.actionSetPath,
+                      actionName: bleedState.actionName,
                     }
                   : {}),
               },
