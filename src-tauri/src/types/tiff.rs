@@ -102,6 +102,10 @@ pub struct TiffGlobalSettings {
     /// 実行するアクション名
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action_name: Option<String>,
+    /// アクション内の「保存」「閉じる」を無効化した一時 .atn を読み込ませるか。
+    /// true（既定）のとき、アクションは加工のみ行い、保存はアプリの出力先に一本化される。
+    #[serde(default = "default_true")]
+    pub strip_action_save_close: bool,
 }
 
 fn default_true() -> bool {
@@ -126,6 +130,7 @@ impl Default for TiffGlobalSettings {
             action_set_path: None,
             action_set: None,
             action_name: None,
+            strip_action_save_close: true,
         }
     }
 }

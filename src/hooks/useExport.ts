@@ -153,7 +153,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
   const [exportResultDialog, setExportResultDialog] = useState<ExportResultDialog>({ show: false, title: '', message: '' });
 
   const handleExport = useCallback(async (options: ExportOptions) => {
-    const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, renameMode, startNumber, digits, prefix, perChapterSettings, bleedSettings, runAction, actionSetPath, actionName, tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight, tiffBlurEnabled, tiffBlurRadius, tiffBlurBackgroundOnly } = options;
+    const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, renameMode, startNumber, digits, prefix, perChapterSettings, bleedSettings, runAction, actionSetPath, actionName, stripActionSaveClose, tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight, tiffBlurEnabled, tiffBlurRadius, tiffBlurBackgroundOnly } = options;
 
     // TIFF変換モードの場合
     if (convertToTiff) {
@@ -235,6 +235,8 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
             runAction: !!(runAction && actionName) && !useTiffResize,
             actionSetPath: actionSetPath ?? '',
             actionName: actionName ?? '',
+            // 「保存」「閉じる」を無効化した一時 .atn を読み込ませ、保存先をアプリの出力先に一本化
+            stripActionSaveClose: stripActionSaveClose !== false,
           },
           files: convertiblePages.map(p => {
             // 断ち切りは範囲方式に統一（action-ratio も .atn から範囲を読み込んで範囲として扱う）

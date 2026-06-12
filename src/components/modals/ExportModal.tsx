@@ -109,6 +109,8 @@ export interface ExportOptions {
   runAction: boolean;
   actionSetPath: string;  // 選択した .atn ファイルのフルパス（空なら読込済みセットを使用）
   actionName: string;
+  // アクション内の「保存」「閉じる」を無効化してアプリの出力先に一本化するか
+  stripActionSaveClose: boolean;
   // TIFF変換時のサイズ統一（指定ピクセルへ自動リサイズ）
   tiffResizeEnabled: boolean;
   tiffTargetWidth: number;
@@ -174,6 +176,8 @@ export function ExportModal({
   const [jpegBlurEnabled, setJpegBlurEnabled] = useState(false);
   const [jpegBlurRadiusText, setJpegBlurRadiusText] = useState('2.5');
   const [jpegBlurBackgroundOnly, setJpegBlurBackgroundOnly] = useState(true);
+  // アクションの「保存」「閉じる」を無効化してアプリの出力先に一本化（既定ON）
+  const [stripActionSaveClose, setStripActionSaveClose] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
 
   // アクション設定をlocalStorageから復元
@@ -193,6 +197,7 @@ export function ExportModal({
         if (typeof obj.jpegBlurEnabled === 'boolean') setJpegBlurEnabled(obj.jpegBlurEnabled);
         if (typeof obj.jpegBlurRadiusText === 'string') setJpegBlurRadiusText(obj.jpegBlurRadiusText);
         if (typeof obj.jpegBlurBackgroundOnly === 'boolean') setJpegBlurBackgroundOnly(obj.jpegBlurBackgroundOnly);
+        if (typeof obj.stripActionSaveClose === 'boolean') setStripActionSaveClose(obj.stripActionSaveClose);
       }
     } catch {
       // 破損データは無視
@@ -290,7 +295,7 @@ export function ExportModal({
     if (!outputPath) return;
     // アクション設定を永続化（次回のために記憶）
     try {
-      localStorage.setItem('daidori_tiff_action', JSON.stringify({ runAction, tiffResizeEnabled, tiffWidthText, tiffHeightText, tiffBlurEnabled, tiffBlurRadiusText, tiffBlurBackgroundOnly, jpegBlurEnabled, jpegBlurRadiusText, jpegBlurBackgroundOnly }));
+      localStorage.setItem('daidori_tiff_action', JSON.stringify({ runAction, tiffResizeEnabled, tiffWidthText, tiffHeightText, tiffBlurEnabled, tiffBlurRadiusText, tiffBlurBackgroundOnly, jpegBlurEnabled, jpegBlurRadiusText, jpegBlurBackgroundOnly, stripActionSaveClose }));
     } catch {
       // 保存失敗は無視
     }
@@ -300,7 +305,7 @@ export function ExportModal({
     const jpegBlurRadius = Math.max(0, parseFloat(jpegBlurRadiusText) || 0);
     setIsExporting(true);
     // アクションの .atn / アクション名は「断ち切り」タブの設定を参照する
-    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, resizeMode, resizePercent, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode, runAction, actionSetPath: tabActionSetPath, actionName: tabActionName.trim(), tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight, tiffBlurEnabled, tiffBlurRadius, tiffBlurBackgroundOnly, jpegBlurEnabled, jpegBlurRadius, jpegBlurBackgroundOnly });
+    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, resizeMode, resizePercent, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode, runAction, actionSetPath: tabActionSetPath, actionName: tabActionName.trim(), stripActionSaveClose, tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight, tiffBlurEnabled, tiffBlurRadius, tiffBlurBackgroundOnly, jpegBlurEnabled, jpegBlurRadius, jpegBlurBackgroundOnly });
     setIsExporting(false);
     if (!embedded) onClose();
   };
@@ -604,8 +609,19 @@ export function ExportModal({
                         </div>
                       )}
                     </div>
+                    <label className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={stripActionSaveClose}
+                        onChange={(e) => setStripActionSaveClose(e.target.checked)}
+                      />
+                      アクションの「保存」「閉じる」を無視してアプリの出力先に保存（推奨）
+                      <span className="option-note"> - .atnに焼き込まれた保存先（別PCのパス等）を使わず、上で指定した出力フォルダに一律で保存します</span>
+                    </label>
                     <div className="tiff-note">
-                      ※ 「断ち切り」タブで選んだ .atn / アクションを処理開始時にPhotoshopへ読み込み、リサイズ前に各ページへ実行します。サイズ統一とTIFF保存はアプリが自動で行うため、<b>アクションには「保存」「閉じる」を含めないでください</b>（ぼかし・切り抜き等の加工のみ）。
+                      {stripActionSaveClose
+                        ? '※ アクション内の「保存」「閉じる」を自動で無効化し、加工（ぼかし・切り抜き等）だけを実行します。保存・サイズ統一・TIFF化はアプリが行い、すべて上の出力フォルダに集約されます（.atnの元データは変更しません）。'
+                        : '※ オフの場合、アクションに「保存」「閉じる」が含まれていると、.atnに焼き込まれた保存先へ保存され、保存ダイアログが出ることがあります。'}
                     </div>
                   </div>
                 )}

@@ -74,8 +74,27 @@ pub async fn run_photoshop_tiff_convert(
     if config_with_output.global_settings.run_action {
         if let Some(atn_path) = config_with_output.global_settings.action_set_path.clone() {
             if !atn_path.is_empty() {
-                let set_name = parse_atn_set_name(&atn_path).or_else(|| filename_stem(&atn_path));
-                eprintln!("TIFF Convert - Action set '.atn': {} -> set name: {:?}", atn_path, set_name);
+                // 保存/閉じるの自動除去: 「保存」「閉じる」項目を無効化した一時 .atn を生成し、
+                // それを読み込ませる。これによりアクションは加工のみ行い、保存先がアプリの
+                // 出力フォルダ（固定アドレス）に一本化される（.atn の保存先パス問題を回避）。
+                let effective_path = if config_with_output.global_settings.strip_action_save_close {
+                    match make_atn_without_save_close(&atn_path) {
+                        Some(tmp) => {
+                            eprintln!("TIFF Convert - 保存/閉じるを無効化した .atn: {}", tmp);
+                            config_with_output.global_settings.action_set_path = Some(tmp.clone());
+                            tmp
+                        }
+                        None => atn_path.clone(),
+                    }
+                } else {
+                    atn_path.clone()
+                };
+                let set_name =
+                    parse_atn_set_name(&effective_path).or_else(|| filename_stem(&effective_path));
+                eprintln!(
+                    "TIFF Convert - Action set '.atn': {} -> set name: {:?}",
+                    effective_path, set_name
+                );
                 config_with_output.global_settings.action_set = set_name;
             }
         }
@@ -415,6 +434,53 @@ fn parse_atn_action_crops(bytes: &[u8]) -> Vec<AtnActionCrop> {
         });
     }
     result
+}
+
+/// .atn バイト列中の「保存(save)」「閉じる(close)」アクション項目を無効化したコピーを返す。
+///
+/// アクション項目は `[expanded:0/1][enabled:0/1][withDialog:0/1][dialogOptions]['TEXT'][len:4][eventName]`
+/// で始まる。eventName が "save" / "close" の項目の enabled バイト（オフセット+1）を 0 にする。
+/// バイト長は一切変えない（構造を壊さない＝Photoshop が確実に読める）。Photoshop は実行時に
+/// 無効化された項目をスキップするため、アクションは加工のみ行い保存・クローズをしなくなる。
+/// 戻り値: (変更後バイト列, 無効化した項目数)。
+fn disable_atn_save_close(bytes: &[u8]) -> (Vec<u8>, usize) {
+    let mut out = bytes.to_vec();
+    let n = out.len();
+    let mut disabled = 0usize;
+    let mut i = 0usize;
+    while i + 12 <= n {
+        if &out[i + 4..i + 8] == b"TEXT" && out[i] <= 1 && out[i + 1] <= 1 && out[i + 2] <= 1 {
+            let len =
+                u32::from_be_bytes([out[i + 8], out[i + 9], out[i + 10], out[i + 11]]) as usize;
+            if (2..=40).contains(&len) && i + 12 + len <= n {
+                let name = &out[i + 12..i + 12 + len];
+                if name.iter().all(|&c| (32..127).contains(&c)) {
+                    let ev = std::str::from_utf8(name).unwrap_or("");
+                    if (ev == "save" || ev == "close") && out[i + 1] != 0 {
+                        out[i + 1] = 0;
+                        disabled += 1;
+                    }
+                    i = i + 12 + len;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    (out, disabled)
+}
+
+/// .atn から「保存」「閉じる」を無効化した一時ファイルを作成し、そのフルパスを返す。
+/// 無効化対象が無い・読み書き失敗時は None（呼び出し側は元の .atn をそのまま使う）。
+fn make_atn_without_save_close(atn_path: &str) -> Option<String> {
+    let bytes = fs::read(atn_path).ok()?;
+    let (modified, disabled) = disable_atn_save_close(&bytes);
+    if disabled == 0 {
+        return None; // 除去対象が無いなら一時ファイルを作らない
+    }
+    let temp = std::env::temp_dir().join("daidori_action_nosaveclose.atn");
+    fs::write(&temp, &modified).ok()?;
+    Some(temp.to_string_lossy().to_string())
 }
 
 /// .atn 内のアクション名一覧を解析する。
