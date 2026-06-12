@@ -2,6 +2,7 @@
 //! Tachimi (Tachimi-_Standalone) の processor モジュールから
 //! JPEG化・断ち切り・リサイズ処理を移植（ノンブル / PDF は除外）
 
+pub mod blur;
 pub mod image_loader;
 pub mod image_processing;
 pub mod jpeg;

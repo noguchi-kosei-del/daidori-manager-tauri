@@ -40,8 +40,23 @@ export function resolveBleedRegion(
 // BleedRegion + グローバル設定 → Rust ProcessOptions (camelCase JSON)
 export function buildProcessOptions(
   region: BleedRegion | null,
-  options: { resizeMode: string; resizePercent: number; jpgQuality: number }
+  options: {
+    resizeMode: string;
+    resizePercent: number;
+    jpgQuality: number;
+    // ぼかし（任意・PDF経路など未指定でも可）
+    jpegBlurEnabled?: boolean;
+    jpegBlurRadius?: number;
+    jpegBlurBackgroundOnly?: boolean;
+  }
 ) {
+  const blurRadius = options.jpegBlurRadius ?? 0;
+  const applyBlur = !!options.jpegBlurEnabled && blurRadius > 0;
+  const blurFields = {
+    applyBlur,
+    blurRadius: applyBlur ? blurRadius : 0,
+    blurBackgroundOnly: !!options.jpegBlurBackgroundOnly,
+  };
   if (!region || region.tachikiriType === 'none') {
     return {
       cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0,
@@ -54,6 +69,7 @@ export function buildProcessOptions(
       resizeMode: options.resizeMode,
       resizePercent: options.resizePercent,
       jpegQuality: options.jpgQuality,
+      ...blurFields,
     };
   }
   return {
@@ -70,6 +86,7 @@ export function buildProcessOptions(
     resizeMode: options.resizeMode,
     resizePercent: options.resizePercent,
     jpegQuality: options.jpgQuality,
+    ...blurFields,
   };
 }
 

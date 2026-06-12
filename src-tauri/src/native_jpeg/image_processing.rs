@@ -145,6 +145,20 @@ pub fn process_single_image(
     options: &ProcessOptions,
 ) -> Result<(), String> {
     let img = load_image(input_path)?;
+
+    // ぼかし（ガウス）は断ち切り/リサイズより前（原寸）で適用する。
+    // 増渕さん.atn の「ぼかし → 切り抜き → 画像サイズ」と同じ順序。
+    let img = if options.apply_blur && options.blur_radius > 0.0 {
+        super::blur::apply_blur(
+            input_path,
+            &img,
+            options.blur_radius,
+            options.blur_background_only,
+        )
+    } else {
+        img
+    };
+
     let (orig_width, orig_height) = img.dimensions();
 
     // タチキリタイプが "none" なら断ち切り処理なしでリサイズ→保存

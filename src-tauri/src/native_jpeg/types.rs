@@ -48,6 +48,15 @@ pub struct ProcessOptions {
     /// チャプターPDFの中間ファイル用にサーバ側で true を強制する。
     #[serde(default)]
     pub fast_jpeg: bool,
+    /// ぼかし（ガウス）を適用するか。断ち切り/リサイズより前（原寸）で適用する。
+    #[serde(default)]
+    pub apply_blur: bool,
+    /// ぼかし半径（px, sigma相当）。0 以下なら無効。
+    #[serde(default)]
+    pub blur_radius: f32,
+    /// true: 背景のみ（PSDテキストレイヤーをマスクに文字をシャープ保持）、false: 全体ぼかし。
+    #[serde(default)]
+    pub blur_background_only: bool,
 }
 
 impl Default for ProcessOptions {
@@ -69,6 +78,9 @@ impl Default for ProcessOptions {
             resize_target_h: 0,
             jpeg_quality: default_jpeg_quality(),
             fast_jpeg: false,
+            apply_blur: false,
+            blur_radius: 0.0,
+            blur_background_only: false,
         }
     }
 }

@@ -117,6 +117,10 @@ export interface ExportOptions {
   tiffBlurEnabled: boolean;
   tiffBlurRadius: number;
   tiffBlurBackgroundOnly: boolean; // true: テキスト/背景を分離し背景のみぼかす
+  // JPEG変換時のぼかし（ガウス・Photoshop不要のネイティブ処理）
+  jpegBlurEnabled: boolean;
+  jpegBlurRadius: number;
+  jpegBlurBackgroundOnly: boolean; // true: PSDテキストレイヤーをマスクに文字をシャープ保持
 }
 
 // エクスポートモーダル
@@ -166,6 +170,10 @@ export function ExportModal({
   const [tiffBlurEnabled, setTiffBlurEnabled] = useState(false);
   const [tiffBlurRadiusText, setTiffBlurRadiusText] = useState('10');
   const [tiffBlurBackgroundOnly, setTiffBlurBackgroundOnly] = useState(true);
+  // JPEG変換時のぼかし（Photoshop不要のネイティブ・ガウス）
+  const [jpegBlurEnabled, setJpegBlurEnabled] = useState(false);
+  const [jpegBlurRadiusText, setJpegBlurRadiusText] = useState('2.5');
+  const [jpegBlurBackgroundOnly, setJpegBlurBackgroundOnly] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
 
   // アクション設定をlocalStorageから復元
@@ -182,6 +190,9 @@ export function ExportModal({
         if (typeof obj.tiffBlurEnabled === 'boolean') setTiffBlurEnabled(obj.tiffBlurEnabled);
         if (typeof obj.tiffBlurRadiusText === 'string') setTiffBlurRadiusText(obj.tiffBlurRadiusText);
         if (typeof obj.tiffBlurBackgroundOnly === 'boolean') setTiffBlurBackgroundOnly(obj.tiffBlurBackgroundOnly);
+        if (typeof obj.jpegBlurEnabled === 'boolean') setJpegBlurEnabled(obj.jpegBlurEnabled);
+        if (typeof obj.jpegBlurRadiusText === 'string') setJpegBlurRadiusText(obj.jpegBlurRadiusText);
+        if (typeof obj.jpegBlurBackgroundOnly === 'boolean') setJpegBlurBackgroundOnly(obj.jpegBlurBackgroundOnly);
       }
     } catch {
       // 破損データは無視
@@ -279,16 +290,17 @@ export function ExportModal({
     if (!outputPath) return;
     // アクション設定を永続化（次回のために記憶）
     try {
-      localStorage.setItem('daidori_tiff_action', JSON.stringify({ runAction, tiffResizeEnabled, tiffWidthText, tiffHeightText, tiffBlurEnabled, tiffBlurRadiusText, tiffBlurBackgroundOnly }));
+      localStorage.setItem('daidori_tiff_action', JSON.stringify({ runAction, tiffResizeEnabled, tiffWidthText, tiffHeightText, tiffBlurEnabled, tiffBlurRadiusText, tiffBlurBackgroundOnly, jpegBlurEnabled, jpegBlurRadiusText, jpegBlurBackgroundOnly }));
     } catch {
       // 保存失敗は無視
     }
     const tiffTargetWidth = Math.max(0, parseInt(tiffWidthText, 10) || 0);
     const tiffTargetHeight = Math.max(0, parseInt(tiffHeightText, 10) || 0);
     const tiffBlurRadius = Math.max(0, parseFloat(tiffBlurRadiusText) || 0);
+    const jpegBlurRadius = Math.max(0, parseFloat(jpegBlurRadiusText) || 0);
     setIsExporting(true);
     // アクションの .atn / アクション名は「断ち切り」タブの設定を参照する
-    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, resizeMode, resizePercent, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode, runAction, actionSetPath: tabActionSetPath, actionName: tabActionName.trim(), tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight, tiffBlurEnabled, tiffBlurRadius, tiffBlurBackgroundOnly });
+    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, resizeMode, resizePercent, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode, runAction, actionSetPath: tabActionSetPath, actionName: tabActionName.trim(), tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight, tiffBlurEnabled, tiffBlurRadius, tiffBlurBackgroundOnly, jpegBlurEnabled, jpegBlurRadius, jpegBlurBackgroundOnly });
     setIsExporting(false);
     if (!embedded) onClose();
   };
@@ -405,6 +417,41 @@ export function ExportModal({
                     </div>
                   )}
                 </div>
+                <label className="checkbox-label" style={{ marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={jpegBlurEnabled}
+                    onChange={(e) => setJpegBlurEnabled(e.target.checked)}
+                  />
+                  ぼかし（ガウス）を適用
+                  <span className="option-note"> - Photoshop不要・アプリ内で実行</span>
+                </label>
+                {jpegBlurEnabled && (
+                  <div className="action-settings">
+                    <div className="form-group">
+                      <label>ぼかし半径 (px)</label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={jpegBlurRadiusText}
+                        onChange={(e) => setJpegBlurRadiusText(e.target.value.replace(/[^0-9.]/g, ''))}
+                        placeholder="例: 2.5"
+                      />
+                    </div>
+                    <label className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={jpegBlurBackgroundOnly}
+                        onChange={(e) => setJpegBlurBackgroundOnly(e.target.checked)}
+                      />
+                      テキストを保護（背景のみぼかす）
+                      <span className="option-note"> - PSDのテキストレイヤー（#text#/写植 等）を検出し文字をシャープに保つ。フチや背景はぼけます</span>
+                    </label>
+                    <div className="tiff-note">
+                      ※ ぼかしは原寸（断ち切り・リサイズ前）で適用されます。「テキストを保護」はPSDのみ有効で、検出できない場合は全体ぼかしになります。
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
