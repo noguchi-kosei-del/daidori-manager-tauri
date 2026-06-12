@@ -39,7 +39,7 @@ use commands::epub::{
 use commands::epub_verify::verify_epub_internal;
 use commands::epubcheck::validate_epub_with_epubcheck;
 use commands::export::export_pages;
-use commands::folder::get_folder_contents;
+use commands::folder::{ensure_dir, get_folder_contents};
 use commands::jpeg_native::run_native_jpeg_convert;
 use commands::open_file::open_file_with_default_app;
 use commands::pdf::rasterize_pdf;
@@ -137,6 +137,7 @@ pub fn run() {
             close_splash,
             take_pending_open_path,
             get_folder_contents,
+            ensure_dir,
             generate_thumbnail,
             export_pages,
             save_project,

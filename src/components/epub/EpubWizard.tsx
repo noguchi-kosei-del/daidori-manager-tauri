@@ -175,8 +175,11 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     if (!outputPath) {
       (async () => {
         try {
+          // 既定の保存先: <Desktop>\Script_Output\台割\EPUB\<作品名>.epub
           const desktop = await desktopDir();
-          setOutputPath(await join(desktop, `${projectName || 'output'}.epub`));
+          const epubDir = await join(desktop, 'Script_Output', '台割', 'EPUB');
+          await invoke('ensure_dir', { path: epubDir }).catch(() => {});
+          setOutputPath(await join(epubDir, `${projectName || 'output'}.epub`));
         } catch { /* ignore */ }
       })();
     }

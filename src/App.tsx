@@ -1139,8 +1139,11 @@ function App() {
 
   const handleSaveProjectAs = useCallback(async (): Promise<boolean> => {
     const fallbackDir = await desktopDir();
+    // 既定の保存先: <Desktop>\Script_Output\台割\Project\<作品名>.daiw
+    const projectBaseDir = await join(fallbackDir, 'Script_Output', '台割', 'Project');
+    await invoke('ensure_dir', { path: projectBaseDir }).catch(() => {});
     const defaultPath = currentProjectPath ?? await join(
-      fallbackDir,
+      projectBaseDir,
       `${sanitizeFileName(projectName || DEFAULT_PROJECT_NAME)}.${PROJECT_FILE_EXTENSION}`
     );
     const selected = await save({
@@ -2121,6 +2124,20 @@ function App() {
 
   // EPUB生成ハンドラ
   const handleEpubGenerate = async (metadata: EpubMetadata, outputPath: string, splitSettings?: EpubSplitSettings) => {
+    // 保存時はプロジェクトと一緒に保存: EPUB生成に合わせてプロジェクトも保存（既定は 台割\Project）。
+    try {
+      if (currentProjectPath) {
+        await saveProjectToPath(currentProjectPath);
+      } else {
+        const desktopForProj = await desktopDir();
+        const projDir = await join(desktopForProj, 'Script_Output', '台割', 'Project');
+        await invoke('ensure_dir', { path: projDir }).catch(() => {});
+        const projPath = await join(projDir, `${sanitizeFileName(projectName || DEFAULT_PROJECT_NAME)}.${PROJECT_FILE_EXTENSION}`);
+        await saveProjectToPath(projPath);
+      }
+    } catch (e) {
+      console.error('EPUB生成時のプロジェクト保存に失敗:', e);
+    }
     try {
       const isLegacyHybrid =
         metadata.outputFormat === 'hybrid' && metadata.hybridCssProfile === 'legacy';
@@ -2191,9 +2208,9 @@ function App() {
         await new Promise<void>((resolve) => setTimeout(resolve, 50));
         await emit('epub-progress', { phase: 'psd-to-jpeg', current: 0, total: psdSourcePaths.length });
 
-        // Script_Output 配下にJPEG変換出力（同名フォルダが既にあれば Rust 側で連番付与）
+        // 中間JPEGは台割ベース配下に出力（同名フォルダが既にあれば Rust 側で連番付与）
         const desktop = await desktopDir();
-        const epubJpegDir = await join(desktop, 'Script_Output', `EPUB用JPEG_${projectName || '台割'}`);
+        const epubJpegDir = await join(desktop, 'Script_Output', '台割', `EPUB用JPEG_${projectName || '台割'}`);
 
         // 19.3 実験: 変換エンジンを選択。
         //  - 'photoshop': Photoshopの「プロファイル変換」で厳密にsRGB化（高品質）

@@ -4,6 +4,14 @@ use crate::types::FileInfo;
 use std::fs;
 use std::path::Path;
 
+/// 指定フォルダを（親も含めて）作成する。既に存在する場合は何もしない。
+/// EPUB/プロジェクトの既定保存先（Script_Output/台割/EPUB・Project 等）を
+/// 保存ダイアログ表示前に用意するために使う。
+#[tauri::command]
+pub fn ensure_dir(path: String) -> Result<(), String> {
+    fs::create_dir_all(&path).map_err(|e| format!("フォルダ作成エラー: {}", e))
+}
+
 #[tauri::command]
 pub fn get_folder_contents(folder_path: String) -> Result<Vec<FileInfo>, String> {
     let path = Path::new(&folder_path);
