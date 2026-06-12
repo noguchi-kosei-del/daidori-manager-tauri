@@ -307,10 +307,19 @@ export interface EpubMetadata {
   colorEngine?: EpubColorEngine;
   /**
    * EPUB生成時にPSDへ実行するPhotoshopアクション（断ち切り等）。
-   * colorEngine==='photoshop' のときのみ有効。フロント専用フィールド。
+   * colorEngine==='photoshop' かつ tachikiriMode==='action' のときのみ有効。フロント専用。
    */
   photoshopAction?: EpubPhotoshopAction;
+  /**
+   * EPUBの断ち切り方式（colorEngine==='photoshop' のときのみ）。
+   * 'none': 断ち切らない / 'bleed': 断ち切りタブの範囲で比率クロップ（TIFF/PDFと同じ内蔵方式）
+   * / 'action': Photoshopアクションで断ち切る。フロント専用。
+   */
+  tachikiriMode?: EpubTachikiriMode;
 }
+
+/** EPUB断ち切り方式（なし / 内蔵比率クロップ / Photoshopアクション） */
+export type EpubTachikiriMode = 'none' | 'bleed' | 'action';
 
 /** EPUB画像変換エンジン（19.3 実験: 高速ネイティブ / 高品質Photoshop） */
 export type EpubColorEngine = 'native' | 'photoshop';
@@ -386,8 +395,9 @@ export interface SavedEpubState {
   imageColorPolicy?: EpubImageColorPolicy;
   /** 19.3: PSD変換エンジン（高速ネイティブ/高品質Photoshop）も保存・復元の対象にする */
   colorEngine?: EpubColorEngine;
-  /** EPUB生成時のPSD断ち切りアクション（有効時のみ保持） */
-  photoshopActionEnabled?: boolean;
+  /** EPUB断ち切り方式（none/bleed/action） */
+  tachikiriMode?: EpubTachikiriMode;
+  /** EPUB生成時のPSD断ち切りアクション（action時のみ保持） */
   photoshopActionSetPath?: string;
   photoshopActionName?: string;
   pageOverrides?: SavedEpubPageOverride[];

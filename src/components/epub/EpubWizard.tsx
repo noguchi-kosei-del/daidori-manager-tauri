@@ -15,6 +15,7 @@ import {
   HybridCssProfile,
   EpubImageColorPolicy,
   EpubColorEngine,
+  EpubTachikiriMode,
   EpubSplitSettings,
   EPUB_FORMAT_VIEWPORTS,
   EPUB_IMAGE_COLOR_POLICY_OPTIONS,
@@ -63,8 +64,8 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
   const [imageColorPolicy, setImageColorPolicy] = useState<EpubImageColorPolicy>('auto');
   // 19.3 実験: PSD→JPEG中間変換のエンジン。既定は高速ネイティブ。
   const [colorEngine, setColorEngine] = useState<EpubColorEngine>('native');
-  // PSD断ち切りアクション（colorEngine==='photoshop' のときのみ有効）
-  const [psdActionEnabled, setPsdActionEnabled] = useState(false);
+  // PSD断ち切り方式（colorEngine==='photoshop' のときのみ）。none/bleed/action
+  const [tachikiriMode, setTachikiriMode] = useState<EpubTachikiriMode>('none');
   const [psdActionSetPath, setPsdActionSetPath] = useState('');
   const [psdActionName, setPsdActionName] = useState('');
   const [psdAtnActions, setPsdAtnActions] = useState<string[]>([]);
@@ -139,7 +140,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
       setColorMode(saved.imageColorPolicy === 'auto' ? 'auto' : 'custom');
     }
     if (saved?.colorEngine) setColorEngine(saved.colorEngine);
-    if (saved?.photoshopActionEnabled !== undefined) setPsdActionEnabled(saved.photoshopActionEnabled);
+    if (saved?.tachikiriMode) setTachikiriMode(saved.tachikiriMode);
     if (saved?.photoshopActionSetPath !== undefined) setPsdActionSetPath(saved.photoshopActionSetPath);
     if (saved?.photoshopActionName !== undefined) setPsdActionName(saved.photoshopActionName);
     if (saved?.hybridCssProfile) setHybridCssProfile(saved.hybridCssProfile);
@@ -228,7 +229,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
       allowMissingColophon,
       imageColorPolicy: colorMode === 'auto' ? 'auto' : imageColorPolicy,
       colorEngine,
-      photoshopActionEnabled: psdActionEnabled,
+      tachikiriMode,
       photoshopActionSetPath: psdActionSetPath || undefined,
       photoshopActionName: psdActionName || undefined,
       split: {
@@ -260,7 +261,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     colorMode,
     imageColorPolicy,
     colorEngine,
-    psdActionEnabled,
+    tachikiriMode,
     psdActionSetPath,
     psdActionName,
     splitEnabled,
@@ -446,8 +447,9 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
       hybridCssProfile: outputFormat === 'hybrid' ? hybridCssProfile : undefined,
       imageColorPolicy: colorMode === 'auto' ? 'auto' : imageColorPolicy,
       colorEngine,
+      tachikiriMode: colorEngine === 'photoshop' ? tachikiriMode : 'none',
       photoshopAction:
-        colorEngine === 'photoshop' && psdActionEnabled && psdActionName.trim()
+        colorEngine === 'photoshop' && tachikiriMode === 'action' && psdActionName.trim()
           ? { actionSetPath: psdActionSetPath, actionName: psdActionName.trim() }
           : undefined,
     };
@@ -632,16 +634,20 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                 </div>
                 {colorEngine === 'photoshop' && (
                   <div className="form-group">
-                    <label className="checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={psdActionEnabled}
-                        onChange={(e) => setPsdActionEnabled(e.target.checked)}
-                      />
-                      断ち切りをPhotoshopアクションで適用
-                      <span className="option-note"> - 各PSDに .atn のアクションを実行してから変換</span>
-                    </label>
-                    {psdActionEnabled && (
+                    <label>断ち切り（高品質時）</label>
+                    <select value={tachikiriMode} onChange={(e) => setTachikiriMode(e.target.value as EpubTachikiriMode)}>
+                      <option value="none">断ち切らない</option>
+                      <option value="bleed">断ち切りタブの範囲で断ち切る（内蔵・比率方式）</option>
+                      <option value="action">Photoshopアクションで断ち切る</option>
+                    </select>
+                    <div className="form-hint">
+                      {tachikiriMode === 'bleed'
+                        ? '※「断ち切り」タブで設定した範囲を、各PSDの実サイズに合わせて比率で切り抜きます（TIFF/PDFと同じ方式。サイズ違いでもズレません）。'
+                        : tachikiriMode === 'action'
+                        ? '※ 選んだ .atn のアクションで断ち切ります。アクションは固定座標のため、選択画像のサイズがアクションの想定と違うとズレ・黒余白が出ることがあります。'
+                        : '※ 断ち切りが必要な場合は方式を選んでください。'}
+                    </div>
+                    {tachikiriMode === 'action' && (
                       <div className="action-settings">
                         <div className="form-group">
                           <label>アクションセット（.atnファイル）</label>

@@ -28,6 +28,10 @@ pub struct SrgbConvertFile {
     pub output_path: String,
     /// 出力ファイル名（例 "psd_0000.jpg"）
     pub output_name: String,
+    /// 内蔵クロップ（断ち切り）の範囲。JSXへ素通しする（比率方式: left/top/right/bottom +
+    /// refWidth/refHeight + isProportional）。なし/不要なら省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop_bounds: Option<serde_json::Value>,
 }
 
 /// グローバル設定

@@ -191,6 +191,34 @@ function processFile(fileConfig, globalSettings) {
         var dither = (globalSettings.dither === false) ? false : true;
         var maxPixels = globalSettings.maxPixels || 0;
 
+        // -1. 内蔵クロップ（断ち切り）。TIFF変換 tiff_convert.jsx の比率方式と同一ロジック。
+        //     参照ページの絶対座標を各画像の実サイズに対する比率でスケーリングするので、
+        //     サイズ違いのPSDでも断ち切り範囲が同じ相対位置に揃う（黒余白/見切れを防止）。
+        if (fileConfig.cropBounds) {
+            var cb = fileConfig.cropBounds;
+            if (cb.isProportional && cb.refWidth > 0 && cb.refHeight > 0) {
+                var pdocW = doc.width.as("px");
+                var pdocH = doc.height.as("px");
+                var sx = pdocW / cb.refWidth;
+                var sy = pdocH / cb.refHeight;
+                var cL = Math.round(cb.left * sx);
+                var cT = Math.round(cb.top * sy);
+                var cR = Math.round(cb.right * sx);
+                var cB = Math.round(cb.bottom * sy);
+                if (cL < 0) cL = 0; if (cT < 0) cT = 0;
+                if (cR > pdocW) cR = pdocW; if (cB > pdocH) cB = pdocH;
+                if (cR < cL) cR = cL; if (cB < cT) cB = cT;
+                if (cR - cL > 0 && cB - cT > 0) {
+                    doc.crop([
+                        new UnitValue(cL, "px"),
+                        new UnitValue(cT, "px"),
+                        new UnitValue(cR, "px"),
+                        new UnitValue(cB, "px")
+                    ]);
+                }
+            }
+        }
+
         // 0. 断ち切り等のPhotoshopアクションを実行（TIFF変換 tiff_convert.jsx と同じ方式）。
         //    中間ファイルは作らず、開いたドキュメント（元ファイルパスを保持）へ直接 doAction する。
         //    こうすることでアクションは元の設計どおり動き、保存ダイアログ等が出ない。

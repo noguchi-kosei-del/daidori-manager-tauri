@@ -2140,16 +2140,42 @@ function App() {
       let psdEngineUsed: 'native' | 'photoshop' = 'native';
       let psdEngineFellBack = false;
       const psdSourcePaths: string[] = [];
+      // 断ち切り(内蔵比率クロップ)用に、各ユニークPSDが最初に現れたチャプター種別/IDを記録
+      const psdChapterInfo = new Map<string, { type: string; id: string }>();
       for (const chapter of chapters) {
         for (const page of chapter.pages) {
           if (page.fileType === 'psd' && page.filePath) {
             // 同一PSDが複数ページから参照される可能性もあるので、ユニーク化
             if (!psdSourcePaths.includes(page.filePath)) {
               psdSourcePaths.push(page.filePath);
+              psdChapterInfo.set(page.filePath, { type: chapter.type, id: chapter.id });
             }
           }
         }
       }
+
+      // 断ち切り「内蔵・比率方式」を選んだ場合、断ち切りタブ(bleedStore)の範囲から
+      // 各PSDの cropBounds を算出する（PSDのチャプター種別で表紙/本文を出し分け）。
+      const epubBleedSettings =
+        metadata.tachikiriMode === 'bleed'
+          ? useBleedStore.getState().getBleedSettings()
+          : undefined;
+      const cropBoundsForPsd = (srcPath: string) => {
+        if (!epubBleedSettings) return undefined;
+        const info = psdChapterInfo.get(srcPath);
+        if (!info) return undefined;
+        const region = resolveBleedRegion(epubBleedSettings, info.type, info.id);
+        if (!region || region.tachikiriType === 'none') return undefined;
+        return {
+          left: Math.max(0, Math.round(region.left)),
+          top: Math.max(0, Math.round(region.top)),
+          right: Math.max(0, Math.round(region.right)),
+          bottom: Math.max(0, Math.round(region.bottom)),
+          refWidth: Math.round(region.refWidth),
+          refHeight: Math.round(region.refHeight),
+          isProportional: true,
+        };
+      };
 
       if (psdSourcePaths.length > 0) {
         // モーダルへPSD変換フェーズを通知（タイマー込みで listener 起動を待つ）
@@ -2184,6 +2210,8 @@ function App() {
                 path,
                 outputPath: epubJpegDir,
                 outputName: `psd_${String(i).padStart(4, '0')}.jpg`,
+                // 内蔵・比率方式の断ち切り範囲（tachikiriMode==='bleed' 時のみ）
+                ...(cropBoundsForPsd(path) ? { cropBounds: cropBoundsForPsd(path) } : {}),
               })),
               // jpegQuality 11: Photoshop の最高画質帯（10-12 は 4:4:4 サブサンプリング）。
               // preNormalized コピー経路ではこれが最終EPUB画質になるため、
