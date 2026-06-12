@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -24,6 +24,7 @@ import {
   Chapter,
 } from '../../types';
 import { useStore } from '../../store';
+import { splitVolumeKey } from '../../utils/epubState';
 import { BookIcon, CheckIcon2, NoPageIcon } from '../../icons';
 
 const PUBLISHER_OPTIONS = [
@@ -86,6 +87,9 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
   const [splitSuffixStart, setSplitSuffixStart] = useState(1);
   const [splitSuffixDigits, setSplitSuffixDigits] = useState(3);
   const [splitSuffixSeparator, setSplitSuffixSeparator] = useState('_');
+  // 巻ごとのタイトル・読み仮名（rangesと同じindexで対応）
+  const [splitTitles, setSplitTitles] = useState<string[]>([]);
+  const [splitTitleFileAsList, setSplitTitleFileAsList] = useState<string[]>([]);
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState<{ phase: string; current: number; total: number } | null>(null);
@@ -99,19 +103,74 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
   const clearEpubPageCover = useStore((s) => s.clearEpubPageCover);
   const clearEpubPageColophon = useStore((s) => s.clearEpubPageColophon);
   const loadEpubFromDaidori = useStore((s) => s.loadEpubFromDaidori);
+  const updateEpubState = useStore((s) => s.updateEpubState);
+
+  // 保存済みEPUB設定をフォームへ反映済みかどうか（反映前に空フォームで上書き保存するのを防ぐ）
+  const seededRef = useRef(false);
 
   const totalPages = chapters.reduce((sum, ch) => sum + ch.pages.length, 0);
 
   // 開いたら台割→EPUBページへ同期＋初期値
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      seededRef.current = false;
+      return;
+    }
     loadEpubFromDaidori();
     setStep(0);
+
+    // 保存済みのEPUB設定があれば優先的にフォームへ反映（プロジェクト読込後の再生成で消えないように）
+    const saved = useStore.getState().epubState;
+    if (saved?.title !== undefined) setTitle(saved.title);
+    if (saved?.titleFileAs !== undefined) setTitleFileAs(saved.titleFileAs);
+    if (saved?.publisher) setPublisher(saved.publisher);
+    if (saved?.publisherFileAs) setPublisherFileAs(saved.publisherFileAs);
+    if (saved?.authors?.length) setAuthors(saved.authors);
+    if (saved?.outputFormat) setOutputFormat(saved.outputFormat);
+    if (saved?.imageColorPolicy) {
+      setImageColorPolicy(saved.imageColorPolicy);
+      setColorMode(saved.imageColorPolicy === 'auto' ? 'auto' : 'custom');
+    }
+    if (saved?.hybridCssProfile) setHybridCssProfile(saved.hybridCssProfile);
+    if (saved?.allowMissingColophon !== undefined) setAllowMissingColophon(saved.allowMissingColophon);
+    if (saved?.pageDirection) setPageDirection(saved.pageDirection);
+    if (saved?.viewportWidth) setViewportWidth(saved.viewportWidth);
+    if (saved?.viewportHeight) setViewportHeight(saved.viewportHeight);
+    if (saved?.split) {
+      const sp = saved.split;
+      setSplitEnabled(sp.enabled);
+      setSplitRanges(sp.ranges ?? []);
+      if (sp.baseName) setSplitBaseName(sp.baseName);
+      if (sp.suffixStart !== undefined) setSplitSuffixStart(sp.suffixStart);
+      if (sp.suffixDigits !== undefined) setSplitSuffixDigits(sp.suffixDigits);
+      if (sp.suffixSeparator !== undefined) setSplitSuffixSeparator(sp.suffixSeparator);
+      // 巻ごとのタイトル・読みを安定キーで復元
+      if (sp.ranges?.length) {
+        const volumeAt = (i: number) => {
+          const key = splitVolumeKey(
+            sp.baseName ?? '',
+            sp.suffixSeparator ?? '_',
+            sp.suffixStart ?? 1,
+            sp.suffixDigits ?? 3,
+            i,
+          );
+          return sp.volumes?.find((v) => v.key === key);
+        };
+        setSplitTitles(sp.ranges.map((_, i) => volumeAt(i)?.title ?? ''));
+        setSplitTitleFileAsList(sp.ranges.map((_, i) => volumeAt(i)?.titleFileAs ?? ''));
+      }
+    }
+
     // 既定名「新規プロジェクト」はタイトルに流し込まず、プレースホルダ（作品タイトル）を表示する
     const meaningfulName = projectName && projectName !== '新規プロジェクト' ? projectName : '';
-    if (!title && meaningfulName) setTitle(meaningfulName);
-    if (!splitBaseName && meaningfulName) setSplitBaseName(meaningfulName);
-    if (!bookUuid) invoke<string>('generate_book_uuid').then(setBookUuid).catch(() => {});
+    if (saved?.title === undefined && !title && meaningfulName) setTitle(meaningfulName);
+    if (!saved?.split?.baseName && !splitBaseName && meaningfulName) setSplitBaseName(meaningfulName);
+    // UUID: 保存値があれば固定で再利用（同じ本の更新版で識別子を維持）。なければ新規発行。
+    if (saved?.bookUuid) {
+      setBookUuid(saved.bookUuid);
+    } else if (!bookUuid) {
+      invoke<string>('generate_book_uuid').then(setBookUuid).catch(() => {});
+    }
     if (!outputPath) {
       (async () => {
         try {
@@ -120,8 +179,81 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
         } catch { /* ignore */ }
       })();
     }
+    seededRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
+
+  // フォームの変更をプロジェクト保存用の epubState に同期（入力した内容が保存・再生成で残るように）。
+  // seededRef が立つまで（保存値の反映前）は書き込まない。volumes は handleEpubGenerate 管理なので維持する。
+  useEffect(() => {
+    if (!isOpen || !seededRef.current) return;
+    const prevVolumes = useStore.getState().epubState?.split?.volumes ?? [];
+    // 現在の範囲ぶんの巻情報（タイトル/読みは入力値、UUIDは保存値を温存）
+    const currentVolumes = splitRanges.map((_, i) => {
+      const key = splitVolumeKey(splitBaseName, splitSuffixSeparator, splitSuffixStart, splitSuffixDigits, i);
+      return {
+        key,
+        title: splitTitles[i]?.trim() || undefined,
+        titleFileAs: splitTitleFileAsList[i]?.trim() || undefined,
+        bookUuid: prevVolumes.find((v) => v.key === key)?.bookUuid,
+      };
+    });
+    // 範囲編集に備えて、今回使っていないキーの巻情報（過去のUUID）も温存する
+    const retainedVolumes = prevVolumes.filter((v) => !currentVolumes.some((c) => c.key === v.key));
+    updateEpubState({
+      bookUuid: bookUuid || undefined,
+      title,
+      titleFileAs: titleFileAs || undefined,
+      authors,
+      publisher,
+      publisherFileAs: publisherFileAs || undefined,
+      language,
+      outputFormat,
+      pageDirection,
+      spreadMode,
+      viewportWidth,
+      viewportHeight,
+      hybridCssProfile,
+      allowMissingColophon,
+      imageColorPolicy: colorMode === 'auto' ? 'auto' : imageColorPolicy,
+      split: {
+        enabled: splitEnabled,
+        baseName: splitBaseName,
+        suffixStart: splitSuffixStart,
+        suffixDigits: splitSuffixDigits,
+        suffixSeparator: splitSuffixSeparator,
+        ranges: splitRanges,
+        volumes: [...currentVolumes, ...retainedVolumes],
+      },
+    });
+  }, [
+    isOpen,
+    bookUuid,
+    title,
+    titleFileAs,
+    authors,
+    publisher,
+    publisherFileAs,
+    language,
+    outputFormat,
+    pageDirection,
+    spreadMode,
+    viewportWidth,
+    viewportHeight,
+    hybridCssProfile,
+    allowMissingColophon,
+    colorMode,
+    imageColorPolicy,
+    splitEnabled,
+    splitBaseName,
+    splitSuffixStart,
+    splitSuffixDigits,
+    splitSuffixSeparator,
+    splitRanges,
+    splitTitles,
+    splitTitleFileAsList,
+    updateEpubState,
+  ]);
 
   // 生成進捗
   useEffect(() => {
@@ -129,6 +261,21 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     const unlisten = listen<{ phase: string; current: number; total: number }>('epub-progress', (e) => setProgress(e.payload));
     return () => { unlisten.then((fn) => fn()); };
   }, [isGenerating]);
+
+  // 分割範囲の増減に合わせて巻タイトル配列を整える（未入力の巻のみ既定名を補完）
+  useEffect(() => {
+    if (!splitEnabled) return;
+    const baseTitle = title.trim() || splitBaseName.trim() || 'output';
+    setSplitTitles((current) =>
+      splitRanges.map((_, index) => {
+        if (current[index]?.trim()) return current[index];
+        const suffixNumber = splitSuffixStart + index;
+        const suffix = String(suffixNumber).padStart(splitSuffixDigits, '0');
+        return `${baseTitle}${splitSuffixSeparator}${suffix}`;
+      })
+    );
+    setSplitTitleFileAsList((current) => splitRanges.map((_, index) => current[index] ?? ''));
+  }, [splitEnabled, splitRanges, splitSuffixStart, splitSuffixDigits, splitSuffixSeparator, splitBaseName, title]);
 
   const handleFormatChange = (format: EpubFormat) => {
     setOutputFormat(format);
@@ -163,6 +310,13 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     if (selected) setOutputPath(selected);
   };
 
+  // UUID再生成（明示操作のみ。同期effectで epubState にも保存される）
+  const regenerateUuid = async () => {
+    try {
+      setBookUuid(await invoke<string>('generate_book_uuid'));
+    } catch { /* ignore */ }
+  };
+
   const thumbSrc = (page: (typeof epubPages)[number]): string | null => {
     if (page.isBlank) return null;
     const p = page.thumbnailPath || page.sourcePath;
@@ -181,7 +335,13 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
   const getSplitRangeIndex = (i: number) => splitRanges.findIndex((r) => i >= r.startIndex && i <= r.endIndex);
   const handleSplitPageClick = (index: number) => {
     const ri = getSplitRangeIndex(index);
-    if (ri >= 0) { setSplitRanges((rs) => rs.filter((_, i) => i !== ri)); setSplitSelectingStart(null); return; }
+    if (ri >= 0) {
+      setSplitRanges((rs) => rs.filter((_, i) => i !== ri));
+      setSplitTitles((ts) => ts.filter((_, i) => i !== ri));
+      setSplitTitleFileAsList((ts) => ts.filter((_, i) => i !== ri));
+      setSplitSelectingStart(null);
+      return;
+    }
     if (splitSelectingStart === null) { setSplitSelectingStart(index); return; }
     if (splitSelectingStart === index) { setSplitSelectingStart(null); return; }
     const start = Math.min(splitSelectingStart, index);
@@ -230,8 +390,8 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
         enabled: true,
         ranges: splitRanges,
         baseName: splitBaseName.trim() || projectName || 'output',
-        titles: splitRanges.map(() => title.trim()),
-        titleFileAsList: splitRanges.map(() => titleFileAs.trim()),
+        titles: splitRanges.map((_, i) => splitTitles[i]?.trim() || title.trim()),
+        titleFileAsList: splitRanges.map((_, i) => splitTitleFileAsList[i]?.trim() || titleFileAs.trim()),
         suffixStart: splitSuffixStart,
         suffixDigits: splitSuffixDigits,
         suffixSeparator: splitSuffixSeparator,
@@ -469,9 +629,32 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                       })}
                     </div>
                     {splitRanges.length > 0 && (
-                      <div className="epub-wizard-split-list">
+                      <div className="epub-split-title-list">
                         {splitRanges.map((r, i) => (
-                          <div key={`${r.startIndex}-${r.endIndex}`}>{i + 1}巻: p{r.startIndex + 1}〜p{r.endIndex + 1}（{r.endIndex - r.startIndex + 1}ページ）</div>
+                          <div key={`${r.startIndex}-${r.endIndex}`} className="epub-split-title-row">
+                            <div className="epub-split-title-label">
+                              <span>{i + 1}巻</span>
+                              <small>p{r.startIndex + 1}〜p{r.endIndex + 1}（{r.endIndex - r.startIndex + 1}ページ）</small>
+                            </div>
+                            <div className="form-group flex-grow">
+                              <label>巻タイトル</label>
+                              <input
+                                type="text"
+                                value={splitTitles[i] ?? ''}
+                                onChange={(e) => setSplitTitles((cur) => { const next = [...cur]; next[i] = e.target.value; return next; })}
+                                placeholder="EPUB内の作品タイトル"
+                              />
+                            </div>
+                            <div className="form-group flex-grow">
+                              <label>読み仮名</label>
+                              <input
+                                type="text"
+                                value={splitTitleFileAsList[i] ?? ''}
+                                onChange={(e) => setSplitTitleFileAsList((cur) => { const next = [...cur]; next[i] = e.target.value; return next; })}
+                                placeholder="未入力なら共通設定を使用"
+                              />
+                            </div>
+                          </div>
                         ))}
                       </div>
                     )}
@@ -524,6 +707,19 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                     <button className="btn-secondary btn-small" onClick={handleSelectOutput}>参照</button>
                   </div>
                 </div>
+                <details className="epub-advanced">
+                  <summary>識別子（UUID・通常そのまま）</summary>
+                  <div className="form-group">
+                    <label>本の識別番号（UUID）</label>
+                    <div className="input-with-button">
+                      <input type="text" value={bookUuid} readOnly className="uuid-input" />
+                      <button className="btn-secondary btn-small" onClick={regenerateUuid}>再生成</button>
+                    </div>
+                    <div className="form-hint">
+                      プロジェクトに保存され、同じ本の更新版では同じUUIDが使われます。別の本として配信する場合のみ再生成してください。
+                    </div>
+                  </div>
+                </details>
               </div>
             )}
           </div>

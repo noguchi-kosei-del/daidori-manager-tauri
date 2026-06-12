@@ -13,8 +13,15 @@ import {
   EpubPageInfo,
   EpubMetadata,
   EpubPageImageProfileOverride,
+  SavedEpubState,
   EPUB_FORMAT_VIEWPORTS,
 } from './types';
+import {
+  buildPageOverrideMap,
+  clearCoverFlags,
+  prunePageOverrides,
+  upsertPageOverride,
+} from './utils/epubState';
 
 // Tauri用のファイル情報型
 export interface FileInfo {
@@ -67,6 +74,8 @@ interface AppState {
   epubSelectedPageId: string | null;
   epubSelectedPageIds: string[];  // EPUB複数選択
   isEpubModified: boolean;
+  // EPUB設定の永続化（.daiw に保存／読込で復元）
+  epubState: SavedEpubState | null;
 
   // アクション: チャプター管理
   addChapter: (type: ChapterType, name?: string, skipInitialPage?: boolean, insertAt?: number) => string;
@@ -138,6 +147,9 @@ interface AppState {
   clearEpubPageColophon: (pageId: string) => void;
   setEpubPageImageProfileOverride: (pageId: string, override: EpubPageImageProfileOverride) => void;
   loadEpubFromDaidori: () => void;
+  // EPUB設定の永続化
+  setEpubState: (state: SavedEpubState | null) => void;
+  updateEpubState: (patch: Partial<SavedEpubState>) => void;
 }
 
 // デフォルトのチャプター名
@@ -359,6 +371,7 @@ export const useStore = create<AppState>((set, get) => {
   epubSelectedPageId: null,
   epubSelectedPageIds: [],
   isEpubModified: false,
+  epubState: null,
 
   // チャプター追加
   addChapter: (type, name, _skipInitialPage = false, insertAt) => {
@@ -1017,6 +1030,7 @@ export const useStore = create<AppState>((set, get) => {
       selectedPageIds: [],
       viewMode: 'all',
       activeTab: 'compose',
+      epubState: null,
     });
   },
 
@@ -1062,58 +1076,91 @@ export const useStore = create<AppState>((set, get) => {
   },
 
   setEpubPageAsCover: (pageId) => {
-    set((state) => ({
-      epubPages: state.epubPages.map((p) => ({
-        ...p,
-        isCover: p.id === pageId,
-      })),
-      isEpubModified: true,
-    }));
+    set((state) => {
+      const target = state.epubPages.find((p) => p.id === pageId);
+      const base = state.epubState ?? {};
+      // 表紙は1ページのみ → 既存の cover フラグを全て落としてから付与
+      const overrides = target?.originalPageId
+        ? upsertPageOverride(clearCoverFlags(base.pageOverrides), target.originalPageId, { isCover: true })
+        : base.pageOverrides;
+      return {
+        epubPages: state.epubPages.map((p) => ({ ...p, isCover: p.id === pageId })),
+        epubState: target?.originalPageId ? { ...base, pageOverrides: overrides } : state.epubState,
+        isEpubModified: true,
+      };
+    });
   },
 
   setEpubPageAsColophon: (pageId) => {
-    set((state) => ({
-      epubPages: state.epubPages.map((p) => ({
-        ...p,
-        isColophon: p.id === pageId ? true : p.isColophon,
-      })),
-      isEpubModified: true,
-    }));
+    set((state) => {
+      const target = state.epubPages.find((p) => p.id === pageId);
+      const base = state.epubState ?? {};
+      const overrides = target?.originalPageId
+        ? upsertPageOverride(base.pageOverrides, target.originalPageId, { isColophon: true })
+        : base.pageOverrides;
+      return {
+        epubPages: state.epubPages.map((p) => ({
+          ...p,
+          isColophon: p.id === pageId ? true : p.isColophon,
+        })),
+        epubState: target?.originalPageId ? { ...base, pageOverrides: overrides } : state.epubState,
+        isEpubModified: true,
+      };
+    });
   },
 
   clearEpubPageCover: () => {
-    set((state) => ({
-      epubPages: state.epubPages.map((p) => ({
-        ...p,
-        isCover: false,
-      })),
-      isEpubModified: true,
-    }));
+    set((state) => {
+      const base = state.epubState ?? {};
+      const overrides = prunePageOverrides(clearCoverFlags(base.pageOverrides));
+      return {
+        epubPages: state.epubPages.map((p) => ({ ...p, isCover: false })),
+        epubState: state.epubState ? { ...base, pageOverrides: overrides } : null,
+        isEpubModified: true,
+      };
+    });
   },
 
   clearEpubPageColophon: (pageId) => {
-    set((state) => ({
-      epubPages: state.epubPages.map((p) => ({
-        ...p,
-        isColophon: p.id === pageId ? false : p.isColophon,
-      })),
-      isEpubModified: true,
-    }));
+    set((state) => {
+      const target = state.epubPages.find((p) => p.id === pageId);
+      const base = state.epubState ?? {};
+      const overrides = target?.originalPageId
+        ? upsertPageOverride(base.pageOverrides, target.originalPageId, { isColophon: undefined })
+        : base.pageOverrides;
+      return {
+        epubPages: state.epubPages.map((p) => ({
+          ...p,
+          isColophon: p.id === pageId ? false : p.isColophon,
+        })),
+        epubState: target?.originalPageId ? { ...base, pageOverrides: overrides } : state.epubState,
+        isEpubModified: true,
+      };
+    });
   },
 
   // 台割データからEPUBデータへ変換
   setEpubPageImageProfileOverride: (pageId, override) => {
-    set((state) => ({
-      epubPages: state.epubPages.map((p) => ({
-        ...p,
-        imageProfileOverride: p.id === pageId ? override : p.imageProfileOverride,
-      })),
-      isEpubModified: true,
-    }));
+    set((state) => {
+      const target = state.epubPages.find((p) => p.id === pageId);
+      const base = state.epubState ?? {};
+      const overrides = target?.originalPageId
+        ? upsertPageOverride(base.pageOverrides, target.originalPageId, { imageProfileOverride: override })
+        : base.pageOverrides;
+      return {
+        epubPages: state.epubPages.map((p) => ({
+          ...p,
+          imageProfileOverride: p.id === pageId ? override : p.imageProfileOverride,
+        })),
+        epubState: target?.originalPageId ? { ...base, pageOverrides: overrides } : state.epubState,
+        isEpubModified: true,
+      };
+    });
   },
 
   loadEpubFromDaidori: () => {
     const { chapters, projectName } = get();
+    const saved = get().epubState;
     let pageIndex = 1;
     let coverAssigned = false;
     let colophonAssignedFromChapter = false;
@@ -1193,24 +1240,44 @@ export const useStore = create<AppState>((set, get) => {
       }
     }
 
-    // デフォルトメタデータを作成
-    const defaultViewport = EPUB_FORMAT_VIEWPORTS['kadokawa'];
+    // 保存済みのページ単位指定（表紙/奥付/ICC）を適用。
+    // 明示指定があるときは自動判定を上書きする（cover/colophonは指定のみ有効化）。
+    const overrideMap = buildPageOverrideMap(saved);
+    if (overrideMap.size > 0) {
+      const hasCoverOverride = epubPages.some(
+        (p) => p.originalPageId && overrideMap.get(p.originalPageId)?.isCover,
+      );
+      const hasColophonOverride = epubPages.some(
+        (p) => p.originalPageId && overrideMap.get(p.originalPageId)?.isColophon,
+      );
+      for (const p of epubPages) {
+        const ov = p.originalPageId ? overrideMap.get(p.originalPageId) : undefined;
+        if (ov?.imageProfileOverride) p.imageProfileOverride = ov.imageProfileOverride;
+        if (hasCoverOverride) p.isCover = !!ov?.isCover;
+        if (hasColophonOverride) p.isColophon = !!ov?.isColophon;
+      }
+    }
+
+    // メタデータを作成（保存済みのEPUB設定があれば復元、なければデフォルト）
+    const outputFormat = saved?.outputFormat ?? 'kadokawa';
+    const defaultViewport = EPUB_FORMAT_VIEWPORTS[outputFormat];
     const metadata: EpubMetadata = {
-      title: projectName,
-      authors: [{ name: '', role: 'aut' }],
-      publisher: 'CLLENN',
-      publisherFileAs: 'シレン',
-      language: 'ja',
-      pageDirection: 'rtl',
-      viewportWidth: defaultViewport.width,
-      viewportHeight: defaultViewport.height,
-      spreadMode: 'landscape',
-      orientation: 'auto',
-      bookUuid: uuidv4(),
-      outputFormat: 'kadokawa',
-      allowMissingColophon: false,
-      hybridCssProfile: 'current',
-      imageColorPolicy: 'auto',
+      title: saved?.title ?? projectName,
+      titleFileAs: saved?.titleFileAs,
+      authors: saved?.authors?.length ? saved.authors : [{ name: '', role: 'aut' }],
+      publisher: saved?.publisher ?? 'CLLENN',
+      publisherFileAs: saved?.publisherFileAs ?? 'シレン',
+      language: saved?.language ?? 'ja',
+      pageDirection: saved?.pageDirection ?? 'rtl',
+      viewportWidth: saved?.viewportWidth ?? defaultViewport.width,
+      viewportHeight: saved?.viewportHeight ?? defaultViewport.height,
+      spreadMode: saved?.spreadMode ?? 'landscape',
+      orientation: saved?.orientation ?? 'auto',
+      bookUuid: saved?.bookUuid ?? uuidv4(),
+      outputFormat,
+      allowMissingColophon: saved?.allowMissingColophon ?? false,
+      hybridCssProfile: saved?.hybridCssProfile ?? 'current',
+      imageColorPolicy: saved?.imageColorPolicy ?? 'auto',
     };
 
     set({
@@ -1221,6 +1288,16 @@ export const useStore = create<AppState>((set, get) => {
       epubSelectedPageIds: [],
       isEpubModified: false,
     });
+  },
+
+  // EPUB設定の永続化（プロジェクト読込時に丸ごと差し替え）
+  setEpubState: (state) => {
+    set({ epubState: state });
+  },
+
+  // EPUB設定の永続化（部分マージ：UUID/メタデータ/分割設定の保存に使用）
+  updateEpubState: (patch) => {
+    set((s) => ({ epubState: { ...(s.epubState ?? {}), ...patch } }));
   },
 
 }});

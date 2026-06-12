@@ -52,6 +52,10 @@ pub struct ProjectFile {
     pub base_path: String,
     pub chapters: Vec<SavedChapter>,
     pub ui_state: Option<SavedUiState>,
+    // EPUB設定（UUID/メタデータ/分割/ページ指定）。フロント管理の不透明JSONとして素通しする。
+    // 旧 .daiw との後方互換のため default（無ければ None）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epub_state: Option<serde_json::Value>,
 }
 
 // ページ検証入力（作業中プロジェクト用・絶対パスベースの軽量検証）

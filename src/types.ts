@@ -175,6 +175,7 @@ export interface DaidoriProjectFile {
   basePath: string;
   chapters: SavedChapter[];
   uiState?: SavedUiState;
+  epubState?: SavedEpubState;
 }
 
 // ========== EPUB生成関連 ==========
@@ -325,6 +326,57 @@ export interface EpubSplitSettings {
   suffixSeparator: string;
 }
 
+// ========== EPUB設定の永続化（.daiw に保存）==========
+
+// ページ単位の手動指定（台割側 Page.id = originalPageId に紐づけ）
+export interface SavedEpubPageOverride {
+  originalPageId: string;
+  isCover?: boolean;
+  isColophon?: boolean;
+  imageProfileOverride?: EpubPageImageProfileOverride;
+}
+
+// 分割EPUBの巻ごとの保持情報（再生成でUUIDを固定するために使う）
+export interface SavedEpubVolume {
+  key: string; // baseName + separator + suffix による安定キー
+  title?: string;
+  titleFileAs?: string;
+  // 初回生成時に発行・固定。生成前にタイトルだけ保存される場合は未定義
+  bookUuid?: string;
+}
+
+export interface SavedEpubSplitState {
+  enabled: boolean;
+  baseName: string;
+  suffixStart: number;
+  suffixDigits: number;
+  suffixSeparator: string;
+  ranges: EpubSplitRange[];
+  volumes?: SavedEpubVolume[];
+}
+
+// プロジェクトに保存するEPUB設定一式（UUID/メタデータ/分割/ページ指定）
+export interface SavedEpubState {
+  bookUuid?: string;
+  title?: string;
+  titleFileAs?: string;
+  authors?: AuthorInfo[];
+  publisher?: string;
+  publisherFileAs?: string;
+  language?: string;
+  outputFormat?: EpubFormat;
+  pageDirection?: PageDirection;
+  spreadMode?: SpreadMode;
+  orientation?: Orientation;
+  viewportWidth?: number;
+  viewportHeight?: number;
+  hybridCssProfile?: HybridCssProfile;
+  allowMissingColophon?: boolean;
+  imageColorPolicy?: EpubImageColorPolicy;
+  pageOverrides?: SavedEpubPageOverride[];
+  split?: SavedEpubSplitState;
+}
+
 // EPUBページ情報
 export interface EpubPage {
   id: string;
@@ -387,6 +439,15 @@ export interface EpubCheckResult {
   messages: EpubCheckMessage[];
   rawOutput?: string;
   error?: string;
+}
+
+// EPUB内部整合性チェック結果（自前検査・verify_epub_internal）
+export interface EpubInternalCheckResult {
+  isValid: boolean;
+  checkedPath: string;
+  errors: string[];
+  warnings: string[];
+  info: string[];
 }
 
 // ========== EPUB_makerモード関連 ==========

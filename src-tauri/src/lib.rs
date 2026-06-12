@@ -1,12 +1,13 @@
 mod cache;
-mod commands;
+// commands/epub/types は統合テスト（tests/）から参照するため pub
+pub mod commands;
 mod constants;
-mod epub;
+pub mod epub;
 mod image_utils;
 mod native_jpeg;
 mod state;
 mod thumbnail;
-mod types;
+pub mod types;
 
 use cache::{ThumbnailCache, ThumbnailMemoryCache};
 use constants::MEMORY_CACHE_MAX_SIZE;
@@ -35,6 +36,7 @@ fn take_pending_open_path(state: tauri::State<PendingOpen>) -> Option<String> {
 use commands::epub::{
     generate_book_uuid, generate_epub, get_image_dimensions, read_psd_guides,
 };
+use commands::epub_verify::verify_epub_internal;
 use commands::epubcheck::validate_epub_with_epubcheck;
 use commands::export::export_pages;
 use commands::folder::get_folder_contents;
@@ -148,6 +150,7 @@ pub fn run() {
             get_image_dimensions,
             read_psd_guides,
             validate_epub_with_epubcheck,
+            verify_epub_internal,
             detect_tachimi_exe,
             generate_tachimi_chapter_pdfs,
             rasterize_pdf,

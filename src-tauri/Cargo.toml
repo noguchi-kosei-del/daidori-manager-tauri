@@ -8,6 +8,11 @@ edition = "2021"
 [lib]
 name = "daidori_manager_tauri_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+# libユニットテストexeは無効化する。tao(tauri)が comctl32 v6 専用シンボルを
+# 静的インポートするため、マニフェスト無しのlibテストexeは起動できない。
+# テストは tests/（build.rsがマニフェストを埋め込む統合テスト）に置く。
+test = false
+doctest = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

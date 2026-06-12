@@ -37,8 +37,12 @@ import {
   EpubPage,
   EpubGenerateResponse,
   EpubCheckResult,
+  EpubInternalCheckResult,
   EpubSplitSettings,
+  SavedEpubState,
+  SavedEpubVolume,
 } from './types';
+import { splitVolumeKey } from './utils/epubState';
 import {
   FolderIcon,
   PlusIcon,
@@ -169,6 +173,8 @@ type RustProjectFile = {
   base_path: string;
   chapters: RustSavedChapter[];
   ui_state?: RustSavedUiState;
+  // EPUB設定（UUID/メタデータ/分割/ページ指定）。Rust側は不透明JSONとして素通しする
+  epub_state?: SavedEpubState;
 };
 
 type ProjectSaveResult = {
@@ -265,7 +271,8 @@ const buildProjectFile = (
   chapters: Chapter[],
   selectedChapterId: string | null,
   selectedPageId: string | null,
-  thumbnailSize: 'small' | 'medium' | 'large'
+  thumbnailSize: 'small' | 'medium' | 'large',
+  epubState: SavedEpubState | null
 ): RustProjectFile => {
   const basePath = getParentPath(filePath);
 
@@ -304,6 +311,7 @@ const buildProjectFile = (
       thumbnail_size: thumbnailSize,
       collapsed_chapter_ids: chapters.filter((chapter) => chapter.collapsed).map((chapter) => chapter.id),
     },
+    epub_state: epubState ?? undefined,
   };
 };
 
@@ -316,8 +324,11 @@ const restoreProjectFromFile = (project: RustProjectFile | DaidoriProjectFile): 
   selectedPageId: string | null;
   thumbnailSize: 'small' | 'medium' | 'large';
   collapsedChapterIds: string[];
+  epubState: SavedEpubState | null;
 } => {
   const rawProject = project as unknown as Record<string, unknown>;
+  const epubState =
+    (readProjectField<SavedEpubState>(rawProject, 'epubState', 'epub_state') ?? null);
   const name = readProjectField<string>(rawProject, 'name', 'name') ?? DEFAULT_PROJECT_NAME;
   const createdAt = readProjectField<string>(rawProject, 'createdAt', 'created_at') ?? new Date().toISOString();
   const basePath = readProjectField<string>(rawProject, 'basePath', 'base_path') ?? '';
@@ -374,6 +385,7 @@ const restoreProjectFromFile = (project: RustProjectFile | DaidoriProjectFile): 
     selectedPageId: readProjectField<string | null>(rawUiState, 'selectedPageId', 'selected_page_id') ?? null,
     thumbnailSize: savedThumbnailSize ?? 'medium',
     collapsedChapterIds,
+    epubState,
   };
 };
 
@@ -1092,7 +1104,8 @@ function App() {
       chapters,
       selectedChapterId,
       selectedPageId,
-      thumbnailSize
+      thumbnailSize,
+      useStore.getState().epubState
     );
 
     try {
@@ -1166,6 +1179,7 @@ function App() {
         selectedPageIds: restored.selectedPageId ? [restored.selectedPageId] : [],
         thumbnailSize: restored.thumbnailSize,
         viewMode: 'all',
+        epubState: restored.epubState,
       });
       useBleedStore.getState().reset();
       setPreviewCollapsedChapters(new Set(restored.collapsedChapterIds));
@@ -2064,6 +2078,30 @@ function App() {
     return `${directory}${splitSettings.baseName}${splitSettings.suffixSeparator}${suffix}.epub`;
   };
 
+  // 内部整合性チェック（OPF/XHTML参照とZIP実体の突き合わせ）。EPUBCheck失敗とは独立に動く
+  const runInternalVerify = async (
+    epubPath: string,
+  ): Promise<{ summary: string; failed: boolean }> => {
+    try {
+      const result = await invoke<EpubInternalCheckResult>('verify_epub_internal', { epubPath });
+      const lines: string[] = [];
+      if (result.isValid) {
+        lines.push('内部整合性チェック: 問題なし');
+      } else {
+        lines.push(`内部整合性チェック: エラー ${result.errors.length}件`);
+        lines.push(...result.errors.slice(0, 10).map((e) => `  ・${e}`));
+        if (result.errors.length > 10) lines.push(`  …他${result.errors.length - 10}件`);
+      }
+      if (result.warnings.length > 0) {
+        lines.push(...result.warnings.map((w) => `  注意: ${w}`));
+      }
+      lines.push(...result.info.map((i) => `  ${i}`));
+      return { summary: lines.join('\n'), failed: !result.isValid };
+    } catch (e) {
+      return { summary: `内部整合性チェックを実行できませんでした: ${e}`, failed: false };
+    }
+  };
+
   const buildSplitVolumePages = (pages: EpubPage[]) => {
     const hasExplicitCover = pages.some((page) => page.isCover);
     const hasExplicitColophon = pages.some((page) => page.isColophon);
@@ -2384,6 +2422,11 @@ function App() {
         let totalFileSize = 0;
         let totalPageCount = 0;
 
+        // 保存済みの巻情報（安定キー → UUID）。再生成時に同じ巻へ同じUUIDを使い回す
+        const savedVolumes = useStore.getState().epubState?.split?.volumes ?? [];
+        const savedVolumeByKey = new Map(savedVolumes.map((v) => [v.key, v]));
+        const usedVolumes: SavedEpubVolume[] = [];
+
         for (let i = 0; i < splitSettings.ranges.length; i++) {
           const range = splitSettings.ranges[i];
           const volumePages = epubGeneratePages.slice(range.startIndex, range.endIndex + 1);
@@ -2398,7 +2441,23 @@ function App() {
           const volumeTitleFileAs =
             splitSettings.titleFileAsList?.[i]?.trim() ||
             splitMetadata.titleFileAs;
-          const volumeBookUuid = await invoke<string>('generate_book_uuid');
+          // 巻UUID: 保存値があれば再利用（電子書店側で「同じ巻の更新版」と認識させる）
+          const volumeKey = splitVolumeKey(
+            splitSettings.baseName,
+            splitSettings.suffixSeparator,
+            splitSettings.suffixStart,
+            splitSettings.suffixDigits,
+            i,
+          );
+          const volumeBookUuid =
+            savedVolumeByKey.get(volumeKey)?.bookUuid ??
+            (await invoke<string>('generate_book_uuid'));
+          usedVolumes.push({
+            key: volumeKey,
+            title: volumeTitle,
+            titleFileAs: volumeTitleFileAs,
+            bookUuid: volumeBookUuid,
+          });
           const volumeMetadata: EpubMetadata = {
             ...splitMetadata,
             title: volumeTitle,
@@ -2436,6 +2495,30 @@ function App() {
             hasCheckIssue = true;
             checkSummaries.push(`分割 ${i + 1}: EPUBCheckを実行できませんでした\n${epubCheckError}`);
           }
+
+          // 自前の内部整合性チェック（EPUBCheckが使えない環境でも参照切れを検出）
+          const internal = await runInternalVerify(response.outputPath || volumeOutputPath);
+          checkSummaries.push(`分割 ${i + 1}: ${internal.summary}`);
+          if (internal.failed) hasCheckIssue = true;
+        }
+
+        // 巻情報を永続化（今回使った巻を優先しつつ、過去の未使用キーも温存して範囲編集に備える）
+        {
+          const prevState = useStore.getState().epubState;
+          const retained = (prevState?.split?.volumes ?? []).filter(
+            (v) => !usedVolumes.some((u) => u.key === v.key),
+          );
+          useStore.getState().updateEpubState({
+            split: {
+              enabled: true,
+              baseName: splitSettings.baseName,
+              suffixStart: splitSettings.suffixStart,
+              suffixDigits: splitSettings.suffixDigits,
+              suffixSeparator: splitSettings.suffixSeparator,
+              ranges: splitSettings.ranges,
+              volumes: [...usedVolumes, ...retained],
+            },
+          });
         }
 
         const checkDetailsText = checkSummaries.length > 0
@@ -2503,7 +2586,10 @@ function App() {
           epubCheckDetails = `${epubCheckError}`;
           epubCheckFailed = false;
         }
-        const details = [profileWarnings, epubCheckDetails].filter(Boolean).join('\n\n');
+        // 自前の内部整合性チェック（OPF/XHTML参照とZIP実体の突き合わせ）
+        const internal = await runInternalVerify(response.outputPath || outputPath);
+        if (internal.failed) epubCheckFailed = true;
+        const details = [profileWarnings, epubCheckDetails, internal.summary].filter(Boolean).join('\n\n');
         setExportResultDialog({
           show: true,
           title: epubCheckFailed ? 'EPUB生成完了（チェック要確認）' : 'EPUB生成完了',

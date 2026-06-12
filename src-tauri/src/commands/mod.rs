@@ -1,4 +1,5 @@
 pub mod epub;
+pub mod epub_verify;
 pub mod epubcheck;
 pub mod export;
 pub mod folder;
