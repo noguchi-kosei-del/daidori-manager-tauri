@@ -14,6 +14,7 @@ import {
   Orientation,
   HybridCssProfile,
   EpubImageColorPolicy,
+  EpubColorEngine,
   EpubSplitSettings,
   EPUB_FORMAT_VIEWPORTS,
   EPUB_IMAGE_COLOR_POLICY_OPTIONS,
@@ -59,6 +60,8 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
   // 仕上がり
   const [outputFormat, setOutputFormat] = useState<EpubFormat>('kadokawa');
   const [imageColorPolicy, setImageColorPolicy] = useState<EpubImageColorPolicy>('auto');
+  // 19.3 実験: PSD→JPEG中間変換のエンジン。既定は高速ネイティブ。
+  const [colorEngine, setColorEngine] = useState<EpubColorEngine>('native');
   const [colorMode, setColorMode] = useState<'auto' | 'custom'>('auto');
   const [hybridCssProfile, setHybridCssProfile] = useState<HybridCssProfile>('current');
   const [allowMissingColophon, setAllowMissingColophon] = useState(false);
@@ -220,6 +223,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
       allowMissingColophon: outputFormat === 'hybrid' ? (allowMissingColophon || hybridCssProfile === 'legacy') : undefined,
       hybridCssProfile: outputFormat === 'hybrid' ? hybridCssProfile : undefined,
       imageColorPolicy: colorMode === 'auto' ? 'auto' : imageColorPolicy,
+      colorEngine,
     };
     try {
       await onGenerate(metadata, outputPath, splitEnabled ? {
@@ -392,6 +396,14 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                   </div>
                   <div className="form-hint">おまかせ＝本文はモノクロを維持し、カラーページは電子書籍向け（sRGB）に整えます。</div>
                 </div>
+                <div className="form-group">
+                  <label>PSD変換の画質（19.3 実験）</label>
+                  <div className="epub-wizard-seg">
+                    <button className={colorEngine === 'native' ? 'active' : ''} onClick={() => setColorEngine('native')}>高速（ネイティブ）</button>
+                    <button className={colorEngine === 'photoshop' ? 'active' : ''} onClick={() => setColorEngine('photoshop')}>高品質（Photoshop）</button>
+                  </div>
+                  <div className="form-hint">高速＝内蔵エンジンでPSDをJPEG化（ICC埋め込みのみ）。高品質＝Photoshopの「プロファイル変換」でsRGBへ厳密に色変換（相対的な色域を維持＋黒点補正）。Photoshop未インストール時は自動で高速に切替。</div>
+                </div>
                 {(colorMode === 'custom' || outputFormat === 'hybrid') && (
                   <details className="epub-advanced" open={colorMode === 'custom'}>
                     <summary>詳細設定</summary>
@@ -538,15 +550,15 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
           <div className="epub-progress-dialog">
             <div className="epub-progress-title">EPUB生成中</div>
             <div className="epub-progress-phase">
-              {progress?.phase === 'psd-to-jpeg' ? 'PSDをJPEGに変換中…'
+              {progress?.phase === 'psd-to-jpeg' ? `PSDをJPEGに変換中…${progress.total > 0 ? ` ${progress.current}/${progress.total}` : ''}`
                 : progress?.phase === 'epubcheck' ? 'EPUBを検証中…'
                 : progress?.phase === 'packaging' ? 'EPUBを梱包中…'
                 : progress?.phase === 'images' && progress.total > 0 ? `画像を変換中… ${progress.current}/${progress.total}`
                 : '準備中…'}
             </div>
             <div className="epub-progress-bar-track">
-              <div className={`epub-progress-bar-fill ${progress?.phase === 'images' && progress.total > 0 ? '' : 'indeterminate'}`}
-                style={progress?.phase === 'images' && progress.total > 0 ? { width: `${Math.round((progress.current / progress.total) * 100)}%` } : undefined} />
+              <div className={`epub-progress-bar-fill ${(progress?.phase === 'images' || progress?.phase === 'psd-to-jpeg') && progress.total > 0 ? '' : 'indeterminate'}`}
+                style={(progress?.phase === 'images' || progress?.phase === 'psd-to-jpeg') && progress.total > 0 ? { width: `${Math.round((progress.current / progress.total) * 100)}%` } : undefined} />
             </div>
           </div>
         </div>

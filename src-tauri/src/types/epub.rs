@@ -237,6 +237,11 @@ pub struct EpubPage {
     /// ページ単位のICCプロファイル上書き
     #[serde(default)]
     pub image_profile_override: EpubPageImageProfileOverride,
+    /// 事前正規化済みフラグ（19.3: Photoshopエンジンで sRGB プロファイル変換・
+    /// ICC埋め込み・最終サイズ化済みの中間JPEG）。
+    /// true の場合、builder はリサイズ不要なら再エンコードせずコピーする。
+    #[serde(default)]
+    pub pre_normalized: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -8,5 +8,6 @@ pub mod pdf;
 pub mod photoshop;
 pub mod project;
 pub mod recent;
+pub mod srgb_convert;
 pub mod tachimi;
 pub mod tiff;

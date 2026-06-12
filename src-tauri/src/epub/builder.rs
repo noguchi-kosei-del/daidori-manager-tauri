@@ -27,7 +27,8 @@ struct EpubProgressPayload<'a> {
 }
 
 const EPUB_JPEG_QUALITY: u8 = 90;
-const APPLE_BOOKS_MAX_INTERNAL_IMAGE_PIXELS: u64 = 5_600_000;
+// srgb_convert（Photoshopエンジン）が同じ上限で事前リサイズするため pub(crate) で共有
+pub(crate) const APPLE_BOOKS_MAX_INTERNAL_IMAGE_PIXELS: u64 = 5_600_000;
 const APPLE_BOOKS_COVER_MIN_SHORT_EDGE: u32 = 1_400;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -311,6 +312,22 @@ impl EpubBuilder {
                 let dest = image_dir.join(&dest_filename);
                 let target = self.image_target_for_page(page, auto_blank_target);
 
+                // 事前正規化済みページ（19.3: Photoshopエンジンで sRGB プロファイル変換・
+                // ICC埋め込み・最終サイズ化済みの中間JPEG）は、リサイズ不要ならそのまま
+                // コピーして再エンコードによる世代劣化（q90 再圧縮 + 4:2:2 クロマ
+                // サブサンプリング化）を回避する。リサイズが必要な場合（表紙の拡大等）は
+                // 従来どおり normalize 経路で処理する。
+                let src_is_jpeg = Path::new(&page.source_path)
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg"))
+                    .unwrap_or(false);
+                let copy_pre_normalized = page.pre_normalized
+                    && !page.is_blank
+                    && target == EpubImageTarget::RgbSrgb
+                    && src_is_jpeg
+                    && apple_books_resize_is_identity(page.width, page.height, page.is_cover);
+
                 let mut summary = ImageCopyResult::default();
                 let result = if page.is_blank {
                     generate_blank_jpeg(
@@ -328,6 +345,11 @@ impl EpubBuilder {
                     if !src.exists() {
                         return Err(format!("Source image not found: {}", page.source_path));
                     }
+                    if copy_pre_normalized {
+                        fs::copy(src, &dest).map(|_| ()).map_err(|e| {
+                            format!("Failed to copy pre-normalized image {}: {}", dest_filename, e)
+                        })
+                    } else {
                     match target {
                         EpubImageTarget::PreserveOriginal => match source_needs_conversion(&page.source_path) {
                             Some("psd") => convert_psd_to_jpeg(src, &dest, srgb_profile.as_deref()),
@@ -351,6 +373,7 @@ impl EpubBuilder {
                             )
                         }
                     }
+                    }
                 };
                 result?;
                 match target {
@@ -369,7 +392,9 @@ impl EpubBuilder {
                     EpubImageTarget::PreserveOriginal => summary.preserved_original_count += 1,
                     EpubImageTarget::NoIcc => summary.no_icc_count += 1,
                 }
-                if target == EpubImageTarget::RgbSrgb && srgb_profile.is_none() {
+                // 事前正規化コピーは Photoshop が埋め込んだ sRGB ICC をそのまま保持するため、
+                // システムの sRGB プロファイル未検出の警告は対象外。
+                if target == EpubImageTarget::RgbSrgb && srgb_profile.is_none() && !copy_pre_normalized {
                     summary.warnings.push(
                         "sRGB ICC profile was not found; RGB JPEGs were written without embedded sRGB ICC.".to_string(),
                     );
@@ -1010,9 +1035,10 @@ fn generate_blank_jpeg(
     }
 }
 
-fn resize_for_apple_books(image: DynamicImage, is_cover: bool) -> DynamicImage {
-    let mut width = image.width().max(1);
-    let mut height = image.height().max(1);
+/// Apple Books 向けリサイズのスケール係数を計算（1.0 なら等倍＝リサイズ不要）
+fn apple_books_scale(width: u32, height: u32, is_cover: bool) -> f64 {
+    let width = width.max(1);
+    let height = height.max(1);
     let mut scale = 1.0_f64;
 
     if is_cover {
@@ -1030,15 +1056,31 @@ fn resize_for_apple_books(image: DynamicImage, is_cover: bool) -> DynamicImage {
         scale *= max_scale;
     }
 
+    scale
+}
+
+/// 指定サイズが Apple Books 向けリサイズで変化しない（等倍のまま）かどうか
+fn apple_books_resize_is_identity(width: u32, height: u32, is_cover: bool) -> bool {
+    let width = width.max(1);
+    let height = height.max(1);
+    let scale = apple_books_scale(width, height, is_cover);
+    let new_width = (width as f64 * scale).round().max(1.0) as u32;
+    let new_height = (height as f64 * scale).round().max(1.0) as u32;
+    new_width == width && new_height == height
+}
+
+fn resize_for_apple_books(image: DynamicImage, is_cover: bool) -> DynamicImage {
+    let width = image.width().max(1);
+    let height = image.height().max(1);
+    let scale = apple_books_scale(width, height, is_cover);
+
     let new_width = (width as f64 * scale).round().max(1.0) as u32;
     let new_height = (height as f64 * scale).round().max(1.0) as u32;
     if new_width == width && new_height == height {
         return image;
     }
 
-    width = new_width;
-    height = new_height;
-    image.resize_exact(width, height, FilterType::Lanczos3)
+    image.resize_exact(new_width, new_height, FilterType::Lanczos3)
 }
 
 fn is_grayscale_dynamic_image(image: &DynamicImage) -> bool {

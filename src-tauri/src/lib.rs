@@ -43,6 +43,7 @@ use commands::open_file::open_file_with_default_app;
 use commands::pdf::rasterize_pdf;
 use commands::project::{load_project, save_project, validate_pages};
 use commands::recent::add_recent_file;
+use commands::srgb_convert::run_photoshop_srgb_convert;
 use commands::tachimi::{detect_tachimi_exe, generate_tachimi_chapter_pdfs};
 use commands::tiff::{check_photoshop_installed, run_photoshop_tiff_convert};
 use thumbnail::generate_thumbnail;
@@ -141,6 +142,7 @@ pub fn run() {
             check_photoshop_installed,
             run_photoshop_tiff_convert,
             run_native_jpeg_convert,
+            run_photoshop_srgb_convert,
             generate_epub,
             generate_book_uuid,
             get_image_dimensions,

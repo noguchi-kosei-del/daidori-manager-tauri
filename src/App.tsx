@@ -2098,6 +2098,9 @@ function App() {
 
       // === PSDが含まれていれば自動的にJPEG化（Photoshop経由） ===
       const psdToJpegMap = new Map<string, string>();
+      // 19.3: 実際に使った変換エンジン（preNormalized 付与・完了ダイアログの注記に使用）
+      let psdEngineUsed: 'native' | 'photoshop' = 'native';
+      let psdEngineFellBack = false;
       const psdSourcePaths: string[] = [];
       for (const chapter of chapters) {
         for (const page of chapter.pages) {
@@ -2119,35 +2122,70 @@ function App() {
         const desktop = await desktopDir();
         const epubJpegDir = await join(desktop, 'Script_Output', `EPUB用JPEG_${projectName || '台割'}`);
 
-        // EPUB用ソース: 断ち切りなし・原寸・高品質（Photoshop不要のネイティブ変換）
-        const config = {
-          files: psdSourcePaths.map((path, i) => ({
-            path,
-            outputPath: epubJpegDir,
-            outputName: `psd_${String(i).padStart(4, '0')}.jpg`,
-            options: {
-              cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0,
-              tachikiriType: 'none',
-              strokeColor: 'black',
-              fillColor: 'white',
-              fillOpacity: 50,
-              referenceWidth: 0, referenceHeight: 0,
-              resizeMode: 'none',
-              resizePercent: 50,
-              jpegQuality: 95,
-            },
-          })),
-        };
+        // 19.3 実験: 変換エンジンを選択。
+        //  - 'photoshop': Photoshopの「プロファイル変換」で厳密にsRGB化（高品質）
+        //  - 'native'(既定): image クレートで高速変換（ICC埋め込みのみ）
+        // Photoshop未インストール時はネイティブにフォールバック。
+        const wantPhotoshop = metadata.colorEngine === 'photoshop';
+        const photoshopAvailable = wantPhotoshop
+          ? await invoke<boolean>('check_photoshop_installed').catch(() => false)
+          : false;
+        const usePhotoshop = wantPhotoshop && photoshopAvailable;
+        psdEngineUsed = usePhotoshop ? 'photoshop' : 'native';
+        psdEngineFellBack = wantPhotoshop && !photoshopAvailable;
 
         let convertResponse: {
           results: { fileName: string; success: boolean; outputPath?: string; error?: string }[];
           outputDir: string;
         };
         try {
-          convertResponse = await invoke('run_native_jpeg_convert', {
-            config,
-            outputDir: epubJpegDir,
-          });
+          if (usePhotoshop) {
+            // Photoshop: プロファイル変換(sRGB / 相対比色＋黒点補正) → JPEG
+            const psConfig = {
+              files: psdSourcePaths.map((path, i) => ({
+                path,
+                outputPath: epubJpegDir,
+                outputName: `psd_${String(i).padStart(4, '0')}.jpg`,
+              })),
+              // jpegQuality 11: Photoshop の最高画質帯（10-12 は 4:4:4 サブサンプリング）。
+              // preNormalized コピー経路ではこれが最終EPUB画質になるため、
+              // q12 だと容量が倍近くなる一方で画質差はわずか → 11 をバランス点とする。
+              // dither / maxPixels は Rust 側の既定（true / 5.6MP）を使用。
+              globalSettings: {
+                jpegQuality: 11,
+                intent: 'relative',
+                blackPointCompensation: true,
+              },
+            };
+            convertResponse = await invoke('run_photoshop_srgb_convert', {
+              config: psConfig,
+              outputDir: epubJpegDir,
+            });
+          } else {
+            // ネイティブ: 断ち切りなし・原寸・高品質（Photoshop不要）
+            const config = {
+              files: psdSourcePaths.map((path, i) => ({
+                path,
+                outputPath: epubJpegDir,
+                outputName: `psd_${String(i).padStart(4, '0')}.jpg`,
+                options: {
+                  cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0,
+                  tachikiriType: 'none',
+                  strokeColor: 'black',
+                  fillColor: 'white',
+                  fillOpacity: 50,
+                  referenceWidth: 0, referenceHeight: 0,
+                  resizeMode: 'none',
+                  resizePercent: 50,
+                  jpegQuality: 95,
+                },
+              })),
+            };
+            convertResponse = await invoke('run_native_jpeg_convert', {
+              config,
+              outputDir: epubJpegDir,
+            });
+          }
         } catch (e) {
           setExportResultDialog({
             show: true,
@@ -2309,6 +2347,8 @@ function App() {
             isBlank: isBlankPage,
             sourceColorMode: page.imageColorMode,
             imageProfileOverride: previewPage?.imageProfileOverride,
+            // 19.3: Photoshopエンジンで sRGB 変換済みのページは builder の再エンコードを回避
+            preNormalized: isPsdConverted && psdEngineUsed === 'photoshop' ? true : undefined,
           });
 
           if (!isCover && !isColophon) {
@@ -2326,6 +2366,11 @@ function App() {
         });
         return;
       }
+
+      // 19.3: Photoshopエンジン指定だが未インストールでフォールバックした場合の注記
+      const engineNote = psdEngineFellBack
+        ? '\n\n※Photoshopが見つからなかったため、PSD変換は高速（ネイティブ）エンジンで実行しました'
+        : '';
 
       if (splitSettings?.enabled) {
         const splitMetadata: EpubMetadata = {
@@ -2416,7 +2461,7 @@ function App() {
         setExportResultDialog({
           show: true,
           title: hasCheckIssue ? '分割EPUB生成完了（チェック要確認）' : '分割EPUB生成完了',
-          message: `${outputs.length}件のEPUBを生成しました\n合計 ${totalPageCount}ページ / ${fileSizeMB}MB`,
+          message: `${outputs.length}件のEPUBを生成しました\n合計 ${totalPageCount}ページ / ${fileSizeMB}MB${engineNote}`,
           details: [checkDetailsText, outputDetailsText].filter(Boolean).join('\n\n') || undefined,
           outputDir: outputs[0],
           isError: hasCheckIssue,
@@ -2462,7 +2507,7 @@ function App() {
         setExportResultDialog({
           show: true,
           title: epubCheckFailed ? 'EPUB生成完了（チェック要確認）' : 'EPUB生成完了',
-          message: `EPUBを生成しました\n${response.pageCount}ページ / ${fileSizeMB}MB${profileMessage}${epubCheckMessage}`,
+          message: `EPUBを生成しました\n${response.pageCount}ページ / ${fileSizeMB}MB${profileMessage}${engineNote}${epubCheckMessage}`,
           details: details || undefined,
           outputDir: response.outputPath || outputPath,
           isError: epubCheckFailed,

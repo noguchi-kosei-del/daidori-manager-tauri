@@ -297,7 +297,17 @@ export interface EpubMetadata {
   allowMissingColophon?: boolean;
   hybridCssProfile?: HybridCssProfile;
   imageColorPolicy?: EpubImageColorPolicy;
+  /**
+   * EPUB生成前のPSD→JPEG中間変換のエンジン（19.3 実験）。
+   * 'native'(既定): image クレートで高速変換（ICC埋め込みのみ）。
+   * 'photoshop': Photoshopの「プロファイル変換」で厳密にsRGB化（高品質）。
+   * フロント専用フィールド。Rust の generate_epub は無視する。
+   */
+  colorEngine?: EpubColorEngine;
 }
+
+/** EPUB画像変換エンジン（19.3 実験: 高速ネイティブ / 高品質Photoshop） */
+export type EpubColorEngine = 'native' | 'photoshop';
 
 export interface EpubSplitRange {
   startIndex: number;
@@ -327,6 +337,11 @@ export interface EpubPage {
   isBlank?: boolean;
   sourceColorMode?: ImageColorMode | string;
   imageProfileOverride?: EpubPageImageProfileOverride;
+  /**
+   * 事前正規化済み（19.3: Photoshopエンジンで sRGB 変換・ICC埋め込み・最終サイズ化済み）。
+   * true の場合、builder はリサイズ不要なら再エンコードせずコピーする。
+   */
+  preNormalized?: boolean;
 }
 
 export interface EpubImageProfileSummary {
