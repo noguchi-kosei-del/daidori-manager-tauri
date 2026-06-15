@@ -2693,3 +2693,27 @@ E2. **重複集約**:
 ### バージョン同期
 
 `package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を **`1.8.0`** に更新。
+
+---
+
+## 最新状態（2026-06-15: セキュリティ強化＋自動更新の脱GitHub・App_installer統一＋Export改修・不具合修正）
+
+### セキュリティ強化
+- capability から生 plugin-fs を全撤去（フロントは独自 invoke コマンド経由のみ＝無害）。CSP 厳格化、`build.rs`+`integrity.rs` で scripts/*.jsx の SHA-256 門番（fail-closed・JSX変更後は再ビルド必須）、`security.rs`（許可リスト+canonicalize+保護パス拒否）で全コマンドゲート、`dlog!`・temp ACL。
+- 変換コマンド（`run_native_jpeg_convert`/`run_photoshop_srgb_convert`/`run_photoshop_tiff_convert`/`read_atn_actions`）の入出力・.atn パスを grant→ensure ゲート。epubcheck の zip を SHA-256 ピン。`tachimi.rs` の handoff staging を UUID 化+RAIIクリーンアップ。
+- **assetProtocol scope は `["**"]` 必須**（任意の場所のユーザー画像を `convertFileSrc` で表示するため。狭めると全サムネイル/プレビューが非表示になる＝不具合の原因）。読み取りはコマンド側パスゲートで別途制御。
+
+### 不具合修正（実機検証由来）
+- D&D 画像が反映しない① = asset scope を `$LOCALAPPDATA`(Tauri2に無い無効変数)で狭めたため → `["**"]` に復帰。
+- ファイルD&Dのみ無反応② = `get_folder_contents` が `fs::canonicalize` の `\?\` 前置パスを返し、フロントの `imagePaths.includes(f.path)` 照合が外れていたため → 検証は正規化・列挙は元パス(`Path::new(&folder_path)`)に修正。
+
+### Export 設定変更
+- TIFF/JPEG タブのリサイズ既定を **2250×3000 → 1280×1818**（JPEG `fixed` は native_jpeg を明示target寸法対応に小改修・fit-within維持。PDF共有定数は不変）。
+- TIFFタブのガウス(`tiffBlur*`)を**完全削除**（断ち切りタブと重複。ぼかしは region.blurRadius のみで適用）。
+
+### 自動更新（脱GitHub・minisign・App_installer）
+- 実行時 GitHub 非接続。**`G:\…\DTP制作部\App_installer\daidori-manager\`** を minisign 検証して適用（`updater_local.rs`、検証鍵 `_署名鍵\daidori\`）。`useAutoUpdate.ts` は `check_local_update`/`apply_local_update` へ移行。updater 読取は `std::fs::canonicalize`（許可リスト非経由）。
+
+### 2段階移行
+- 現フリート(v1.8.1)→ GitHub に **vMig=1.8.2** を元鍵CIリリースで移行→以後 `App_installer\daidori-manager\`。その後 **vG=1.8.3** を配置。詳細: 運用フォルダ `_更新方法とリリース手順.md`。
+- 残課題(任意): pdfium.dll の共有DL検証強化等は別途。

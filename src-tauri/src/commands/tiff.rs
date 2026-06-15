@@ -22,6 +22,26 @@ pub async fn run_photoshop_tiff_convert(
     output_dir: String,
     jpg_output_dir: Option<String>,
 ) -> Result<TiffConvertResponse, String> {
+    // セキュリティ: 出力先・全入力・アクション(.atn)パスを許可リストゲート（保護領域/トラバーサル拒否）。
+    let _ = crate::security::grant_user_path(&output_dir);
+    crate::security::ensure_write_path(&output_dir)?;
+    if let Some(jpg_dir) = jpg_output_dir.as_deref() {
+        let _ = crate::security::grant_user_path(jpg_dir);
+        crate::security::ensure_write_path(jpg_dir)?;
+    }
+    for f in &config.files {
+        let _ = crate::security::grant_user_path(&f.path);
+        if std::path::Path::new(&f.path).exists() {
+            crate::security::ensure_read_path(&f.path)?;
+        }
+    }
+    if let Some(atn) = config.global_settings.action_set_path.as_deref() {
+        if !atn.is_empty() && std::path::Path::new(atn).exists() {
+            let _ = crate::security::grant_user_path(atn);
+            crate::security::ensure_read_path(atn)?;
+        }
+    }
+
     let ps_path = find_photoshop_path().ok_or_else(|| {
         "Photoshopが見つかりません。Adobe Photoshopをインストールしてください。".to_string()
     })?;
@@ -285,6 +305,9 @@ pub struct AtnInfo {
 /// フロントエンドでアクション名をドロップダウン選択させるために使用する。
 #[tauri::command]
 pub fn read_atn_actions(path: String) -> Result<AtnInfo, String> {
+    // セキュリティ: .atn 入力パスを許可リストゲート（保護領域/トラバーサル拒否）。
+    let _ = crate::security::grant_user_path(&path);
+    crate::security::ensure_read_path(&path)?;
     let bytes = fs::read(&path).map_err(|e| format!(".atnの読み込みに失敗: {}", e))?;
     let set_name = parse_atn_set_name(&path).or_else(|| filename_stem(&path));
     let actions = parse_atn_action_names(&bytes);

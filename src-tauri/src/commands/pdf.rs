@@ -209,12 +209,11 @@ fn create_pdfium(app: Option<&AppHandle>) -> Result<Pdfium, String> {
                 .map_err(|e| format!("pdfium.dll の読み込みに失敗: {:?}", e));
         }
         Err(fetch_err) => {
-            // 3) 最終フォールバック: システムライブラリ
-            return Pdfium::bind_to_system_library()
-                .map(Pdfium::new)
-                .map_err(|sys_err| {
-                    format!("{}\nシステムライブラリも未検出: {:?}", fetch_err, sys_err)
-                });
+            // システムライブラリへのフォールバックは DLL 検索順ハイジャックの恐れがあるため使わない。
+            return Err(format!(
+                "pdfium.dll を取得できません（同梱/共有ドライブから読み込めませんでした）: {}",
+                fetch_err
+            ));
         }
     }
 }
@@ -301,6 +300,10 @@ pub async fn rasterize_pdf(
     pdf_path: String,
     app_handle: AppHandle,
 ) -> Result<Vec<FileInfo>, String> {
+    // 許可リスト検証（任意PDFの読み取り＋出力を防ぐ。出力は <pdf>_pages/ で同じ親フォルダ）
+    let _ = crate::security::grant_user_path(&pdf_path);
+    crate::security::ensure_read_path(&pdf_path)?;
+
     let pdf_path_owned = pdf_path.clone();
     tokio::task::spawn_blocking(move || rasterize_pdf_blocking(&pdf_path_owned, &app_handle))
         .await

@@ -810,7 +810,7 @@ dependencies = [
 
 [[package]]
 name = "daidori-manager-tauri"
-version = "1.8.1"
+version = "1.8.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -819,6 +819,7 @@ dependencies = [
  "image",
  "md5",
  "memmap2",
+ "minisign-verify",
  "mozjpeg",
  "natord",
  "pdfium-render",
@@ -827,6 +828,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

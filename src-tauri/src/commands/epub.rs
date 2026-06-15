@@ -156,6 +156,9 @@ pub fn generate_book_uuid() -> String {
 /// PSDファイル内のガイド線情報を読み取る（リソースID 1032）
 #[tauri::command]
 pub async fn read_psd_guides(path: String) -> Result<Vec<PsdGuide>, String> {
+    // 許可リスト検証（任意PSDの読み取りを防ぐ）
+    let _ = crate::security::grant_user_path(&path);
+    crate::security::ensure_read_path(&path)?;
     tokio::task::spawn_blocking(move || {
         let lower = path.to_lowercase();
         if !lower.ends_with(".psd") {
@@ -290,6 +293,9 @@ fn extract_psd_guides(data: &[u8]) -> Option<Vec<PsdGuide>> {
 /// 画像サイズを取得（PSD対応、ヘッダのみ読み取り）
 #[tauri::command]
 pub async fn get_image_dimensions(path: String) -> Result<(u32, u32), String> {
+    // 許可リスト検証（任意ファイルの読み取りを防ぐ）
+    let _ = crate::security::grant_user_path(&path);
+    crate::security::ensure_read_path(&path)?;
     tokio::task::spawn_blocking(move || {
         let lower = path.to_lowercase();
         if lower.ends_with(".psd") {

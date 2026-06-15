@@ -9,16 +9,23 @@ use std::path::Path;
 /// 保存ダイアログ表示前に用意するために使う。
 #[tauri::command]
 pub fn ensure_dir(path: String) -> Result<(), String> {
+    // ダイアログ由来の保存先を許可リストへ → 書込検証（保護パス/ドライブ直下は拒否）
+    if let Some(parent) = Path::new(&path).parent() {
+        let _ = crate::security::grant_user_path(parent);
+    }
+    let path = crate::security::ensure_write_path(&path)?;
     fs::create_dir_all(&path).map_err(|e| format!("フォルダ作成エラー: {}", e))
 }
 
 #[tauri::command]
 pub fn get_folder_contents(folder_path: String) -> Result<Vec<FileInfo>, String> {
+    // ダイアログ/D&D で選んだフォルダを許可リストへ → 列挙検証（保護パスは拒否）
+    let _ = crate::security::grant_user_path(&folder_path);
+    // 検証は正規化パスで（許可リスト/保護パス判定）。ただし戻り値のファイルパスは「元パス」基準で組み立てる。
+    // fs::canonicalize は Windows で \\?\ 前置を付けるため、それで列挙するとフロントの
+    // imagePaths.includes(f.path) 比較（D&Dイベントの素のパスと突合）が外れ、ファイルD&Dが無反応になる。
+    crate::security::ensure_directory_read_path(&folder_path)?;
     let path = Path::new(&folder_path);
-
-    if !path.exists() || !path.is_dir() {
-        return Err("無効なフォルダパス".to_string());
-    }
 
     let mut files: Vec<FileInfo> = Vec::new();
 

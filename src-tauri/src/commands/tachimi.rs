@@ -130,7 +130,10 @@ fn tachimi_supports_pdf_job(p: &Path) -> bool {
         return false;
     }
 
-    let check_dir = std::env::temp_dir().join("daidori_tachimi_capability_check");
+    // ジョブごとに一意なフォルダ（固定名による衝突/予測・並行実行干渉を回避）。
+    let check_dir = std::env::temp_dir()
+        .join("daidori_tachimi_capability_check")
+        .join(uuid::Uuid::new_v4().simple().to_string());
     let _ = fs::remove_dir_all(&check_dir);
     if fs::create_dir_all(&check_dir).is_err() {
         return false;
@@ -233,19 +236,6 @@ pub async fn detect_tachimi_exe(hint: Option<String>) -> Option<String> {
         }
     }
     None
-}
-
-/// 連番プレフィックスを安全な文字列で組み立てる（4桁ゼロ埋め）。
-fn cleanup_old_staging(staging_dir: &Path) {
-    if staging_dir.exists() {
-        if let Err(e) = fs::remove_dir_all(staging_dir) {
-            eprintln!(
-                "Tachimi staging - failed to clean old staging dir {}: {}",
-                staging_dir.display(),
-                e
-            );
-        }
-    }
 }
 
 fn sanitize_filename(name: &str) -> String {
@@ -604,8 +594,18 @@ fn generate_tachimi_merged_pdf_job(
         false,
     );
 
-    let staging_root = std::env::temp_dir().join("daidori_tachimi_pdf_jobs");
-    cleanup_old_staging(&staging_root);
+    // ジョブごとに一意な staging（固定名の衝突/予測・並行実行干渉を回避）。
+    // 終了時に確実に削除するため RAII ガードを使う（全 return 経路で発火）。
+    struct StagingGuard(PathBuf);
+    impl Drop for StagingGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let staging_root = std::env::temp_dir()
+        .join("daidori_tachimi_pdf_jobs")
+        .join(uuid::Uuid::new_v4().simple().to_string());
+    let _staging_guard = StagingGuard(staging_root.clone());
     fs::create_dir_all(&staging_root)
         .map_err(|e| format!("PDFジョブ用一時フォルダを作成できません: {}", e))?;
     let merged_dir = staging_root.join("merged_pdf");

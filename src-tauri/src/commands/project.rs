@@ -284,6 +284,11 @@ pub async fn save_project(
 ) -> Result<ProjectSaveResult, String> {
     let (project_dir, project_file) =
         project_bundle_paths(&file_path, allow_overwrite.unwrap_or(false))?;
+    // 保存先（ユーザーが保存ダイアログで選んだ場所）を許可リストへ → 書込検証
+    if let Some(parent) = project_dir.parent() {
+        let _ = crate::security::grant_user_path(parent);
+    }
+    crate::security::ensure_write_path(&project_dir)?;
     fs::create_dir_all(&project_dir)
         .map_err(|e| format!("プロジェクトフォルダ作成エラー: {}", e))?;
 
@@ -301,13 +306,14 @@ pub async fn save_project(
 // プロジェクトを読み込み
 #[tauri::command]
 pub async fn load_project(file_path: String) -> Result<ProjectFile, String> {
-    let path = Path::new(&file_path);
-
-    if !path.exists() {
-        return Err("ファイルが見つかりません".to_string());
+    // ユーザーがダイアログ/.daiw関連付けで選んだファイル＋そのプロジェクトフォルダを許可リストへ
+    let _ = crate::security::grant_user_path(&file_path);
+    if let Some(parent) = Path::new(&file_path).parent() {
+        let _ = crate::security::grant_user_path(parent);
     }
+    let path = crate::security::ensure_read_path(&file_path)?;
 
-    let content = fs::read_to_string(path).map_err(|e| format!("ファイル読み込みエラー: {}", e))?;
+    let content = fs::read_to_string(&path).map_err(|e| format!("ファイル読み込みエラー: {}", e))?;
     let mut project: ProjectFile =
         serde_json::from_str(&content).map_err(|e| format!("JSON解析エラー: {}", e))?;
     let current_base = path.parent().unwrap_or_else(|| Path::new("")).to_path_buf();

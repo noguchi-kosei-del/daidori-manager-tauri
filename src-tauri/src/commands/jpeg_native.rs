@@ -82,6 +82,16 @@ pub async fn run_native_jpeg_convert(
     config: NativeJpegConfig,
     output_dir: String,
 ) -> Result<NativeJpegResponse, String> {
+    // セキュリティ: 出力先・全入力パスを許可リストゲートに通す（保護領域/トラバーサルを拒否）。
+    let _ = crate::security::grant_user_path(&output_dir);
+    crate::security::ensure_write_path(&output_dir)?;
+    for f in &config.files {
+        let _ = crate::security::grant_user_path(&f.path);
+        if Path::new(&f.path).exists() {
+            crate::security::ensure_read_path(&f.path)?;
+        }
+    }
+
     // 出力ディレクトリ: 既存の場合は連番で新規作成
     let final_output_dir = create_unique_output_dir(&output_dir, "Native JPEG")?;
     let out_base = PathBuf::from(&final_output_dir);

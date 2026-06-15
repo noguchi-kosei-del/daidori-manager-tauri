@@ -100,6 +100,12 @@ pub async fn export_pages(
     jpg_quality: Option<u8>,
     blank_format: Option<String>,
 ) -> Result<usize, String> {
+    // 出力先（ダイアログ由来）を許可リストへ → 書込検証（任意の場所への書き出しを防ぐ）
+    if let Some(parent) = std::path::Path::new(&output_path).parent() {
+        let _ = crate::security::grant_user_path(parent);
+    }
+    crate::security::ensure_write_path(&output_path)?;
+
     let should_move = move_files.unwrap_or(false);
     let should_convert = convert_to_jpg.unwrap_or(false);
     let quality = jpg_quality.unwrap_or(95);

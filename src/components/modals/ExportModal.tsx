@@ -118,10 +118,6 @@ export interface ExportOptions {
   tiffResizeEnabled: boolean;
   tiffTargetWidth: number;
   tiffTargetHeight: number;
-  // TIFF変換時のぼかし（ガウス）
-  tiffBlurEnabled: boolean;
-  tiffBlurRadius: number;
-  tiffBlurBackgroundOnly: boolean; // true: テキスト/背景を分離し背景のみぼかす
   // JPEG変換時のぼかし（ガウス・Photoshop不要のネイティブ処理）
   jpegBlurEnabled: boolean;
   jpegBlurRadius: number;
@@ -169,12 +165,9 @@ export function ExportModal({
   const tabActionName = useBleedStore((s) => s.actionName);
   // TIFF変換時のサイズ統一（指定ピクセルへリサイズ）
   const [tiffResizeEnabled, setTiffResizeEnabled] = useState(false);
-  const [tiffWidthText, setTiffWidthText] = useState('2250');
-  const [tiffHeightText, setTiffHeightText] = useState('3000');
+  const [tiffWidthText, setTiffWidthText] = useState('1280');
+  const [tiffHeightText, setTiffHeightText] = useState('1818');
   // TIFF変換時のぼかし（背景ぼかし）
-  const [tiffBlurEnabled, setTiffBlurEnabled] = useState(false);
-  const [tiffBlurRadiusText, setTiffBlurRadiusText] = useState('10');
-  const [tiffBlurBackgroundOnly, setTiffBlurBackgroundOnly] = useState(true);
   // JPEG変換時のぼかし（Photoshop不要のネイティブ・ガウス）
   const [jpegBlurEnabled, setJpegBlurEnabled] = useState(false);
   const [jpegBlurRadiusText, setJpegBlurRadiusText] = useState('2.5');
@@ -194,9 +187,6 @@ export function ExportModal({
         if (typeof obj.tiffResizeEnabled === 'boolean') setTiffResizeEnabled(obj.tiffResizeEnabled);
         if (typeof obj.tiffWidthText === 'string') setTiffWidthText(obj.tiffWidthText);
         if (typeof obj.tiffHeightText === 'string') setTiffHeightText(obj.tiffHeightText);
-        if (typeof obj.tiffBlurEnabled === 'boolean') setTiffBlurEnabled(obj.tiffBlurEnabled);
-        if (typeof obj.tiffBlurRadiusText === 'string') setTiffBlurRadiusText(obj.tiffBlurRadiusText);
-        if (typeof obj.tiffBlurBackgroundOnly === 'boolean') setTiffBlurBackgroundOnly(obj.tiffBlurBackgroundOnly);
         if (typeof obj.jpegBlurEnabled === 'boolean') setJpegBlurEnabled(obj.jpegBlurEnabled);
         if (typeof obj.jpegBlurRadiusText === 'string') setJpegBlurRadiusText(obj.jpegBlurRadiusText);
         if (typeof obj.jpegBlurBackgroundOnly === 'boolean') setJpegBlurBackgroundOnly(obj.jpegBlurBackgroundOnly);
@@ -298,17 +288,16 @@ export function ExportModal({
     if (!outputPath) return;
     // アクション設定を永続化（次回のために記憶）
     try {
-      localStorage.setItem('daidori_tiff_action', JSON.stringify({ runAction, tiffResizeEnabled, tiffWidthText, tiffHeightText, tiffBlurEnabled, tiffBlurRadiusText, tiffBlurBackgroundOnly, jpegBlurEnabled, jpegBlurRadiusText, jpegBlurBackgroundOnly, stripActionSaveClose }));
+      localStorage.setItem('daidori_tiff_action', JSON.stringify({ runAction, tiffResizeEnabled, tiffWidthText, tiffHeightText, jpegBlurEnabled, jpegBlurRadiusText, jpegBlurBackgroundOnly, stripActionSaveClose }));
     } catch {
       // 保存失敗は無視
     }
     const tiffTargetWidth = Math.max(0, parseInt(tiffWidthText, 10) || 0);
     const tiffTargetHeight = Math.max(0, parseInt(tiffHeightText, 10) || 0);
-    const tiffBlurRadius = Math.max(0, parseFloat(tiffBlurRadiusText) || 0);
     const jpegBlurRadius = Math.max(0, parseFloat(jpegBlurRadiusText) || 0);
     setIsExporting(true);
     // アクションの .atn / アクション名は「断ち切り」タブの設定を参照する
-    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, resizeMode, resizePercent, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode, runAction, actionSetPath: tabActionSetPath, actionName: tabActionName.trim(), stripActionSaveClose, tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight, tiffBlurEnabled, tiffBlurRadius, tiffBlurBackgroundOnly, jpegBlurEnabled, jpegBlurRadius, jpegBlurBackgroundOnly });
+    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, resizeMode, resizePercent, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode, runAction, actionSetPath: tabActionSetPath, actionName: tabActionName.trim(), stripActionSaveClose, tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight, jpegBlurEnabled, jpegBlurRadius, jpegBlurBackgroundOnly });
     setIsExporting(false);
     if (!embedded) onClose();
   };
@@ -407,7 +396,7 @@ export function ExportModal({
                   >
                     <option value="none">なし（原寸）</option>
                     <option value="percent">%指定</option>
-                    <option value="fixed">デフォルト（2250×3000）</option>
+                    <option value="fixed">デフォルト（1280×1818）</option>
                   </select>
                   {resizeMode === 'percent' && (
                     <div className="resize-percent-row">
@@ -526,7 +515,7 @@ export function ExportModal({
                           pattern="[0-9]*"
                           value={tiffWidthText}
                           onChange={(e) => setTiffWidthText(e.target.value.replace(/[^0-9]/g, ''))}
-                          placeholder="例: 2250"
+                          placeholder="例: 1280"
                         />
                       </div>
                       <div className="form-group">
@@ -537,47 +526,12 @@ export function ExportModal({
                           pattern="[0-9]*"
                           value={tiffHeightText}
                           onChange={(e) => setTiffHeightText(e.target.value.replace(/[^0-9]/g, ''))}
-                          placeholder="例: 3000"
+                          placeholder="例: 1818"
                         />
                       </div>
                     </div>
                     <div className="tiff-note">
                       ※ 全ページを指定した幅×高さ(px)に拡大縮小して揃えます（縦横比が異なるページは指定寸法に合わせて変形します）。
-                    </div>
-                  </div>
-                )}
-                <label className="checkbox-label" style={{ marginTop: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={tiffBlurEnabled}
-                    onChange={(e) => setTiffBlurEnabled(e.target.checked)}
-                  />
-                  ぼかし（ガウス）を適用
-                  <span className="option-note"> - 背景をぼかす加工をアプリが自動実行</span>
-                </label>
-                {tiffBlurEnabled && (
-                  <div className="action-settings">
-                    <div className="form-group">
-                      <label>ぼかし半径 (px)</label>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={tiffBlurRadiusText}
-                        onChange={(e) => setTiffBlurRadiusText(e.target.value.replace(/[^0-9.]/g, ''))}
-                        placeholder="例: 10"
-                      />
-                    </div>
-                    <label className="checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={tiffBlurBackgroundOnly}
-                        onChange={(e) => setTiffBlurBackgroundOnly(e.target.checked)}
-                      />
-                      テキストを保護（背景のみぼかす）
-                      <span className="option-note"> - テキストグループ（#text#/写植 等）を分離して背景だけぼかす</span>
-                    </label>
-                    <div className="tiff-note">
-                      ※ ぼかしは原寸（リサイズ前）で適用されます。半径はアクションで使っていた値に合わせて調整してください。
                     </div>
                   </div>
                 )}

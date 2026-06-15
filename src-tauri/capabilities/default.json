@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "Capability for the main window（最小権限：生 plugin-fs は付与しない。ファイル操作は全てカスタムコマンド経由）",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -15,20 +15,6 @@
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",
-    "fs:default",
-    "fs:allow-read-file",
-    "fs:allow-write-file",
-    "fs:allow-exists",
-    "fs:allow-mkdir",
-    "fs:allow-copy-file",
-    "fs:allow-read-dir",
-    {
-      "identifier": "fs:scope",
-      "allow": ["**"]
-    },
-    "updater:default",
-    "updater:allow-check",
-    "updater:allow-download-and-install",
     "core:app:allow-version",
     "process:default",
     "process:allow-restart"

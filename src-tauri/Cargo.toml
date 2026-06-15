@@ -1,6 +1,6 @@
 [package]
 name = "daidori-manager-tauri"
-version = "1.8.1"
+version = "1.8.2"
 description = "漫画の台割管理・入稿データ生成ツール"
 authors = ["you"]
 edition = "2021"
@@ -16,9 +16,10 @@ doctest = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+sha2 = "0.10"
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "devtools"] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
@@ -51,6 +52,10 @@ tokio = { version = "1", features = ["full"] }
 
 # 並列処理
 rayon = "1.10"
+
+# Security（改ざん検知 / 脱github updater署名検証）
+sha2 = "0.10"
+minisign-verify = "0.2"
 
 # エラーハンドリング
 thiserror = "1"

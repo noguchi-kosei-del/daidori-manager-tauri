@@ -30,6 +30,10 @@ pub async fn generate_thumbnail(
     cache: State<'_, ThumbnailCache>,
     app_state: State<'_, AppState>,
 ) -> Result<ThumbnailResult, String> {
+    // 許可リスト検証（任意ファイルのサムネイル化＝読み取りを防ぐ）
+    let _ = crate::security::grant_user_path(&file_path);
+    crate::security::ensure_read_path(&file_path)?;
+
     let cache_dir = cache.cache_dir.clone();
 
     // キャッシュキーを生成

@@ -166,6 +166,13 @@ pub fn create_unique_output_dir(output_dir: &str, log_prefix: &str) -> Result<St
 pub fn copy_script_with_bom(script_path: &str, temp_script_name: &str) -> Result<PathBuf, String> {
     use std::io::Write;
 
+    // ★ 改ざん検知: Photoshop へ渡す前に同梱 JSX のハッシュを検証（差し替えJSXの実行を拒否）
+    let script_name = std::path::Path::new(script_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "スクリプト名を取得できません".to_string())?;
+    crate::integrity::verify_script(script_name, std::path::Path::new(script_path))?;
+
     let temp_dir = std::env::temp_dir();
     let temp_script = temp_dir.join(temp_script_name);
 

@@ -69,6 +69,10 @@ export function buildProcessOptions(
     blurBackgroundOnly: regionBlur > 0 ? true : !!options.jpegBlurBackgroundOnly,
     blurSkipIfColor: false,
   };
+  // JPEG「デフォルト(fixed)」リサイズの目標寸法（格納サイズ 1280×1818）に揃える。
+  // fixed のときのみ Rust 側が resizeTargetW/H を参照（none/percent では無視）。
+  const fixedResize =
+    options.resizeMode === 'fixed' ? { resizeTargetW: 1280, resizeTargetH: 1818 } : {};
   if (!region || region.tachikiriType === 'none') {
     return {
       cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0,
@@ -82,6 +86,7 @@ export function buildProcessOptions(
       resizePercent: options.resizePercent,
       jpegQuality: options.jpgQuality,
       ...blurFields,
+      ...fixedResize,
     };
   }
   return {
@@ -99,6 +104,7 @@ export function buildProcessOptions(
     resizePercent: options.resizePercent,
     jpegQuality: options.jpgQuality,
     ...blurFields,
+    ...fixedResize,
   };
 }
 
@@ -165,7 +171,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
   const [exportResultDialog, setExportResultDialog] = useState<ExportResultDialog>({ show: false, title: '', message: '' });
 
   const handleExport = useCallback(async (options: ExportOptions) => {
-    const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, renameMode, startNumber, digits, prefix, perChapterSettings, bleedSettings, runAction, actionSetPath, actionName, stripActionSaveClose, tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight, tiffBlurEnabled, tiffBlurRadius, tiffBlurBackgroundOnly } = options;
+    const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, renameMode, startNumber, digits, prefix, perChapterSettings, bleedSettings, runAction, actionSetPath, actionName, stripActionSaveClose, tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight } = options;
 
     // TIFF変換モードの場合
     if (convertToTiff) {
@@ -232,24 +238,22 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
 
       try {
         const useTiffResize = !!(tiffResizeEnabled && tiffTargetWidth > 0 && tiffTargetHeight > 0);
-        const useTiffBlur = !!(tiffBlurEnabled && tiffBlurRadius > 0);
-        // 断ち切りタブ(アクション/JSON)由来のぼかしを各ページに適用するための実効ぼかし半径。
-        // カラー原稿(RGB/CMYK)はぼかし0。グレースケール原稿はPhotoshopがグレースケール・600ppiを維持して
-        // 背景ガウスぼかしを適用する。region由来を優先し、無ければ手動(tiffBlur)設定。
+        // 各ページの実効ぼかし半径は「断ち切りタブ(アクション/JSON)由来(region.blurRadius)」のみ。
+        // カラー原稿(RGB/CMYK)はぼかし0。グレースケール原稿はPhotoshopが背景ガウスぼかしを適用する。
+        // （旧: TIFFタブ独自のぼかし設定は断ち切りタブと重複のため撤去。）
         const effTiffBlurFor = (p: { chapterType: string; chapterId: string; colorMode?: string }) => {
           if (p.colorMode === 'RGB' || p.colorMode === 'CMYK') return 0; // カラーはぼかし0
           const region = resolveBleedRegion(bleedSettings, p.chapterType, p.chapterId);
-          const regionBlur = region?.blurRadius ?? 0;
-          return regionBlur > 0 ? regionBlur : (useTiffBlur ? tiffBlurRadius : 0);
+          return region?.blurRadius ?? 0;
         };
         const anyTiffBlur = convertiblePages.some((p) => effTiffBlurFor(p) > 0);
         const config = {
           globalSettings: {
             flattenImage: true,
             // ぼかし「背景のみ」: テキスト/背景を分離して背景だけぼかす（テキストはシャープ維持）。
-            // 手動ぼかし(背景のみ) もしくは 断ち切りタブ由来のぼかしがあるとき有効化。
-            separateTextAndBackground: (useTiffBlur && tiffBlurBackgroundOnly) || anyTiffBlur,
-            reorganizeText: (useTiffBlur && tiffBlurBackgroundOnly) || anyTiffBlur,
+            // 断ち切りタブ由来のぼかしがあるとき有効化。
+            separateTextAndBackground: anyTiffBlur,
+            reorganizeText: anyTiffBlur,
             // サイズ統一: 指定ピクセルへ自動リサイズ（JSX step 13 が targetWidth/targetHeight を見て実行）
             ...(useTiffResize ? { targetWidth: tiffTargetWidth, targetHeight: tiffTargetHeight } : {}),
             // 処理の途中で実行するPhotoshopアクション（ぼかし・切り抜き等の加工。リサイズより前に実行）

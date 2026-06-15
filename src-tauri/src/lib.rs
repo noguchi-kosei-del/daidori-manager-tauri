@@ -4,10 +4,22 @@ pub mod commands;
 mod constants;
 pub mod epub;
 mod image_utils;
+mod integrity;
 mod native_jpeg;
+mod security;
 mod state;
 mod thumbnail;
 pub mod types;
+mod updater_local;
+
+/// デバッグ専用ログ。release では出力しない（本番でのパス露出防止）。
+#[macro_export]
+macro_rules! dlog {
+    ($($arg:tt)*) => {{
+        #[cfg(debug_assertions)] eprintln!($($arg)*);
+        #[cfg(not(debug_assertions))] { let _ = format_args!($($arg)*); }
+    }};
+}
 
 use cache::{ThumbnailCache, ThumbnailMemoryCache};
 use constants::MEMORY_CACHE_MAX_SIZE;
@@ -97,14 +109,30 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .on_window_event(|_window, event| {
+            // 実D&D で投入されたパスを Rust が直接許可リストへ（OS由来＝XSS偽装不可・保護パスは拒否）
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                for p in paths {
+                    let _ = security::grant_user_path(p);
+                }
+            }
+        })
         .manage(ThumbnailCache::new())
         .manage(AppState {
             memory_cache: Mutex::new(ThumbnailMemoryCache::new(MEMORY_CACHE_MAX_SIZE)),
         })
         .manage(PendingOpen(Mutex::new(None)))
         .setup(|app| {
+            // セキュリティ初期化（許可ルート・temp ACL）
+            security::init();
+            security::harden_temp_dir();
+
             // コールドスタート: 起動引数から .daiw を拾って保持し、
             // フロント準備後に take_pending_open_path で取得・読込する。
+            // 起動 .daiw のフォルダを許可リストへ（プロジェクトフォルダ内のリンク画像参照のため）
+            if let Some(p) = find_daiw_path(&std::env::args().collect::<Vec<_>>()) {
+                let _ = security::grant_user_path(&p);
+            }
             if let Some(path) = find_daiw_path(&std::env::args().collect::<Vec<_>>()) {
                 if let Some(state) = app.try_state::<PendingOpen>() {
                     *state.0.lock().unwrap() = Some(path);
@@ -168,6 +196,9 @@ pub fn run() {
             detect_tachimi_exe,
             generate_tachimi_chapter_pdfs,
             rasterize_pdf,
+            security::register_paths,
+            updater_local::check_local_update,
+            updater_local::apply_local_update,
         ])
         .run(tauri::generate_context!())
     {

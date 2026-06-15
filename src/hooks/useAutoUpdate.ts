@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
-import { check, type Update, type DownloadEvent } from '@tauri-apps/plugin-updater';
-import { relaunch } from '@tauri-apps/plugin-process';
+import { invoke } from '@tauri-apps/api/core';
+// 脱github: 自動更新は G:更新置き場を minisign 検証する Rust コマンド(check_local_update/apply_local_update)を使う
+type LocalUpdateInfo = { version: string; file_name: string; setup_path: string };
 
 export type UpdateState =
   | 'idle'
@@ -44,20 +45,20 @@ const INITIAL_STATE: AutoUpdateState = {
 
 export function useAutoUpdate(): UseAutoUpdateReturn {
   const [state, setState] = useState<AutoUpdateState>(INITIAL_STATE);
-  const pendingUpdateRef = useRef<Update | null>(null);
+  const pendingUpdateRef = useRef<LocalUpdateInfo | null>(null);
 
   const checkForUpdate = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent ?? false;
     setState({ ...INITIAL_STATE, state: 'checking', silent });
 
     try {
-      const update = await check();
+      const update = await invoke<LocalUpdateInfo | null>('check_local_update');
 
       if (update) {
         pendingUpdateRef.current = update;
         setState({
           state: 'available',
-          info: { version: update.version, body: update.body ?? '' },
+          info: { version: update.version, body: '' },
           downloaded: 0,
           contentLength: 0,
           error: null,
@@ -108,51 +109,10 @@ export function useAutoUpdate(): UseAutoUpdateReturn {
     }));
 
     try {
-      let totalContentLength = 0;
-      let totalDownloaded = 0;
-
-      await update.downloadAndInstall((event: DownloadEvent) => {
-        if (event.event === 'Started') {
-          totalContentLength = event.data.contentLength ?? 0;
-          totalDownloaded = 0;
-          setState((prev) => ({
-            ...prev,
-            state: 'downloading',
-            downloaded: 0,
-            contentLength: totalContentLength,
-          }));
-        } else if (event.event === 'Progress') {
-          totalDownloaded += event.data.chunkLength;
-          setState((prev) => ({
-            ...prev,
-            state: 'downloading',
-            downloaded: totalDownloaded,
-            contentLength: totalContentLength,
-          }));
-        } else if (event.event === 'Finished') {
-          setState((prev) => ({
-            ...prev,
-            state: 'installing',
-            downloaded: totalContentLength,
-            contentLength: totalContentLength,
-          }));
-        }
-      });
-
+      setState((prev) => ({ ...prev, state: 'installing' }));
+      // 脱github: G:更新置き場のsetup.exeを再検証→サイレント更新(/S /R /UPDATE)→アプリ自動終了・再起動
+      await invoke('apply_local_update', { setupPath: update.setup_path });
       setState((prev) => ({ ...prev, state: 'done' }));
-
-      setTimeout(async () => {
-        try {
-          await relaunch();
-        } catch (err) {
-          console.error('[useAutoUpdate] relaunch failed:', err);
-          setState((prev) => ({
-            ...prev,
-            state: 'error',
-            error: err instanceof Error ? err.message : String(err),
-          }));
-        }
-      }, 1500);
     } catch (err) {
       console.error('[useAutoUpdate] install failed:', err);
       setState((prev) => ({

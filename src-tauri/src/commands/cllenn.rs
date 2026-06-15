@@ -113,6 +113,9 @@ pub struct CllennRange {
 /// 指定した作品 JSON の `presetData.selectionRanges[]` を読み取って返す。
 #[tauri::command]
 pub fn read_cllenn_ranges(path: String) -> Result<Vec<CllennRange>, String> {
+    // 許可リスト検証（任意JSONの読み取りを防ぐ）
+    let _ = crate::security::grant_user_path(&path);
+    let path = crate::security::ensure_read_path(&path)?;
     let text = fs::read_to_string(&path).map_err(|e| format!("JSON読み込みエラー: {}", e))?;
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("JSON解析エラー: {}", e))?;

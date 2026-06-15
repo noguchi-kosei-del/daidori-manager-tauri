@@ -77,8 +77,15 @@ fn resize_dims(w: u32, h: u32, options: &ProcessOptions) -> Option<(u32, u32)> {
             }
         }
         "fixed" => {
-            let scale =
-                (TARGET_RESIZE_WIDTH as f32 / w as f32).min(TARGET_RESIZE_HEIGHT as f32 / h as f32);
+            // 明示の目標寸法(resize_target_w/h)があればその枠を使う（JPEG既定=1280×1818 等）。
+            // 未指定(0)のときは従来の TARGET_RESIZE_WIDTH×HEIGHT (2250×3000) にフォールバック。
+            // ※ PDF生成は fit_within_pdf_bbox を直接使うため、ここの変更の影響を受けない。
+            let (tw, th) = if options.resize_target_w > 0 && options.resize_target_h > 0 {
+                (options.resize_target_w as f32, options.resize_target_h as f32)
+            } else {
+                (TARGET_RESIZE_WIDTH as f32, TARGET_RESIZE_HEIGHT as f32)
+            };
+            let scale = (tw / w as f32).min(th / h as f32);
             let nw = (w as f32 * scale).round() as u32;
             let nh = (h as f32 * scale).round() as u32;
             if nw == 0 || nh == 0 {

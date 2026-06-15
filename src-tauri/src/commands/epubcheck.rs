@@ -12,6 +12,9 @@ use zip::ZipArchive;
 const EPUBCHECK_VERSION: &str = "5.3.0";
 const EPUBCHECK_DOWNLOAD_URL: &str =
     "https://github.com/w3c/epubcheck/releases/download/v5.3.0/epubcheck-5.3.0.zip";
+/// epubcheck-5.3.0.zip の SHA-256（サプライチェーン改ざん検知用ピン）。
+/// 取得バイト列がこのハッシュと一致しなければ展開せず中止する。
+const EPUBCHECK_SHA256: &str = "6c07e68584b2e2ce2f89fe06e1246dfead3eb36b46b340e7d93524f29dcff6c5";
 const JAVA_VERSION_DIR: &str = "temurin-21";
 const JAVA_DOWNLOAD_URL: &str =
     "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jre/hotspot/normal/eclipse";
@@ -95,6 +98,9 @@ pub async fn validate_epub_with_epubcheck(
     app_handle: AppHandle,
     epub_path: String,
 ) -> Result<EpubCheckResult, String> {
+    // 許可リスト検証（任意EPUBの検証＝読み取りを防ぐ）
+    let _ = crate::security::grant_user_path(&epub_path);
+    crate::security::ensure_read_path(&epub_path)?;
     if !Path::new(&epub_path).exists() {
         return Err(format!("EPUBファイルが見つかりません: {}", epub_path));
     }
@@ -165,11 +171,13 @@ fn ensure_managed_tools(app_handle: &AppHandle) -> Result<ManagedTools, String> 
     let jar_path = epubcheck_dir.join("epubcheck.jar");
 
     if !java_path.exists() {
-        download_and_extract_zip(JAVA_DOWNLOAD_URL, &java_dir, true)
+        // Java は adoptium の "latest" URL（版が動く）ためハッシュ固定は不可。
+        download_and_extract_zip(JAVA_DOWNLOAD_URL, &java_dir, true, None)
             .map_err(|e| format!("Javaランタイムの準備に失敗しました: {}", e))?;
     }
     if !jar_path.exists() {
-        download_and_extract_zip(EPUBCHECK_DOWNLOAD_URL, &epubcheck_dir, true)
+        // epubcheck は固定版のため SHA-256 をピンして改ざんを検知。
+        download_and_extract_zip(EPUBCHECK_DOWNLOAD_URL, &epubcheck_dir, true, Some(EPUBCHECK_SHA256))
             .map_err(|e| format!("EPUBCheckの準備に失敗しました: {}", e))?;
     }
 
@@ -190,6 +198,7 @@ fn download_and_extract_zip(
     url: &str,
     destination: &Path,
     strip_single_root: bool,
+    expected_sha256: Option<&str>,
 ) -> Result<(), String> {
     let temp_destination = destination.with_extension("download");
     if temp_destination.exists() {
@@ -201,6 +210,22 @@ fn download_and_extract_zip(
         .and_then(|response| response.error_for_status())
         .map_err(|e| e.to_string())?;
     let bytes = response.bytes().map_err(|e| e.to_string())?;
+
+    // サプライチェーン対策: 期待ハッシュが指定されていれば展開前に SHA-256 照合（不一致は中止）。
+    if let Some(expected) = expected_sha256 {
+        use sha2::{Digest, Sha256};
+        let actual: String = Sha256::digest(bytes.as_ref())
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
+        if !actual.eq_ignore_ascii_case(expected) {
+            let _ = fs::remove_dir_all(&temp_destination);
+            return Err(format!(
+                "ダウンロードしたファイルの整合性検証に失敗しました（SHA-256不一致）。期待={} 実際={}",
+                expected, actual
+            ));
+        }
+    }
 
     extract_zip_bytes(bytes.as_ref(), &temp_destination, strip_single_root)?;
 

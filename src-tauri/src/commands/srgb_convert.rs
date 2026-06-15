@@ -143,6 +143,22 @@ pub async fn run_photoshop_srgb_convert(
     config: SrgbConvertConfig,
     output_dir: String,
 ) -> Result<SrgbConvertResponse, String> {
+    // セキュリティ: 出力先・全入力・アクション(.atn)パスを許可リストゲート（保護領域/トラバーサル拒否）。
+    let _ = crate::security::grant_user_path(&output_dir);
+    crate::security::ensure_write_path(&output_dir)?;
+    for f in &config.files {
+        let _ = crate::security::grant_user_path(&f.path);
+        if std::path::Path::new(&f.path).exists() {
+            crate::security::ensure_read_path(&f.path)?;
+        }
+    }
+    if let Some(atn) = config.global_settings.action_set_path.as_deref() {
+        if !atn.is_empty() && std::path::Path::new(atn).exists() {
+            let _ = crate::security::grant_user_path(atn);
+            crate::security::ensure_read_path(atn)?;
+        }
+    }
+
     let ps_path = find_photoshop_path().ok_or_else(|| {
         "Photoshopが見つかりません。Adobe Photoshopをインストールしてください。".to_string()
     })?;
