@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, type ReactNode } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef, type ReactNode, type CSSProperties } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { useStore } from '../../store';
 import { useBleedStore } from '../../bleedStore';
@@ -46,6 +46,20 @@ function pickRepresentative(pages: Page[]): Page | null {
   return pages.find((p) => p.fileType === 'psd') ?? pages[0];
 }
 
+// 区切り（対象）の全ページのカラー情報から、ぼかしの初期ON/OFFを決める。
+// カラー(RGB/CMYK)主体＝なし(false) / モノクロ(Grayscale/Bitmap)主体＝あり(true)。
+// カラー情報が無い場合は従来どおり あり(true)。
+function sectionDefaultBlurEnabled(pages: Page[]): boolean {
+  let color = 0;
+  let mono = 0;
+  for (const p of pages) {
+    const m = p.imageColorMode;
+    if (m === 'RGB' || m === 'CMYK') color++;
+    else if (m === 'Grayscale' || m === 'Bitmap') mono++;
+  }
+  return color > mono ? false : true;
+}
+
 interface BleedTabProps {
   isInfoSidebarCollapsed: boolean;
   setIsInfoSidebarCollapsed: (collapsed: boolean) => void;
@@ -81,6 +95,12 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
   } | null>(null);
   // 範囲設定エディタの開閉（閉じる時は退場アニメ→約300ms後に editing をクリア）
   const [editorOpen, setEditorOpen] = useState(false);
+  // 一括処理の選択モード（本文カードを直接クリックして最初→最後を選ぶ）。
+  // 「最後」を押すと範囲を“仮適用”して続けて次の一括設定が始まる（連続）。最後に「適用」で全範囲を確定。
+  // 最初=設定済みのみ／最後=任意カード可。
+  const [bulkSelecting, setBulkSelecting] = useState(false);
+  const [bulkRanges, setBulkRanges] = useState<{ startId: string; endId: string }[]>([]);
+  const [bulkPendingStartId, setBulkPendingStartId] = useState('');
 
   // 設定→上へスライドして開く / キャンセル等→下へスライドして閉じる。
   // editing を即 null にせず、退場アニメーション後にクリアする。
@@ -182,6 +202,85 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
   // null=未設定 / 非null（'none'含む）=設定済み
   const configuredCount = targets.filter((t) => getTargetRegion(t) != null).length;
 
+  // 「一括処理」: 編集済みの本文カードから「最初（基準）」をクリック→「最後」を任意カードでクリック、を
+  // 繰り返して複数の範囲を作り、各範囲へ「最初」の設定をコピーする（本文ごとモード用）。
+  const chapterTargets = useMemo(() => targets.filter((t) => t.kind === 'chapter' && t.chapterId), [targets]);
+  const canOpenBulk = mode === 'per-chapter' && chapterTargets.length >= 2;
+  const bulkApplyTitle = mode !== 'per-chapter'
+    ? '「本文ごと」モードで使えます（最初を基準に範囲へコピー）'
+    : chapterTargets.length < 2
+      ? '本文が2つ以上あるときに使えます'
+      : '編集済みの「最初」→「最後」を選び（複数可）、最初の設定を各範囲へコピーします';
+  // 各範囲の chapterTargets 内インデックス境界（ハイライト用）
+  const bulkRangeBounds = useMemo(() => bulkRanges.map((r) => {
+    const sIdx = chapterTargets.findIndex((t) => t.chapterId === r.startId);
+    const eIdx = chapterTargets.findIndex((t) => t.chapterId === r.endId);
+    return { startId: r.startId, endId: r.endId, lo: Math.min(sIdx, eIdx), hi: Math.max(sIdx, eIdx) };
+  }), [bulkRanges, chapterTargets]);
+  const bulkPendingLabel = bulkPendingStartId
+    ? (chapterTargets.find((t) => t.chapterId === bulkPendingStartId)?.label ?? '')
+    : '';
+
+  const toggleBulkSelecting = useCallback(() => {
+    setBulkSelecting((v) => {
+      if (!v) { setBulkRanges([]); setBulkPendingStartId(''); }
+      return !v;
+    });
+  }, []);
+  const exitBulkSelecting = useCallback(() => {
+    setBulkSelecting(false);
+    setBulkRanges([]);
+    setBulkPendingStartId('');
+  }, []);
+  // 最新の pending を常に参照できるよう ref に同期（連続クリックでの取り残しを防ぐ）
+  const bulkPendingRef = useRef('');
+  bulkPendingRef.current = bulkPendingStartId;
+  const setPending = useCallback((v: string) => { bulkPendingRef.current = v; setBulkPendingStartId(v); }, []);
+  // カードクリック（複数の仮選択を連続で積める。範囲の取消はバナー一覧の×／全消去は選択クリア）:
+  //  - 最後待ち（最初を選択済み）:
+  //      ・同じ「最初」をもう一度 → この回の仮選択を取消（最初待ちへ・モードは維持）
+  //      ・別カード → 「最後」として範囲を仮追加し、続けて次の一括設定が始まる（pending は必ずクリア）
+  //  - 最初待ち: 設定済みカード → 新しい「最初」に（既存範囲に含まれる基準でも再利用OK）
+  const handleBulkSelect = useCallback((target: BleedTarget, isSet: boolean) => {
+    if (!target.chapterId) return;
+    const id = target.chapterId;
+    const pending = bulkPendingRef.current; // state ではなく ref で最新値を読む
+    if (pending) {
+      if (id === pending) {
+        setPending(''); // この回の仮選択を取消
+        return;
+      }
+      // 「最後」を確定 → 範囲を仮追加し、pending をクリアして次の「最初」を待つ
+      setBulkRanges((prev) => [...prev, { startId: pending, endId: id }]);
+      setPending('');
+      return;
+    }
+    // 最初待ち: 設定済みカードを新しい「最初」に（基準の再利用も可）
+    if (!isSet) return;
+    setPending(id);
+  }, [setPending]);
+  const removeBulkRange = useCallback((ri: number) => {
+    setBulkRanges((prev) => prev.filter((_, i) => i !== ri));
+  }, []);
+  // 各範囲の「最初」の region を、その範囲の本文すべてへコピー
+  const applyBulkRanges = useCallback(() => {
+    if (bulkRanges.length === 0) return;
+    for (const r of bulkRanges) {
+      const sIdx = chapterTargets.findIndex((t) => t.chapterId === r.startId);
+      const eIdx = chapterTargets.findIndex((t) => t.chapterId === r.endId);
+      if (sIdx < 0 || eIdx < 0) continue;
+      const refRegion = getTargetRegion(chapterTargets[sIdx]); // 「最初」を基準にコピペ
+      if (refRegion == null) continue;
+      const lo = Math.min(sIdx, eIdx);
+      const hi = Math.max(sIdx, eIdx);
+      for (let i = lo; i <= hi; i++) {
+        const t = chapterTargets[i];
+        if (t.chapterId) setChapterRegion(t.chapterId, refRegion);
+      }
+    }
+    exitBulkSelecting();
+  }, [bulkRanges, chapterTargets, getTargetRegion, setChapterRegion, exitBulkSelecting]);
+
   return (
     <>
       {!editing && (
@@ -192,25 +291,95 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
           <div className="bleed-tab-title">
             <ScissorsIcon size={18} />
             <span>断ち切り設定</span>
+            <div className="bleed-tab-mode" ref={modeToggleRef}>
+              <SlidingIndicator rect={modeIndicator} className="bleed-tab-mode-indicator" />
+              <button
+                type="button"
+                className={`bleed-tab-mode-btn ${mode === 'bulk' ? 'active' : ''}`}
+                onClick={() => setMode('bulk')}
+              >
+                一括（表紙＋本文）
+              </button>
+              <button
+                type="button"
+                className={`bleed-tab-mode-btn ${mode === 'per-chapter' ? 'active' : ''}`}
+                onClick={() => setMode('per-chapter')}
+              >
+                本文ごと
+              </button>
+            </div>
           </div>
-          <div className="bleed-tab-mode" ref={modeToggleRef}>
-            <SlidingIndicator rect={modeIndicator} className="bleed-tab-mode-indicator" />
+          <div className="bleed-tab-header-actions">
             <button
               type="button"
-              className={`bleed-tab-mode-btn ${mode === 'bulk' ? 'active' : ''}`}
-              onClick={() => setMode('bulk')}
+              className={`btn-secondary btn-small bleed-bulk-apply-btn ${bulkSelecting ? 'active' : ''}`}
+              onClick={toggleBulkSelecting}
+              disabled={!canOpenBulk}
+              title={bulkApplyTitle}
             >
-              一括（表紙＋本文）
-            </button>
-            <button
-              type="button"
-              className={`bleed-tab-mode-btn ${mode === 'per-chapter' ? 'active' : ''}`}
-              onClick={() => setMode('per-chapter')}
-            >
-              本文ごと
+              一括処理
             </button>
           </div>
         </div>
+
+        {bulkSelecting && canOpenBulk && (
+          <div className="bleed-bulk-banner">
+            <div className="bleed-bulk-banner-main">
+              <span className="bleed-bulk-banner-text">
+                一括処理（仮選択）: <b>最初（基準）</b> → <b>最後</b> をクリックで1範囲を仮選択。続けて次の範囲を選べます。<b>適用</b> で全範囲を確定。
+              </span>
+              <span className="bleed-bulk-banner-status">
+                {bulkPendingStartId
+                  ? <>最初: <b>{bulkPendingLabel}</b> → 最後をクリック</>
+                  : <>仮選択 <b>{bulkRanges.length}</b> 組</>}
+              </span>
+              <span className="bleed-bulk-banner-actions">
+                <button
+                  type="button"
+                  className="btn-primary btn-small"
+                  onClick={applyBulkRanges}
+                  disabled={bulkRanges.length === 0}
+                  title={bulkRanges.length === 0 ? '範囲を1つ以上作ってください' : '各範囲へ最初の設定をコピーします'}
+                >
+                  適用（{bulkRanges.length}）
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary btn-small"
+                  onClick={() => { setBulkRanges([]); setBulkPendingStartId(''); }}
+                  disabled={bulkRanges.length === 0 && !bulkPendingStartId}
+                >
+                  選択クリア
+                </button>
+                <button type="button" className="btn-secondary btn-small" onClick={exitBulkSelecting}>
+                  キャンセル
+                </button>
+              </span>
+            </div>
+            {bulkRanges.length > 0 && (
+              <ol className="bleed-bulk-range-list">
+                {bulkRangeBounds
+                  .map((b, ri) => ({ b, ri }))
+                  .sort((a, c) => (a.b.lo - c.b.lo) || (a.b.hi - c.b.hi))
+                  .map(({ b, ri }) => {
+                    const sLabel = chapterTargets.find((t) => t.chapterId === b.startId)?.label ?? '?';
+                    const eLabel = chapterTargets.find((t) => t.chapterId === b.endId)?.label ?? '?';
+                    const count = b.lo >= 0 && b.hi >= 0 ? b.hi - b.lo + 1 : 0;
+                    return (
+                      <li
+                        key={`${b.startId}-${b.endId}-${ri}`}
+                        className="bleed-bulk-range-chip"
+                        style={{ ['--bulk-color' as string]: `var(--split-color-${ri % 8})` } as CSSProperties}
+                      >
+                        <span className="bleed-bulk-range-chip-label"><b>{sLabel}</b> → <b>{eLabel}</b>{count > 0 && <small>（{count}話）</small>}</span>
+                        <button type="button" className="bleed-bulk-range-x" onClick={() => removeBulkRange(ri)} title="この範囲を取消">×</button>
+                      </li>
+                    );
+                  })}
+              </ol>
+            )}
+          </div>
+        )}
 
         {targets.length === 0 ? (
           <div className="spread-viewer-empty">
@@ -226,8 +395,44 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
               const thumbSrc = target.page.thumbnailCachePath
                 ? convertFileSrc(target.page.thumbnailCachePath)
                 : null;
+              // 一括処理の選択モード。最初=設定済みのみ／最後=（最初確定後は）任意カード可。複数範囲を色分け。
+              const chapterIdx = target.kind === 'chapter' ? chapterTargets.findIndex((ct) => ct.chapterId === target.chapterId) : -1;
+              const isChapter = target.kind === 'chapter';
+              let bulkCls = '';
+              let bulkColorIdx = -1;
+              if (bulkSelecting && isChapter) {
+                if (target.chapterId === bulkPendingStartId) {
+                  bulkCls = 'bulk-pending';
+                } else {
+                  const ri = bulkRangeBounds.findIndex((b) =>
+                    target.chapterId === b.startId || target.chapterId === b.endId ||
+                    (b.lo >= 0 && chapterIdx >= b.lo && chapterIdx <= b.hi));
+                  if (ri >= 0) {
+                    const b = bulkRangeBounds[ri];
+                    bulkColorIdx = ri;
+                    bulkCls = target.chapterId === b.startId ? 'bulk-start'
+                      : target.chapterId === b.endId ? 'bulk-end'
+                      : 'bulk-in-range';
+                  } else if (!isSet && !bulkPendingStartId) {
+                    bulkCls = 'bulk-disabled';
+                  } else {
+                    bulkCls = 'bulk-selectable';
+                  }
+                }
+              }
+              const bulkStyle = bulkColorIdx >= 0
+                ? ({ ['--bulk-color' as string]: `var(--split-color-${bulkColorIdx % 8})` } as CSSProperties)
+                : undefined;
+              // 選択可: 最後待ち(pending)=任意の本文 / 最初待ち=設定済みのみ（基準＝最初は設定済みが必須）
+              const bulkSelectable = bulkSelecting && isChapter && (bulkPendingStartId ? true : isSet);
               return (
-                <div key={key} className={`bleed-target-card ${isSet ? 'configured' : ''}`}>
+                <div
+                  key={key}
+                  className={`bleed-target-card ${isSet ? 'configured' : ''} ${bulkCls}`}
+                  style={bulkStyle}
+                  onClick={bulkSelectable ? () => handleBulkSelect(target, isSet) : undefined}
+                  role={bulkSelectable ? 'button' : undefined}
+                >
                   <div className="bleed-target-thumb">
                     {thumbSrc ? (
                       <img src={thumbSrc} alt={target.label} draggable={false} />
@@ -248,7 +453,7 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
                     <button
                       type="button"
                       className="btn-primary btn-small"
-                      onClick={() => void openEditor(target)}
+                      onClick={(e) => { e.stopPropagation(); void openEditor(target); }}
                     >
                       {isSet ? '編集' : '設定'}
                     </button>
@@ -256,7 +461,7 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
                       <button
                         type="button"
                         className="btn-secondary btn-small"
-                        onClick={() => saveRegion(target, null)}
+                        onClick={(e) => { e.stopPropagation(); saveRegion(target, null); }}
                       >
                         解除
                       </button>
@@ -334,6 +539,10 @@ export function BleedTab({ isInfoSidebarCollapsed, setIsInfoSidebarCollapsed, on
             originalFilePath={curPage.filePath ?? ''}
             originalColorMode={curPage.imageColorMode}
             initialRegion={editing.initialRegion}
+            // 方式デフォルト: 本文（一括/各話）=手動 / 表紙など それ以外=なし
+            defaultMethod={editing.target.kind === 'cover' ? 'none' : 'region'}
+            // ぼかしの初期ON/OFFは区切りのカラー情報で決定（カラー=なし / モノクロ=あり）
+            defaultBlurEnabled={sectionDefaultBlurEnabled(editing.target.pages)}
             applyLabel="この設定を保存"
             pageNav={editing.target.pages.length > 1 ? {
               index: editing.pageIndex,

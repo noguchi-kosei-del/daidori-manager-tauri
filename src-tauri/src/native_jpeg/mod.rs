@@ -9,5 +9,7 @@ pub mod jpeg;
 pub mod types;
 
 pub use image_loader::read_image_dimensions;
-pub use image_processing::{fit_within_pdf_bbox, predict_output_dims, process_single_image};
+pub use image_processing::{
+    fit_within_pdf_bbox, predict_output_dims, process_image_to_rgb, save_processed_rgb,
+};
 pub use types::ProcessOptions;

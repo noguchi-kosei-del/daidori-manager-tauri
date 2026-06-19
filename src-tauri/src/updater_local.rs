@@ -113,7 +113,8 @@ pub async fn apply_local_update(app: tauri::AppHandle, setup_path: String) -> Re
     }
     let src = PathBuf::from(&info.setup_path);
 
-    let temp = app_temp();
+    // 更新インストーラは temp の update カテゴリ配下にステージング（分類管理）。
+    let temp = app_temp().join("update");
     std::fs::create_dir_all(&temp).map_err(|_| "temp 作成失敗".to_string())?;
     let local = temp.join(&info.file_name);
     std::fs::copy(&src, &local).map_err(|_| "コピー失敗".to_string())?;
@@ -123,7 +124,8 @@ pub async fn apply_local_update(app: tauri::AppHandle, setup_path: String) -> Re
     verify_minisign(UPDATER_PUBKEY, &sig_text, &exe_bytes)?;
 
     std::process::Command::new(&local)
-        .args(["/S", "/R", "/UPDATE"])
+        // /S=サイレント /UPDATE=更新モード。更新後の再起動は NSIS フック(IfSilent+Exec)が担う。
+        .args(["/S", "/UPDATE"])
         .current_dir(&temp)
         .spawn()
         .map_err(|_| "更新の起動に失敗しました".to_string())?;

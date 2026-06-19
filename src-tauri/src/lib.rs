@@ -38,6 +38,40 @@ fn find_daiw_path(args: &[String]) -> Option<String> {
         .cloned()
 }
 
+/// EPUBカラープロファイル(ICC)の初回インストール。
+/// `%LOCALAPPDATA%\daidori-manager\color\` に Dot Gain / AdobeRGB の ICC が無ければ、
+/// インストーラ同梱（resources/color/）からコピーする（更新後に未所持でも自動補完）。
+/// 既に在る場合は上書きしない。失敗しても起動は止めない。
+fn ensure_color_profiles(app: &tauri::App) {
+    let resource_dir = match app.path().resource_dir() {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let local = match std::env::var("LOCALAPPDATA") {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let target_dir = std::path::Path::new(&local)
+        .join("daidori-manager")
+        .join("color");
+    if std::fs::create_dir_all(&target_dir).is_err() {
+        return;
+    }
+    for name in ["Dot Gain 20%.icc", "AdobeRGB1998.icc"] {
+        let target = target_dir.join(name);
+        if target.exists() {
+            continue;
+        }
+        // リリース: <resource>/resources/color/<name> / dev: <resource>/color/<name>
+        let src_release = resource_dir.join("resources").join("color").join(name);
+        let src_dev = resource_dir.join("color").join(name);
+        let src = if src_release.exists() { src_release } else { src_dev };
+        if src.exists() {
+            let _ = std::fs::copy(&src, &target);
+        }
+    }
+}
+
 /// フロント準備後に保持済みの起動ファイルパスを取得（取得と同時にクリア）
 #[tauri::command]
 fn take_pending_open_path(state: tauri::State<PendingOpen>) -> Option<String> {
@@ -126,6 +160,10 @@ pub fn run() {
             // セキュリティ初期化（許可ルート・temp ACL）
             security::init();
             security::harden_temp_dir();
+            // 起動時に前回の残存一時ファイルを掃除し、カテゴリdirを用意（分類管理）
+            security::cleanup_temp_on_startup();
+            // EPUBカラープロファイル(ICC)を未所持なら同梱版から初回インストール（更新後も同様）
+            ensure_color_profiles(app);
 
             // コールドスタート: 起動引数から .daiw を拾って保持し、
             // フロント準備後に take_pending_open_path で取得・読込する。

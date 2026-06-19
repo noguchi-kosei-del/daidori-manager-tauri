@@ -173,6 +173,25 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
   const handleExport = useCallback(async (options: ExportOptions) => {
     const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, renameMode, startNumber, digits, prefix, perChapterSettings, bleedSettings, runAction, actionSetPath, actionName, stripActionSaveClose, tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight } = options;
 
+    // 分割: 出力順ページの範囲ごとにサブフォルダ(01,02…)へ分ける（全形式共通）。
+    const sortedSplitRanges = [...(options.splitRanges ?? [])].sort((a, b) => a.startIndex - b.startIndex);
+    const folderForIndex = (idx: number): string => {
+      const ri = sortedSplitRanges.findIndex((r) => idx >= r.startIndex && idx <= r.endIndex);
+      return ri >= 0 ? String(ri + 1).padStart(2, '0') : '';
+    };
+    const pageIndexById = new Map<string, number>();
+    allPages.forEach((it, i) => pageIndexById.set(it.page.id, i));
+    const folderForPageId = (id?: string): string => {
+      if (!id) return '';
+      const idx = pageIndexById.get(id);
+      return idx === undefined ? '' : folderForIndex(idx);
+    };
+    const withFolder = (folder: string, name: string) => (folder ? `${folder}/${name}` : name);
+    // 「分割しないもの（全体）」も同時に作成する（分割範囲があるときのみ意味を持つ）。
+    const alsoWhole = !!options.splitAlsoWhole && sortedSplitRanges.length > 0;
+    const WHOLE_FOLDER = '全体';
+    const baseName = (n: string) => n.split('/').pop() || n;
+
     // TIFF変換モードの場合
     if (convertToTiff) {
       if (!renameTiffAndSave) {
@@ -188,7 +207,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
       // PSD・JPEGファイルを抽出（Photoshopで開いてTIFFに変換）
       // EPUB_maker連携用にページ情報も保持
       const convertibleTypes = ['psd', 'jpg', 'jpeg'];
-      const convertiblePages: { path: string; outputName: string; pageType: string; chapterType: string; chapterId: string; chapterName?: string; label?: string; colorMode?: string }[] = [];
+      const convertiblePages: { path: string; outputName: string; pageType: string; chapterType: string; chapterId: string; chapterName?: string; label?: string; colorMode?: string; splitFolder?: string }[] = [];
       const usedTiffOutputNames = new Set<string>();
 
       if (renameMode === 'unified') {
@@ -203,6 +222,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
               chapterName: item.chapter.name,
               label: item.page.label,
               colorMode: item.page.imageColorMode,
+              splitFolder: folderForIndex(index),
             });
           }
         });
@@ -225,6 +245,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
                 chapterName: chapter.name,
                 label: page.label,
                 colorMode: page.imageColorMode,
+                splitFolder: folderForPageId(page.id),
               });
             }
           });
@@ -267,14 +288,18 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
             // 「保存」「閉じる」を無効化した一時 .atn を読み込ませ、保存先をアプリの出力先に一本化
             stripActionSaveClose: stripActionSaveClose !== false,
           },
-          files: convertiblePages.map(p => {
+          files: (alsoWhole
+            ? [...convertiblePages, ...convertiblePages.map((p) => ({ ...p, splitFolder: WHOLE_FOLDER }))]
+            : convertiblePages
+          ).map(p => {
             // 断ち切りは範囲方式に統一（action-ratio も .atn から範囲を読み込んで範囲として扱う）
             const cropBounds = resolveTiffCropBounds(bleedSettings, p.chapterType, p.chapterId);
             // ぼかし: 断ち切りタブ由来(アクション/JSON)を優先。カラーは0。グレースケールは維持してぼかし。
             const effBlur = effTiffBlurFor(p);
             return {
               path: p.path,
-              outputPath: outputPath,
+              // 分割時は範囲ごとのサブフォルダへ（JSXがフォルダを作成）
+              outputPath: p.splitFolder ? `${outputPath}/${p.splitFolder}` : outputPath,
               outputName: p.outputName,
               // ぼかし（背景ぼかし）。JSX step 9 が applyBlur/blurRadius を見て背景レイヤーに適用
               applyBlur: effBlur > 0,
@@ -310,7 +335,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
         }));
 
         // TIFF変換対象外のファイル（白紙、PNGなど）も同じ出力先にエクスポート
-        const nonConvertiblePages: { source_path: string | null; output_name: string; page_type: string }[] = [];
+        const nonConvertiblePages: { source_path: string | null; output_name: string; page_type: string; subfolder?: string }[] = [];
 
         if (renameMode === 'unified') {
           allPages.forEach((item, index) => {
@@ -323,6 +348,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
                 source_path: item.page.filePath || null,
                 output_name: removeTiffExtension(outputFileName),
                 page_type: item.page.pageType,
+                subfolder: folderForIndex(index) || undefined,
               });
             }
           });
@@ -341,6 +367,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
                   source_path: page.filePath || null,
                   output_name: removeTiffExtension(outputFileName),
                   page_type: page.pageType,
+                  subfolder: folderForPageId(page.id) || undefined,
                 });
               }
             });
@@ -351,7 +378,9 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
           try {
             await invoke<number>('export_pages', {
               outputPath: response.outputDir,
-              pages: nonConvertiblePages,
+              pages: alsoWhole
+                ? [...nonConvertiblePages, ...nonConvertiblePages.map((p) => ({ ...p, subfolder: WHOLE_FOLDER }))]
+                : nonConvertiblePages,
               moveFiles: exportMode === 'move',
               convertToJpg: false,
               jpgQuality: 100,
@@ -396,7 +425,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
           if (item.page.filePath && item.page.fileType) {
             convertiblePages.push({
               path: item.page.filePath,
-              outputName: `${prefix}${String(startNumber + index).padStart(digits, '0')}.jpg`,
+              outputName: withFolder(folderForIndex(index), `${prefix}${String(startNumber + index).padStart(digits, '0')}.jpg`),
               pageType: item.page.pageType,
               chapterType: item.chapter.type,
               chapterId: item.chapter.id,
@@ -414,7 +443,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
             if (page.filePath && page.fileType) {
               convertiblePages.push({
                 path: page.filePath,
-                outputName: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}.jpg`,
+                outputName: withFolder(folderForPageId(page.id), `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}.jpg`),
                 pageType: page.pageType,
                 chapterType: chapter.type,
                 chapterId: chapter.id,
@@ -428,8 +457,11 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
       }
 
       try {
+        const jpegFilesSource = alsoWhole
+          ? [...convertiblePages, ...convertiblePages.map((p) => ({ ...p, outputName: `${WHOLE_FOLDER}/${baseName(p.outputName)}` }))]
+          : convertiblePages;
         const config = {
-          files: convertiblePages.map(p => {
+          files: jpegFilesSource.map(p => {
             const region = resolveBleedRegion(bleedSettings, p.chapterType, p.chapterId);
             return {
               path: p.path,
@@ -456,16 +488,16 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
           console.error('JPEG変換エラー:', details);
         }
 
-        // EPUB_maker連携用のページ情報を生成
+        // EPUB_maker連携用のページ情報を生成（分割サブフォルダはファイル名から除く）
         const exportedPages = convertiblePages.map(p => ({
-          filename: p.outputName,
+          filename: p.outputName.split('/').pop() || p.outputName,
           pageType: p.pageType,
           chapterName: p.chapterName,
           label: p.label,
         }));
 
         // 画像ファイルを持たないページ（白紙・特殊）も同じ出力先に生成
-        const nonFilePages: { source_path: string | null; output_name: string; page_type: string }[] = [];
+        const nonFilePages: { source_path: string | null; output_name: string; page_type: string; subfolder?: string }[] = [];
 
         if (renameMode === 'unified') {
           allPages.forEach((item, index) => {
@@ -474,6 +506,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
                 source_path: item.page.filePath || null,
                 output_name: `${prefix}${String(startNumber + index).padStart(digits, '0')}`,
                 page_type: item.page.pageType,
+                subfolder: folderForIndex(index) || undefined,
               });
             }
           });
@@ -487,6 +520,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
                   source_path: page.filePath || null,
                   output_name: `${settings.prefix}${String(settings.startNumber + pageIndex).padStart(settings.digits, '0')}`,
                   page_type: page.pageType,
+                  subfolder: folderForPageId(page.id) || undefined,
                 });
               }
             });
@@ -498,7 +532,9 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
             // outputPath は Rustが書き出した response.outputDir と同一 → 全ファイルが同じフォルダに集約される
             await invoke<number>('export_pages', {
               outputPath: response.outputDir,
-              pages: nonFilePages,
+              pages: alsoWhole
+                ? [...nonFilePages, ...nonFilePages.map((p) => ({ ...p, subfolder: WHOLE_FOLDER }))]
+                : nonFilePages,
               moveFiles: exportMode === 'move',
               convertToJpg: true,
               jpgQuality: jpgQuality ?? 95,
@@ -548,6 +584,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
         source_path: item.page.filePath || null,
         output_name: `${prefix}${String(startNumber + index).padStart(digits, '0')}`,
         page_type: item.page.pageType,
+        subfolder: folderForIndex(index) || undefined,
         chapter_name: item.chapter.name,
         label: item.page.label,
         file_type: item.page.fileType,
@@ -567,7 +604,8 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
             source_path: page.filePath || null,
             output_name: outputName,
             page_type: page.pageType,
-            subfolder: shouldFlattenTiffCopy ? undefined : chapter.name, // チャプター名をサブフォルダとして使用
+            // 分割が有効ならその範囲フォルダを優先。なければ従来どおりチャプター名サブフォルダ。
+            subfolder: folderForPageId(page.id) || (shouldFlattenTiffCopy ? undefined : chapter.name),
             chapter_name: chapter.name,
             label: page.label,
             file_type: page.fileType,
@@ -579,7 +617,9 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
     try {
       const count = await invoke<number>('export_pages', {
         outputPath,
-        pages: exportPages,
+        pages: alsoWhole
+          ? [...exportPages, ...exportPages.map((p) => ({ ...p, subfolder: WHOLE_FOLDER }))]
+          : exportPages,
         moveFiles: exportMode === 'move',
         convertToJpg,
         jpgQuality,

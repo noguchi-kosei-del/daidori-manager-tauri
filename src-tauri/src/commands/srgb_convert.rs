@@ -32,6 +32,19 @@ pub struct SrgbConvertFile {
     /// refWidth/refHeight + isProportional）。なし/不要なら省略。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crop_bounds: Option<serde_json::Value>,
+    /// ガウスぼかしを Photoshop で適用するか（断ち切りタブのぼかし設定由来）。
+    #[serde(default)]
+    pub apply_blur: bool,
+    /// ぼかし半径(px)。原寸（クロップ後・リサイズ前）で適用する。
+    #[serde(default)]
+    pub blur_radius: f64,
+    /// テキスト保護（背景のみぼかす）。テキスト系レイヤー（#text#/写植 等）はシャープに残す。
+    #[serde(default = "default_blur_bg_only")]
+    pub blur_background_only: bool,
+}
+
+fn default_blur_bg_only() -> bool {
+    true
 }
 
 /// グローバル設定
@@ -165,7 +178,8 @@ pub async fn run_photoshop_srgb_convert(
 
     let script_path_str = find_script_path(&app_handle, "srgb_convert.jsx", "sRGB Convert")?;
 
-    let temp_dir = std::env::temp_dir();
+    // セキュリティ(§6): Photoshop連携の一時ファイルは convert カテゴリ配下に集約（ACL強化済）。
+    let temp_dir = crate::security::temp_subdir("convert");
     let settings_path = temp_dir.join("daidori_srgb_settings.json");
     let output_path = temp_dir.join("daidori_srgb_results.json");
     let progress_path = temp_dir.join("daidori_srgb_progress.txt");

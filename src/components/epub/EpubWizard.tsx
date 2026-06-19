@@ -14,18 +14,26 @@ import {
   Orientation,
   HybridCssProfile,
   EpubImageColorPolicy,
+  EpubPageImageProfileOverride,
   EpubColorEngine,
   EpubSplitSettings,
   EPUB_FORMAT_VIEWPORTS,
-  EPUB_IMAGE_COLOR_POLICY_OPTIONS,
-  EPUB_IMAGE_COLOR_POLICY_LABELS,
+  EPUB_CUSTOM_CHAPTER_OPTIONS,
+  EPUB_CUSTOM_CHAPTER_LABELS,
   HYBRID_CSS_PROFILE_LABELS,
   AUTHOR_ROLE_LABELS,
   Chapter,
+  ChapterType,
+  CHAPTER_TYPE_LABELS,
 } from '../../types';
 import { useStore } from '../../store';
 import { splitVolumeKey } from '../../utils/epubState';
 import { BookIcon, CheckIcon2, NoPageIcon } from '../../icons';
+import { EpubFolderTree } from './EpubFolderTree';
+
+// PSD→JPEG中間変換エンジンの切替UI（高速ネイティブ／高品質Photoshop）は当面UI非表示。
+// 既定は高速(ネイティブ)。高品質(Photoshop)の機能・ロジックは保持（true で再表示）。
+const SHOW_PSD_ENGINE_PICKER = false;
 
 const PUBLISHER_OPTIONS = [
   { name: 'CLLENN', fileAs: 'シレン' },
@@ -33,7 +41,7 @@ const PUBLISHER_OPTIONS = [
 ];
 
 const FORMAT_PRESETS: { value: EpubFormat; label: string; sub: string; recommended?: boolean }[] = [
-  { value: 'kadokawa', label: '電子書店向け（標準）', sub: '主要な電子書店に対応・電書協準拠', recommended: true },
+  { value: 'kadokawa', label: '標準', sub: '主要な電子書店に対応・電書協準拠', recommended: true },
   { value: 'hybrid', label: '幅広い端末対応', sub: '古い端末も含めて広くカバー（Hybrid）' },
   { value: 'oebps', label: 'シンプル', sub: '最小構成（OEBPS）' },
 ];
@@ -43,7 +51,7 @@ const STEPS = ['本の情報', '表紙・奥付', '仕上がり', '分割', '確
 interface EpubWizardProps {
   isOpen: boolean;
   onClose: () => void;
-  onGenerate: (metadata: EpubMetadata, outputPath: string, splitSettings?: EpubSplitSettings) => void | Promise<void>;
+  onGenerate: (metadata: EpubMetadata, outputPath: string, splitSettings?: EpubSplitSettings, outputJpeg?: boolean, workFolderName?: string) => void | Promise<void>;
   chapters: Chapter[];
   projectName: string;
 }
@@ -64,6 +72,12 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
   // 19.3 実験: PSD→JPEG中間変換のエンジン。既定は高速ネイティブ。
   const [colorEngine, setColorEngine] = useState<EpubColorEngine>('native');
   const [colorMode, setColorMode] = useState<'auto' | 'custom'>('auto');
+  // 確認ステップ: EPUBと同時に JPEG（全ページ）も <作品名>/JPEG へ書き出すか
+  const [outputJpeg, setOutputJpeg] = useState(false);
+  // 作品フォルダ名（確認ステップで編集可能。空のときは .epub ファイル名から導出）
+  const [workFolderName, setWorkFolderName] = useState('');
+  // カスタム: チャプター種別ごとのプロファイル指定（未指定は 'auto'）
+  const [customChapterProfiles, setCustomChapterProfiles] = useState<Partial<Record<ChapterType, EpubPageImageProfileOverride>>>({});
   const [hybridCssProfile, setHybridCssProfile] = useState<HybridCssProfile>('current');
   const [allowMissingColophon, setAllowMissingColophon] = useState(false);
 
@@ -79,8 +93,17 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
   const [bookUuid, setBookUuid] = useState('');
   const [outputPath, setOutputPath] = useState('');
 
+  // カスタムで表示する「登録済みチャプター種別」（台割に存在する種別のみ・規定順）
+  const presentChapterTypes = useMemo<ChapterType[]>(() => {
+    const order: ChapterType[] = ['cover', 'title', 'toc', 'chapter', 'intermission', 'colophon', 'ad', 'blank'];
+    const present = new Set(chapters.map((c) => c.type));
+    return order.filter((t) => present.has(t));
+  }, [chapters]);
+
   // 分割
   const [splitEnabled, setSplitEnabled] = useState(false);
+  // 「両方作成」: 分割版に加えて1冊にまとめた版も同時に作成する（splitEnabled=true のときのみ意味を持つ）
+  const [splitAlsoWhole, setSplitAlsoWhole] = useState(false);
   const [splitRanges, setSplitRanges] = useState<{ startIndex: number; endIndex: number }[]>([]);
   const [splitSelectingStart, setSplitSelectingStart] = useState<number | null>(null);
   const [splitBaseName, setSplitBaseName] = useState('');
@@ -93,6 +116,11 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState<{ phase: string; current: number; total: number } | null>(null);
+
+  // 作品フォルダ名: 未入力時は保存先 .epub のファイル名から導出（プレビュー/既定表示用）
+  const epubBaseForUi =
+    (outputPath.split(/[\\/]/).pop() || '').replace(/\.epub$/i, '') || projectName || '新規プロジェクト';
+  const effectiveWorkName = workFolderName.trim() || epubBaseForUi;
 
   // store（表紙/奥付・プレビューページ）
   const epubPages = useStore((s) => s.epubPages);
@@ -135,11 +163,15 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     if (saved?.publisherFileAs) setPublisherFileAs(saved.publisherFileAs);
     if (saved?.authors?.length) setAuthors(saved.authors);
     if (saved?.outputFormat) setOutputFormat(saved.outputFormat);
-    if (saved?.imageColorPolicy) {
-      setImageColorPolicy(saved.imageColorPolicy);
-      setColorMode(saved.imageColorPolicy === 'auto' ? 'auto' : 'custom');
+    if (saved?.imageColorPolicy) setImageColorPolicy(saved.imageColorPolicy);
+    if (saved?.customChapterProfiles) {
+      setCustomChapterProfiles(saved.customChapterProfiles);
+      if (Object.values(saved.customChapterProfiles).some((v) => v && v !== 'auto')) {
+        setColorMode('custom');
+      }
     }
-    if (saved?.colorEngine) setColorEngine(saved.colorEngine);
+    // UI非表示中は保存値に関わらず既定(native)を維持。picker再表示時のみ復元する。
+    if (SHOW_PSD_ENGINE_PICKER && saved?.colorEngine) setColorEngine(saved.colorEngine);
     if (saved?.hybridCssProfile) setHybridCssProfile(saved.hybridCssProfile);
     if (saved?.allowMissingColophon !== undefined) setAllowMissingColophon(saved.allowMissingColophon);
     if (saved?.pageDirection) setPageDirection(saved.pageDirection);
@@ -148,6 +180,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     if (saved?.split) {
       const sp = saved.split;
       setSplitEnabled(sp.enabled);
+      setSplitAlsoWhole(sp.alsoWhole ?? false);
       setSplitRanges(sp.ranges ?? []);
       if (sp.baseName) setSplitBaseName(sp.baseName);
       if (sp.suffixStart !== undefined) setSplitSuffixStart(sp.suffixStart);
@@ -183,9 +216,9 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     if (!outputPath) {
       (async () => {
         try {
-          // 既定の保存先: <Desktop>\Script_Output\台割\EPUB\<作品名>.epub
+          // 既定の保存先: <Desktop>\Script_Output\台割出力\<作品名>.epub（JPG/TIFFと同じ「台割出力」配下）
           const desktop = await desktopDir();
-          const epubDir = await join(desktop, 'Script_Output', '台割', 'EPUB');
+          const epubDir = await join(desktop, 'Script_Output', '台割出力');
           await invoke('ensure_dir', { path: epubDir }).catch(() => {});
           const requestedPath = await join(epubDir, `${projectName || 'output'}.epub`);
           setOutputPath(await resolveAvailableOutputPath(requestedPath));
@@ -229,9 +262,11 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
       hybridCssProfile,
       allowMissingColophon,
       imageColorPolicy: colorMode === 'auto' ? 'auto' : imageColorPolicy,
+      customChapterProfiles: colorMode === 'custom' ? customChapterProfiles : undefined,
       colorEngine,
       split: {
         enabled: splitEnabled,
+        alsoWhole: splitAlsoWhole,
         baseName: splitBaseName,
         suffixStart: splitSuffixStart,
         suffixDigits: splitSuffixDigits,
@@ -258,8 +293,10 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     allowMissingColophon,
     colorMode,
     imageColorPolicy,
+    customChapterProfiles,
     colorEngine,
     splitEnabled,
+    splitAlsoWhole,
     splitBaseName,
     splitSuffixStart,
     splitSuffixDigits,
@@ -273,8 +310,16 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
   // 生成進捗
   useEffect(() => {
     if (!isGenerating) return;
-    const unlisten = listen<{ phase: string; current: number; total: number }>('epub-progress', (e) => setProgress(e.payload));
-    return () => { unlisten.then((fn) => fn()); };
+    const unlistenEpub = listen<{ phase: string; current: number; total: number }>('epub-progress', (e) => setProgress(e.payload));
+    // PSD→JPEG / TIFF変換中はネイティブ変換が jpeg-convert-progress を発火する。
+    // フェーズ表示は epub-progress を維持しつつ件数だけ更新し、「0/Nで止まって見える」のを防ぐ。
+    const unlistenConv = listen<{ phase: string; current: number; total: number }>('jpeg-convert-progress', (e) =>
+      setProgress((p) => (p ? { ...p, current: e.payload.current, total: e.payload.total } : p)),
+    );
+    return () => {
+      unlistenEpub.then((fn) => fn());
+      unlistenConv.then((fn) => fn());
+    };
   }, [isGenerating]);
 
   // 分割範囲の増減に合わせて巻タイトル配列を整える（未入力の巻のみ既定名を補完）
@@ -398,14 +443,17 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
       allowMissingColophon: outputFormat === 'hybrid' ? (allowMissingColophon || hybridCssProfile === 'legacy') : undefined,
       hybridCssProfile: outputFormat === 'hybrid' ? hybridCssProfile : undefined,
       imageColorPolicy: colorMode === 'auto' ? 'auto' : imageColorPolicy,
+      customChapterProfiles: colorMode === 'custom' ? customChapterProfiles : undefined,
       colorEngine,
       // 断ち切りは「断ち切り」タブ(bleedStore)に一本化。App側で参照する。
     };
     try {
       const resolvedOutputPath = await resolveAvailableOutputPath(outputPath);
       if (resolvedOutputPath !== outputPath) setOutputPath(resolvedOutputPath);
-      await onGenerate(metadata, resolvedOutputPath, splitEnabled ? {
+      const splitConfig = splitEnabled ? {
         enabled: true,
+        // 「両方作成」は1回の生成内で分割版＋1冊版を出力する（TIFF/Projectを重複生成しないため）
+        alsoWhole: splitAlsoWhole,
         ranges: splitRanges,
         baseName: splitBaseName.trim() || projectName || 'output',
         titles: splitRanges.map((_, i) => splitTitles[i]?.trim() || title.trim()),
@@ -413,7 +461,8 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
         suffixStart: splitSuffixStart,
         suffixDigits: splitSuffixDigits,
         suffixSeparator: splitSuffixSeparator,
-      } : undefined);
+      } : undefined;
+      await onGenerate(metadata, resolvedOutputPath, splitConfig, outputJpeg, effectiveWorkName);
       onClose();
     } finally {
       setIsGenerating(false);
@@ -508,6 +557,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                     <button className={pageDirection === 'rtl' ? 'active' : ''} onClick={() => setPageDirection('rtl')}>右開き（日本の漫画）</button>
                     <button className={pageDirection === 'ltr' ? 'active' : ''} onClick={() => setPageDirection('ltr')}>左開き（横書き・洋書）</button>
                   </div>
+                  <span className="form-hint">プレビューの並びは読む向きに合わせて自動で左右反転します（右開き＝右→左）。</span>
                 </div>
                 <div className="epub-wizard-coverbar">
                   <span>選択中のページを:</span>
@@ -520,7 +570,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                 {epubPages.length === 0 ? (
                   <div className="spread-viewer-empty"><NoPageIcon size={40} /><p>ページがありません</p></div>
                 ) : (
-                  <div className="epub-wizard-thumbgrid">
+                  <div className={`epub-wizard-thumbgrid ${pageDirection === 'rtl' ? 'flipped' : ''}`}>
                     {epubPages.map((page, i) => {
                       const src = thumbSrc(page);
                       return (
@@ -551,7 +601,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
 
             {step === 2 && (
               <div className="epub-wizard-form">
-                <p className="epub-wizard-lead">どの形式で書き出すかを選びます。迷ったら「電子書店向け（標準）」のままでOKです。</p>
+                <p className="epub-wizard-lead">どの形式で書き出すかを選びます。迷ったら「標準」のままでOKです。</p>
                 <div className="epub-wizard-cards">
                   {FORMAT_PRESETS.map((p) => (
                     <button
@@ -570,10 +620,40 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                   <label>色の扱い</label>
                   <div className="epub-wizard-seg">
                     <button className={colorMode === 'auto' ? 'active' : ''} onClick={() => setColorMode('auto')}>おまかせ（推奨）</button>
-                    <button className={colorMode === 'custom' ? 'active' : ''} onClick={() => setColorMode('custom')}>自分で指定</button>
+                    <button className={colorMode === 'custom' ? 'active' : ''} onClick={() => setColorMode('custom')}>カスタム</button>
                   </div>
                   <div className="form-hint">おまかせ＝本文はモノクロを維持し、カラーページは電子書籍向け（sRGB）に整えます。</div>
                 </div>
+                {colorMode === 'custom' && (
+                  <div className="form-group">
+                    <label>カスタム（チャプター種別ごとに指定）</label>
+                    {presentChapterTypes.length === 0 ? (
+                      <div className="form-hint">台割にチャプターがありません。</div>
+                    ) : (
+                      presentChapterTypes.map((ct) => (
+                        <div key={ct} className="epub-wizard-custom-row">
+                          <span className="epub-wizard-custom-label">{CHAPTER_TYPE_LABELS[ct]}</span>
+                          <div className="epub-wizard-seg">
+                            {EPUB_CUSTOM_CHAPTER_OPTIONS.map((opt) => {
+                              const current = customChapterProfiles[ct] ?? 'auto';
+                              return (
+                                <button
+                                  key={opt}
+                                  className={current === opt ? 'active' : ''}
+                                  onClick={() => setCustomChapterProfiles((cur) => ({ ...cur, [ct]: opt }))}
+                                >
+                                  {EPUB_CUSTOM_CHAPTER_LABELS[opt]}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                    <div className="form-hint">自動＝本文モノクロ／カラーsRGBを判定／モノクロ＝Dot Gain付与／カラー＝sRGB／そのまま＝変換なし。</div>
+                  </div>
+                )}
+                {SHOW_PSD_ENGINE_PICKER && (
                 <div className="form-group">
                   <label>PSD変換の画質（19.3 実験）</label>
                   <div className="epub-wizard-seg">
@@ -582,7 +662,8 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                   </div>
                   <div className="form-hint">高速＝内蔵エンジンでPSDをJPEG化（ICC埋め込みのみ）。高品質＝Photoshopの「プロファイル変換」でsRGBへ厳密に色変換（相対的な色域を維持＋黒点補正）。Photoshop未インストール時は自動で高速に切替。</div>
                 </div>
-                {colorEngine === 'photoshop' && (
+                )}
+                {SHOW_PSD_ENGINE_PICKER && colorEngine === 'photoshop' && (
                   <div className="form-group">
                     <label>断ち切り</label>
                     <div className="form-hint">
@@ -590,29 +671,17 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                     </div>
                   </div>
                 )}
-                {(colorMode === 'custom' || outputFormat === 'hybrid') && (
-                  <details className="epub-advanced" open={colorMode === 'custom'}>
+                {outputFormat === 'hybrid' && (
+                  <details className="epub-advanced">
                     <summary>詳細設定</summary>
-                    {colorMode === 'custom' && (
-                      <div className="form-group">
-                        <label>カラープロファイル（ICC）</label>
-                        <select value={imageColorPolicy} onChange={(e) => setImageColorPolicy(e.target.value as EpubImageColorPolicy)}>
-                          {EPUB_IMAGE_COLOR_POLICY_OPTIONS.map((p) => (
-                            <option key={p} value={p}>{EPUB_IMAGE_COLOR_POLICY_LABELS[p]}</option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                    {outputFormat === 'hybrid' && (
-                      <div className="form-group">
-                        <label>Hybrid CSS</label>
-                        <select value={hybridCssProfile} onChange={(e) => { setHybridCssProfile(e.target.value as HybridCssProfile); if (e.target.value === 'legacy') setAllowMissingColophon(true); }}>
-                          {(Object.keys(HYBRID_CSS_PROFILE_LABELS) as HybridCssProfile[]).map((p) => (
-                            <option key={p} value={p}>{HYBRID_CSS_PROFILE_LABELS[p]}</option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
+                    <div className="form-group">
+                      <label>Hybrid CSS</label>
+                      <select value={hybridCssProfile} onChange={(e) => { setHybridCssProfile(e.target.value as HybridCssProfile); if (e.target.value === 'legacy') setAllowMissingColophon(true); }}>
+                        {(Object.keys(HYBRID_CSS_PROFILE_LABELS) as HybridCssProfile[]).map((p) => (
+                          <option key={p} value={p}>{HYBRID_CSS_PROFILE_LABELS[p]}</option>
+                        ))}
+                      </select>
+                    </div>
                   </details>
                 )}
               </div>
@@ -620,10 +689,11 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
 
             {step === 3 && (
               <div className="epub-wizard-form">
-                <p className="epub-wizard-lead">1冊にまとめるか、話ごとに分けて複数のEPUBにするかを選びます。</p>
+                <p className="epub-wizard-lead">1冊にまとめるか、話ごとに分けて複数のEPUBにするかを選びます。「両方作成」は分割版と1冊版を同時に書き出します。</p>
                 <div className="epub-wizard-seg epub-wizard-seg-wide">
-                  <button className={!splitEnabled ? 'active' : ''} onClick={() => setSplitEnabled(false)}>1冊にまとめる</button>
-                  <button className={splitEnabled ? 'active' : ''} onClick={() => setSplitEnabled(true)}>話ごとに分ける</button>
+                  <button className={!splitEnabled ? 'active' : ''} onClick={() => { setSplitEnabled(false); setSplitAlsoWhole(false); }}>1冊にまとめる</button>
+                  <button className={splitEnabled && !splitAlsoWhole ? 'active' : ''} onClick={() => { setSplitEnabled(true); setSplitAlsoWhole(false); }}>話ごとに分ける</button>
+                  <button className={splitEnabled && splitAlsoWhole ? 'active' : ''} onClick={() => { setSplitEnabled(true); setSplitAlsoWhole(true); }}>両方作成</button>
                 </div>
                 {splitEnabled && (
                   <>
@@ -713,17 +783,26 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
             )}
 
             {step === 4 && (
-              <div className="epub-wizard-form">
+              <div className="epub-wizard-form epub-confirm-layout">
+                <EpubFolderTree
+                  outputPath={outputPath}
+                  workFolderName={effectiveWorkName}
+                  splitEnabled={splitEnabled}
+                  splitCount={splitRanges.length}
+                  splitAlsoWhole={splitAlsoWhole}
+                  outputJpeg={outputJpeg}
+                />
+                <div className="epub-confirm-main">
                 <p className="epub-wizard-lead">内容を確認して書き出します。</p>
                 <dl className="epub-wizard-summary">
                   <dt>タイトル</dt><dd>{title || '—'}{titleFileAs && `（${titleFileAs}）`}</dd>
                   <dt>著者</dt><dd>{authors.filter((a) => a.name.trim()).map((a) => a.name).join('、') || '—'}</dd>
                   <dt>出版社</dt><dd>{publisher}</dd>
                   <dt>形式</dt><dd>{FORMAT_PRESETS.find((p) => p.value === outputFormat)?.label}</dd>
-                  <dt>色</dt><dd>{colorMode === 'auto' ? 'おまかせ' : EPUB_IMAGE_COLOR_POLICY_LABELS[imageColorPolicy]}</dd>
+                  <dt>色</dt><dd>{colorMode === 'auto' ? 'おまかせ' : 'カスタム（種別ごと）'}</dd>
                   <dt>表紙 / 奥付</dt><dd>{coverPage ? `p${epubPages.indexOf(coverPage) + 1}` : '自動'} / {colophonPage ? `p${epubPages.indexOf(colophonPage) + 1}` : '自動'}</dd>
                   <dt>読む向き</dt><dd>{pageDirection === 'rtl' ? '右開き' : '左開き'}</dd>
-                  <dt>分割</dt><dd>{splitEnabled ? `話ごと（${splitRanges.length}冊）` : '1冊にまとめる'}</dd>
+                  <dt>分割</dt><dd>{splitEnabled ? (splitAlsoWhole ? `両方作成（話ごと${splitRanges.length}冊＋1冊版）` : `話ごと（${splitRanges.length}冊）`) : '1冊にまとめる'}</dd>
                   <dt>ページ数</dt><dd>{totalPages}ページ</dd>
                 </dl>
                 <div className="form-group">
@@ -733,6 +812,25 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                     <button className="btn-secondary btn-small" onClick={handleSelectOutput}>参照</button>
                   </div>
                 </div>
+                <div className="form-group">
+                  <label>作品フォルダ名</label>
+                  <input
+                    type="text"
+                    value={workFolderName}
+                    onChange={(e) => setWorkFolderName(e.target.value)}
+                    placeholder={epubBaseForUi}
+                  />
+                  <div className="form-hint">
+                    この名前でフォルダ・EPUB・プロジェクトファイルが作成されます（配下に TIFF / JPEG / 分割 / 1冊版 / Project）。
+                  </div>
+                </div>
+                <label className="checkbox-label epub-jpeg-option">
+                  <input type="checkbox" checked={outputJpeg} onChange={(e) => setOutputJpeg(e.target.checked)} />
+                  <span className="epub-jpeg-option-text">
+                    JPEGも生成する
+                    <span className="option-note">EPUBと同時に全ページのJPEGを「作品フォルダ/JPEG」へ書き出します</span>
+                  </span>
+                </label>
                 <details className="epub-advanced">
                   <summary>識別子（UUID・通常そのまま）</summary>
                   <div className="form-group">
@@ -746,6 +844,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                     </div>
                   </div>
                 </details>
+                </div>
               </div>
             )}
           </div>
@@ -773,14 +872,15 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
             <div className="epub-progress-title">EPUB生成中</div>
             <div className="epub-progress-phase">
               {progress?.phase === 'psd-to-jpeg' ? `PSDをJPEGに変換中…${progress.total > 0 ? ` ${progress.current}/${progress.total}` : ''}`
+                : progress?.phase === 'tiff' ? `TIFFを書き出し中…${progress.total > 0 ? ` ${progress.current}/${progress.total}` : ''}`
                 : progress?.phase === 'epubcheck' ? 'EPUBを検証中…'
                 : progress?.phase === 'packaging' ? 'EPUBを梱包中…'
                 : progress?.phase === 'images' && progress.total > 0 ? `画像を変換中… ${progress.current}/${progress.total}`
                 : '準備中…'}
             </div>
             <div className="epub-progress-bar-track">
-              <div className={`epub-progress-bar-fill ${(progress?.phase === 'images' || progress?.phase === 'psd-to-jpeg') && progress.total > 0 ? '' : 'indeterminate'}`}
-                style={(progress?.phase === 'images' || progress?.phase === 'psd-to-jpeg') && progress.total > 0 ? { width: `${Math.round((progress.current / progress.total) * 100)}%` } : undefined} />
+              <div className={`epub-progress-bar-fill ${(progress?.phase === 'images' || progress?.phase === 'psd-to-jpeg' || progress?.phase === 'tiff') && progress.total > 0 ? '' : 'indeterminate'}`}
+                style={(progress?.phase === 'images' || progress?.phase === 'psd-to-jpeg' || progress?.phase === 'tiff') && progress.total > 0 ? { width: `${Math.round((progress.current / progress.total) * 100)}%` } : undefined} />
             </div>
           </div>
         </div>

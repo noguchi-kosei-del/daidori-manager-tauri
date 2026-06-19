@@ -27,6 +27,8 @@ pub enum EpubImageColorPolicy {
     #[default]
     Auto,
     FullColorSrgb,
+    /// 全ページをグレースケール化して Dot Gain プロファイルを付与（モノクロ指定）
+    FullMonoDotGain,
     FullColorAdobeRgb,
     AdobeRgbDotGain,
     NoIcc,

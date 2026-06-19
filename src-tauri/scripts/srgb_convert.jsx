@@ -26,7 +26,9 @@ app.preferences.rulerUnits = Units.PIXELS;
 var SRGB_PROFILE = "sRGB IEC61966-2.1";
 
 function main() {
-    var tempFolder = Folder.temp;
+    // セキュリティ(§6): 共有 %TEMP% 直下ではなく、アプリ専用 temp(%TEMP%/daidori-manager, ACL強化済) を使用。
+    var tempFolder = new Folder(Folder.temp.fsName + "/daidori-manager/convert");
+    if (!tempFolder.exists) { tempFolder.create(); }
     var settingsFile = new File(tempFolder + "/daidori_srgb_settings.json");
 
     if (!settingsFile.exists) {
@@ -174,6 +176,87 @@ function flattenOntoWhite(doc) {
     }
 }
 
+// レイヤー名がテキスト系か（ネイティブ blur.rs と同じキーワードで判定）
+function isTextLayerName(name) {
+    if (!name) return false;
+    var n = String(name);
+    var lower = n.toLowerCase();
+    if (lower === "text" || n === "#text#") return true;
+    var kws = ["#text#", "写植", "セリフ", "テキスト", "台詞"];
+    for (var i = 0; i < kws.length; i++) {
+        if (n.indexOf(kws[i]) >= 0) return true;
+    }
+    return false;
+}
+
+// 配下の全アートレイヤーを収集（テキスト系グループ用）
+function collectAllArtLayers(container, acc) {
+    var layers = container.layers;
+    for (var i = 0; i < layers.length; i++) {
+        var lyr = layers[i];
+        if (lyr.typename === "LayerSet") collectAllArtLayers(lyr, acc);
+        else acc.push(lyr);
+    }
+}
+
+// テキスト系レイヤーを再帰収集（TextLayer or 名前キーワード / テキスト系グループ配下）
+function collectTextLayers(container, acc) {
+    var layers = container.layers;
+    for (var i = 0; i < layers.length; i++) {
+        var lyr = layers[i];
+        if (lyr.typename === "LayerSet") {
+            if (isTextLayerName(lyr.name)) collectAllArtLayers(lyr, acc);
+            else collectTextLayers(lyr, acc);
+        } else {
+            var isText = false;
+            try { isText = (lyr.kind === LayerKind.TEXT); } catch (eK) {}
+            if (isText || isTextLayerName(lyr.name)) acc.push(lyr);
+        }
+    }
+}
+
+// 可視レイヤーを統合した複製を最前面に作る（Ctrl+Alt+Shift+E 相当のスタンプ）
+function stampVisibleDuplicate() {
+    var desc = new ActionDescriptor();
+    desc.putBoolean(charIDToTypeID("Dplc"), true);
+    executeAction(charIDToTypeID("MrgV"), desc, DialogModes.NO);
+}
+
+// 断ち切りタブ由来のガウスぼかしを Photoshop で適用する。
+// background_only=true（既定）はテキスト系レイヤーをシャープに残す（ネイティブと同じ意味）。
+function applyBleedBlur(doc, fileConfig) {
+    if (!fileConfig || !fileConfig.applyBlur) return;
+    var radius = Number(fileConfig.blurRadius) || 0;
+    if (!(radius > 0)) return;
+    var backgroundOnly = (fileConfig.blurBackgroundOnly === false) ? false : true;
+    try {
+        if (backgroundOnly) {
+            var textLayers = [];
+            collectTextLayers(doc, textLayers);
+            if (textLayers.length > 0) {
+                // 可視を複製統合（スタンプ）→ それをぼかし → シャープなテキストを最前面へ移動して合成。
+                stampVisibleDuplicate();
+                var stamp = doc.activeLayer;
+                stamp.applyGaussianBlur(radius);
+                for (var i = textLayers.length - 1; i >= 0; i--) {
+                    try { textLayers[i].move(stamp, ElementPlacement.PLACEBEFORE); } catch (eMove) {}
+                }
+                doc.flatten();
+                return;
+            }
+        }
+        // テキスト保護なし / テキスト未検出 → 画像全体にガウスぼかし
+        doc.flatten();
+        doc.activeLayer.applyGaussianBlur(radius);
+    } catch (eBlur) {
+        // ぼかしで失敗してもページ生成は止めない（安全側に全体ぼかしを試みる）
+        try {
+            doc.flatten();
+            doc.activeLayer.applyGaussianBlur(radius);
+        } catch (e2) {}
+    }
+}
+
 /* -----------------------------------------------------
   Process Single File
  ----------------------------------------------------- */
@@ -239,6 +322,10 @@ function processFile(fileConfig, globalSettings) {
                 }
             }
         }
+
+        // -0.5. ガウスぼかし（断ち切りタブのぼかし設定由来）。原寸（クロップ後・縮小前）で適用。
+        //       テキスト系レイヤーが残っているこの時点で処理し、背景のみぼかし（テキスト保護）を可能にする。
+        applyBleedBlur(doc, fileConfig);
 
         // 0. 断ち切り等のPhotoshopアクションを実行（TIFF変換 tiff_convert.jsx と同じ方式）。
         //    中間ファイルは作らず、開いたドキュメント（元ファイルパスを保持）へ直接 doAction する。

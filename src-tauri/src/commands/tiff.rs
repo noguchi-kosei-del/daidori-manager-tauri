@@ -49,7 +49,8 @@ pub async fn run_photoshop_tiff_convert(
     // スクリプトパスを取得
     let script_path_str = find_script_path(&app_handle, "tiff_convert.jsx", "TIFF Convert")?;
 
-    let temp_dir = std::env::temp_dir();
+    // セキュリティ(§6): Photoshop連携の一時ファイルは convert カテゴリ配下に集約（ACL強化済）。
+    let temp_dir = crate::security::temp_subdir("convert");
     let settings_path = temp_dir.join("daidori_tiff_settings.json");
     let output_path = temp_dir.join("daidori_tiff_results.json");
 
@@ -532,7 +533,7 @@ fn make_atn_without_save_close(atn_path: &str) -> Option<String> {
     if disabled == 0 {
         return None; // 除去対象が無いなら一時ファイルを作らない
     }
-    let temp = std::env::temp_dir().join("daidori_action_nosaveclose.atn");
+    let temp = crate::security::temp_subdir("convert").join("daidori_action_nosaveclose.atn");
     fs::write(&temp, &modified).ok()?;
     Some(temp.to_string_lossy().to_string())
 }

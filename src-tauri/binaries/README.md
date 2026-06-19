@@ -1,9 +1,18 @@
 # PDFium DLL
 
-このディレクトリには `pdfium.dll` を配置します（PDF読み込み機能で使用）。
-**通常はユーザーが手動配置する必要はありません** — アプリが初回PDF取り込み時に
-G:\共有ドライブ から自動でローカル `%LOCALAPPDATA%\daidori-manager\binaries\pdfium.dll`
-にコピーします。
+このディレクトリには `pdfium.dll`（PDF読み込み機能で使用）を配置します。
+
+## 現方針（2026-06-16〜）: 本物DLLを同梱（外部取得しない）
+**`pdfium.dll` の本物（約7MB・Authenticode署名済）をこのディレクトリにコミットし、インストーラに同梱する。**
+実行時は `find_existing_pdfium()`（[pdf.rs](../src/commands/pdf.rs)）がバンドルされた本物DLL（1MB以上）を
+最優先でロードするため、**G:\共有ドライブ から取得する経路（`fetch_pdfium_from_shared`）には到達しない**。
+EDR(CrowdStrike等)が嫌う「共有ドライブから実行コードを取得してロードする」挙動を避けるための変更。
+- pdfium.dll を更新する場合は本ファイルを差し替え → 再ビルド（同梱物が更新される）。
+- G: からの自動取得コードは**最終フォールバック**として残置（同梱DLLが万一欠落した場合のみ作動）。
+
+> 旧方針（〜2026-06-15）: 154B のプレースホルダのみコミットし、初回PDF時に G: から
+> `%LOCALAPPDATA%\daidori-manager\binaries\pdfium.dll` へコピーしてキャッシュ。下記「自動取得元」は
+> その名残（フォールバックとして有効）。
 
 ## 自動取得元（優先順）
 

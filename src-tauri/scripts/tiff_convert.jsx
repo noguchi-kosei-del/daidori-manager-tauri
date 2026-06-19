@@ -16,7 +16,9 @@ var TEXT_GROUP_NAMES = ["#text#", "text", "写植", "セリフ", "テキスト",
   Main Processing
  ----------------------------------------------------- */
 function main() {
-    var tempFolder = Folder.temp;
+    // セキュリティ(§6): 共有 %TEMP% 直下ではなく、アプリ専用 temp(%TEMP%/daidori-manager, ACL強化済) を使用。
+    var tempFolder = new Folder(Folder.temp.fsName + "/daidori-manager/convert");
+    if (!tempFolder.exists) { tempFolder.create(); }
     var settingsFile = new File(tempFolder + "/daidori_tiff_settings.json");
 
     if (!settingsFile.exists) {

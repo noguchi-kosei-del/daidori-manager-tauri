@@ -40,6 +40,15 @@ enum EpubImageTarget {
     PreserveOriginal,
 }
 
+/// おまかせ(Auto)で区分（表紙／本文／奥付）ごとに決めたターゲット。
+/// 各区分の多数派カラーで毎回判定し、表紙の色が本文に影響しないようにする。
+#[derive(Debug, Clone, Copy)]
+struct AutoSectionTargets {
+    cover: EpubImageTarget,
+    body: EpubImageTarget,
+    colophon: EpubImageTarget,
+}
+
 #[derive(Debug, Clone, Default)]
 struct ImageCopyResult {
     rgb_srgb_count: usize,
@@ -231,7 +240,8 @@ impl EpubBuilder {
             }
         }
 
-        let temp_dir = std::env::temp_dir().join(format!("epub_build_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            crate::security::temp_subdir("work").join(format!("epub_build_{}", uuid::Uuid::new_v4()));
         Self {
             config,
             temp_dir,
@@ -374,6 +384,7 @@ impl EpubBuilder {
         let srgb_profile = load_srgb_icc_profile();
         let adobe_rgb_profile = load_adobe_rgb_icc_profile();
         let auto_blank_target = self.auto_blank_target(&dot_gain_profile);
+        let auto_sections = self.auto_section_targets();
 
         let total = self.config.pages.len();
         self.emit_progress("images", 0, total);
@@ -388,7 +399,7 @@ impl EpubBuilder {
             .map(|(idx, page)| -> Result<ImageCopyResult, String> {
                 let dest_filename = image_filename(format, idx, page);
                 let dest = image_dir.join(&dest_filename);
-                let target = self.image_target_for_page(page, auto_blank_target);
+                let target = self.image_target_for_page(page, auto_blank_target, auto_sections);
 
                 // 事前正規化済みページ（19.3: Photoshopエンジンで sRGB プロファイル変換・
                 // ICC埋め込み・最終サイズ化済みの中間JPEG）は、リサイズ不要ならそのまま
@@ -496,6 +507,9 @@ impl EpubBuilder {
         if self.config.metadata.image_color_policy == EpubImageColorPolicy::FullColorSrgb {
             return EpubImageTarget::RgbSrgb;
         }
+        if self.config.metadata.image_color_policy == EpubImageColorPolicy::FullMonoDotGain {
+            return EpubImageTarget::GrayscaleDotGain;
+        }
         if self.config.metadata.image_color_policy == EpubImageColorPolicy::FullColorAdobeRgb {
             return EpubImageTarget::RgbAdobe;
         }
@@ -523,10 +537,45 @@ impl EpubBuilder {
         }
     }
 
+    /// 指定区分（フィルタに合致する非白紙ページ）の多数派カラーから
+    /// おまかせのターゲットを決める（モノクロ多数→Dot Gain / それ以外→sRGB）。
+    fn section_majority_target<F: Fn(&EpubPage) -> bool>(&self, in_section: F) -> EpubImageTarget {
+        let pages: Vec<&EpubPage> = self
+            .config
+            .pages
+            .iter()
+            .filter(|p| !p.is_blank && in_section(p))
+            .collect();
+        if pages.is_empty() {
+            return EpubImageTarget::RgbSrgb;
+        }
+        let gray = pages
+            .iter()
+            .filter(|p| self.is_clearly_grayscale(p))
+            .count();
+        if gray * 2 >= pages.len() {
+            EpubImageTarget::GrayscaleDotGain
+        } else {
+            EpubImageTarget::RgbSrgb
+        }
+    }
+
+    /// おまかせ用に区分（表紙／本文／奥付）ごとの多数派ターゲットを事前計算する。
+    /// 本文は表紙・奥付を除いた残り。各区分は独立に判定するため、表紙が
+    /// カラーでも本文の判定には影響しない。
+    fn auto_section_targets(&self) -> AutoSectionTargets {
+        AutoSectionTargets {
+            cover: self.section_majority_target(|p| p.is_cover),
+            colophon: self.section_majority_target(|p| p.is_colophon && !p.is_cover),
+            body: self.section_majority_target(|p| !p.is_cover && !p.is_colophon),
+        }
+    }
+
     fn image_target_for_page(
         &self,
         page: &EpubPage,
         blank_target: EpubImageTarget,
+        auto_sections: AutoSectionTargets,
     ) -> EpubImageTarget {
         match self.config.metadata.image_color_policy {
             _ if page.image_profile_override == EpubPageImageProfileOverride::Srgb => {
@@ -553,6 +602,7 @@ impl EpubBuilder {
             }
             EpubImageColorPolicy::PreserveOriginal => EpubImageTarget::PreserveOriginal,
             EpubImageColorPolicy::FullColorSrgb => EpubImageTarget::RgbSrgb,
+            EpubImageColorPolicy::FullMonoDotGain => EpubImageTarget::GrayscaleDotGain,
             EpubImageColorPolicy::FullColorAdobeRgb => EpubImageTarget::RgbAdobe,
             EpubImageColorPolicy::AdobeRgbDotGain => {
                 if page.is_blank {
@@ -572,13 +622,14 @@ impl EpubBuilder {
                 if page.is_blank {
                     return blank_target;
                 }
-                if page.is_cover || page.is_colophon {
-                    return EpubImageTarget::RgbSrgb;
-                }
-                if self.is_clearly_grayscale(page) {
-                    EpubImageTarget::GrayscaleDotGain
+                // 区分（表紙／本文／奥付）ごとに、その区分の多数派カラーで毎回判断する。
+                // 表紙・本文・奥付は独立に判定するため、表紙がカラーでも本文の判定には影響しない。
+                if page.is_cover {
+                    auto_sections.cover
+                } else if page.is_colophon {
+                    auto_sections.colophon
                 } else {
-                    EpubImageTarget::RgbSrgb
+                    auto_sections.body
                 }
             }
         }
@@ -1177,11 +1228,25 @@ fn load_srgb_icc_profile() -> Option<Vec<u8>> {
     ])
 }
 
+/// アプリ専用カラーフォルダ `%LOCALAPPDATA%\daidori-manager\color\<file>` から ICC を読む。
+/// インストーラ同梱版を初回起動でここへ展開するため、env var 未設定でも見つかる。
+fn app_color_profile(file_name: &str) -> Option<Vec<u8>> {
+    let base = std::env::var("LOCALAPPDATA").ok()?;
+    let path = std::path::Path::new(&base)
+        .join("daidori-manager")
+        .join("color")
+        .join(file_name);
+    fs::read(path).ok()
+}
+
 fn load_adobe_rgb_icc_profile() -> Option<Vec<u8>> {
     if let Ok(path) = std::env::var("DAIDORI_ADOBE_RGB_ICC") {
         if let Ok(bytes) = fs::read(path) {
             return Some(bytes);
         }
+    }
+    if let Some(bytes) = app_color_profile("AdobeRGB1998.icc") {
+        return Some(bytes);
     }
 
     profile_candidate_paths(&[
@@ -1201,6 +1266,9 @@ fn load_dot_gain_icc_profile() -> Option<Vec<u8>> {
         if let Ok(bytes) = fs::read(path) {
             return Some(bytes);
         }
+    }
+    if let Some(bytes) = app_color_profile("Dot Gain 20%.icc") {
+        return Some(bytes);
     }
 
     profile_candidate_paths(&[

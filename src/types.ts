@@ -197,11 +197,12 @@ export const HYBRID_CSS_PROFILE_LABELS: Record<HybridCssProfile, string> = {
   legacy: '旧Hybrid CSS',
 };
 
-export type EpubImageColorPolicy = 'auto' | 'full_color_srgb' | 'full_color_adobe_rgb' | 'adobe_rgb_dot_gain' | 'no_icc' | 'preserve_original';
+export type EpubImageColorPolicy = 'auto' | 'full_color_srgb' | 'full_mono_dot_gain' | 'full_color_adobe_rgb' | 'adobe_rgb_dot_gain' | 'no_icc' | 'preserve_original';
 
 export const EPUB_IMAGE_COLOR_POLICY_OPTIONS: EpubImageColorPolicy[] = [
   'auto',
   'full_color_srgb',
+  'full_mono_dot_gain',
   'full_color_adobe_rgb',
   'adobe_rgb_dot_gain',
   'no_icc',
@@ -211,10 +212,27 @@ export const EPUB_IMAGE_COLOR_POLICY_OPTIONS: EpubImageColorPolicy[] = [
 export const EPUB_IMAGE_COLOR_POLICY_LABELS: Record<EpubImageColorPolicy, string> = {
   auto: '自動（本文モノクロ＋カラーsRGB）',
   full_color_srgb: 'フルカラー（全ページsRGB）',
+  full_mono_dot_gain: '全ページモノクロ（Dot Gain）',
   full_color_adobe_rgb: 'フルカラー（全ページAdobe RGB 1998）',
   adobe_rgb_dot_gain: 'カラーAdobe RGB 1998＋本文Dot Gain',
   no_icc: '全ページICCなし',
   preserve_original: '元画像を維持',
+};
+
+// 「カスタム」でチャプター種別ごとに選ぶ4択（自動／モノクロ／カラー／そのまま）。
+// 値は EpubPageImageProfileOverride（ページ単位の上書き）に対応する。
+export const EPUB_CUSTOM_CHAPTER_OPTIONS: EpubPageImageProfileOverride[] = [
+  'auto',
+  'dot_gain',
+  'srgb',
+  'preserve_original',
+];
+
+export const EPUB_CUSTOM_CHAPTER_LABELS: Record<string, string> = {
+  auto: '自動',
+  dot_gain: 'モノクロ（ドットゲイン）',
+  srgb: 'カラー（sRGB）',
+  preserve_original: 'そのまま',
 };
 
 export type EpubPageImageProfileOverride = 'auto' | 'srgb' | 'adobe_rgb' | 'adobe_rgb_dot_gain' | 'dot_gain' | 'no_icc' | 'preserve_original';
@@ -299,6 +317,12 @@ export interface EpubMetadata {
   hybridCssProfile?: HybridCssProfile;
   imageColorPolicy?: EpubImageColorPolicy;
   /**
+   * 「カスタム」: チャプター種別ごとのプロファイル指定（フロント専用）。
+   * 例 { chapter: 'dot_gain', cover: 'srgb' }。'auto' は自動判定にフォールバック。
+   * App 側がページ構築時に各ページの imageProfileOverride へ反映する。Rust は無視。
+   */
+  customChapterProfiles?: Partial<Record<ChapterType, EpubPageImageProfileOverride>>;
+  /**
    * EPUB生成前のPSD→JPEG中間変換のエンジン（19.3 実験）。
    * 'native'(既定): image クレートで高速変換（ICC埋め込みのみ）。
    * 'photoshop': Photoshopの「プロファイル変換」で厳密にsRGB化（高品質）。
@@ -318,6 +342,8 @@ export interface EpubSplitRange {
 
 export interface EpubSplitSettings {
   enabled: boolean;
+  // 「両方作成」: 分割版に加えて1冊にまとめた版も同時に作成する
+  alsoWhole?: boolean;
   ranges: EpubSplitRange[];
   baseName: string;
   titles?: string[];
@@ -348,6 +374,8 @@ export interface SavedEpubVolume {
 
 export interface SavedEpubSplitState {
   enabled: boolean;
+  /** 「両方作成」: 分割版に加えて1冊にまとめた版も同時に作成する */
+  alsoWhole?: boolean;
   baseName: string;
   suffixStart: number;
   suffixDigits: number;
@@ -374,6 +402,8 @@ export interface SavedEpubState {
   hybridCssProfile?: HybridCssProfile;
   allowMissingColophon?: boolean;
   imageColorPolicy?: EpubImageColorPolicy;
+  /** カスタム: チャプター種別ごとのプロファイル指定も保存・復元する */
+  customChapterProfiles?: Partial<Record<ChapterType, EpubPageImageProfileOverride>>;
   /** 19.3: PSD変換エンジン（高速ネイティブ/高品質Photoshop）も保存・復元の対象にする */
   colorEngine?: EpubColorEngine;
   pageOverrides?: SavedEpubPageOverride[];

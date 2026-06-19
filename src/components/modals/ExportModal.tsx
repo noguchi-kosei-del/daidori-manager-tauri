@@ -3,9 +3,11 @@ import { save } from '@tauri-apps/plugin-dialog';
 import { desktopDir, join } from '@tauri-apps/api/path';
 import { invoke } from '@tauri-apps/api/core';
 import { Chapter, CHAPTER_TYPE_LABELS, CHAPTER_TYPE_COLORS } from '../../types';
-import { ExportIcon, FolderIcon, CopyIcon, PencilIcon, ReplaceIcon } from '../../icons';
+import { ExportIcon, FolderIcon, CopyIcon, PencilIcon, ReplaceIcon, ScissorsIcon, CheckIcon2 } from '../../icons';
 import { useModalAnimation } from '../../hooks';
 import { useBleedStore } from '../../bleedStore';
+import { SplitRangeGrid, type SplitRange } from './SplitRangeModal';
+import { OutputFolderTree } from '../output/OutputFolderTree';
 
 // チャプターごとのリネーム設定
 export interface ChapterRenameSettings {
@@ -122,6 +124,11 @@ export interface ExportOptions {
   jpegBlurEnabled: boolean;
   jpegBlurRadius: number;
   jpegBlurBackgroundOnly: boolean; // true: PSDテキストレイヤーをマスクに文字をシャープ保持
+  // 分割: ページ通し位置(0始まり)の範囲ごとにサブフォルダ(01,02…)へ分けて出力。
+  // 全形式(原本/JPEG/TIFF)共通。空なら分割なし。
+  splitRanges?: { startIndex: number; endIndex: number }[];
+  // 分割と同時に「分割しないもの（全体）」も作成する（true で「全体」フォルダにも出力）。
+  splitAlsoWhole?: boolean;
 }
 
 // エクスポートモーダル
@@ -175,6 +182,14 @@ export function ExportModal({
   // アクションの「保存」「閉じる」を無効化してアプリの出力先に一本化（既定ON）
   const [stripActionSaveClose, setStripActionSaveClose] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
+  // 分割（全形式共通）: 出力順ページの範囲ごとにサブフォルダへ分ける
+  const [splitRanges, setSplitRanges] = useState<SplitRange[]>([]);
+  const [splitAlsoWhole, setSplitAlsoWhole] = useState(false);
+  // 出力設定ウィザード（縦3ボタンの中身を1つに繋ぎ、設定→分割と「次へ」で進む）
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardStepKey, setWizardStepKey] = useState<'settings' | 'split'>('settings');
+  // 分割範囲ピッカー用の出力順ページ（チャプターを跨いだ通し順）
+  const orderedPages = chapters.flatMap((c) => c.pages);
 
   // アクション設定をlocalStorageから復元
   useEffect(() => {
@@ -202,7 +217,7 @@ export function ExportModal({
     const initDefaultPath = async () => {
       try {
         const desktop = await desktopDir();
-        const defaultPath = await join(desktop, 'Script_Output', '台割TIF');
+        const defaultPath = await join(desktop, 'Script_Output', '台割出力');
         setOutputPath(defaultPath);
       } catch (e) {
         console.error('Failed to get desktop path:', e);
@@ -296,8 +311,11 @@ export function ExportModal({
     const tiffTargetHeight = Math.max(0, parseInt(tiffHeightText, 10) || 0);
     const jpegBlurRadius = Math.max(0, parseFloat(jpegBlurRadiusText) || 0);
     setIsExporting(true);
+    // 出力形式に応じたサブフォルダ（TIF / JPEG / 原本）を出力先に追加して書き出す
+    const formatFolder = convertToTiff ? 'TIF' : convertToJpg ? 'JPEG' : '原本';
+    const finalOutputPath = await join(outputPath, formatFolder);
     // アクションの .atn / アクション名は「断ち切り」タブの設定を参照する
-    await onExport({ outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, resizeMode, resizePercent, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode, runAction, actionSetPath: tabActionSetPath, actionName: tabActionName.trim(), stripActionSaveClose, tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight, jpegBlurEnabled, jpegBlurRadius, jpegBlurBackgroundOnly });
+    await onExport({ outputPath: finalOutputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, resizeMode, resizePercent, renameMode, startNumber, digits, prefix, perChapterSettings, bleedMode, runAction, actionSetPath: tabActionSetPath, actionName: tabActionName.trim(), stripActionSaveClose, tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight, jpegBlurEnabled, jpegBlurRadius, jpegBlurBackgroundOnly, splitRanges, splitAlsoWhole });
     setIsExporting(false);
     if (!embedded) onClose();
   };
@@ -313,6 +331,184 @@ export function ExportModal({
   const previewName1 = `${prefix}${String(startNumber).padStart(digits, '0')}.jpg`;
   const previewName2 = `${prefix}${String(startNumber + 1).padStart(digits, '0')}.jpg`;
 
+  // JPEGの詳細設定（分割モーダルの「設定」タブに表示）
+  const jpegSettingsNode = (
+    <div className="form-group">
+      <div className="quality-slider">
+        <label>品質: {jpgQuality}%</label>
+        <input
+          type="range"
+          min="70"
+          max="100"
+          value={jpgQuality}
+          onChange={(e) => setJpgQuality(parseInt(e.target.value))}
+        />
+        <div className="quality-labels">
+          <span>小さめ</span>
+          <span>高画質</span>
+        </div>
+      </div>
+      <div className="resize-settings">
+        <label className="resize-label">リサイズ</label>
+        <select
+          className="select-full"
+          value={resizeMode}
+          onChange={(e) => setResizeMode(e.target.value as ResizeMode)}
+        >
+          <option value="none">なし（原寸）</option>
+          <option value="percent">%指定</option>
+          <option value="fixed">デフォルト（1280×1818）</option>
+        </select>
+        {resizeMode === 'percent' && (
+          <div className="resize-percent-row">
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={resizePercent}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                setResizePercent(Number.isNaN(v) ? 1 : Math.min(100, Math.max(1, v)));
+              }}
+            />
+            <span>%</span>
+          </div>
+        )}
+      </div>
+      {/* ぼかし（ガウス）は「断ち切り」タブの設定に一本化したため、JPEG設定からは削除（重複回避） */}
+    </div>
+  );
+
+  // TIFFの詳細設定（分割モーダルの「設定」タブに表示）
+  const tiffSettingsNode = (
+    <div className="form-group">
+      <label className="section-heading">TIFF変換オプション</label>
+      <div className="tiff-options">
+        <div className="tiff-note">
+          ※ LZW圧縮、レイヤー統合で出力（カラーモードは元ファイルを維持）
+        </div>
+        <label className="checkbox-label" style={{ marginTop: 8 }}>
+          <input
+            type="checkbox"
+            checked={tiffResizeEnabled}
+            onChange={(e) => {
+              setTiffResizeEnabled(e.target.checked);
+              if (e.target.checked) setRunAction(false);
+            }}
+          />
+          サイズを統一（指定ピクセルに自動リサイズ＋自動保存）
+          <span className="option-note"> - 全ページを同じ寸法に揃えてアプリが自動保存（推奨）</span>
+        </label>
+        {tiffResizeEnabled && (
+          <div className="action-settings">
+            <div className="form-row">
+              <div className="form-group">
+                <label>幅 (px)</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={tiffWidthText}
+                  onChange={(e) => setTiffWidthText(e.target.value.replace(/[^0-9]/g, ''))}
+                  placeholder="例: 1280"
+                />
+              </div>
+              <div className="form-group">
+                <label>高さ (px)</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={tiffHeightText}
+                  onChange={(e) => setTiffHeightText(e.target.value.replace(/[^0-9]/g, ''))}
+                  placeholder="例: 1818"
+                />
+              </div>
+            </div>
+            <div className="tiff-note">
+              ※ 全ページを指定した幅×高さ(px)に拡大縮小して揃えます（縦横比が異なるページは指定寸法に合わせて変形します）。
+            </div>
+          </div>
+        )}
+        {/* 「処理の途中でPhotoshopアクションを実行」項目は基本使わないため非表示・凍結（runAction は常に false 既定）。
+            復活させる場合はこのブロックを戻す。状態(runAction/stripActionSaveClose)と出力処理は維持。 */}
+      </div>
+    </div>
+  );
+
+  // 分割の同時作成（ON/OFFトグルボタン。範囲があるときのみ意味を持つ）
+  const splitAlsoWholeCheckbox = (
+    <div className="export-split-alsowhole">
+      <div className="export-alsowhole-row">
+        <div className="export-alsowhole-text">
+          分割しないもの（全体）も同時に作成
+          <span className="option-note"> - 分割フォルダ(01,02…)に加えて「全体」フォルダにも出力</span>
+        </div>
+        <button
+          type="button"
+          className={`export-toggle-btn ${splitAlsoWhole ? 'on' : 'off'}`}
+          onClick={() => setSplitAlsoWhole((v) => !v)}
+          disabled={splitRanges.length === 0}
+          aria-pressed={splitAlsoWhole}
+        >
+          {splitAlsoWhole ? 'ON' : 'OFF'}
+        </button>
+      </div>
+    </div>
+  );
+
+  // 出力方法（縦ボタン）。原本=コピー/移動/分割、JPEG/TIFF=設定/分割（同時作成は分割タブ内のON/OFFに集約）。
+  const splitDesc = splitRanges.length > 0 ? `${splitRanges.length}分割（範囲ごとにフォルダ）` : 'ボタンで範囲を選択';
+  const outputMethodNode = outputFormat === 'copy' ? (
+    <div className="form-group">
+      <label className="section-heading"><CopyIcon size={15} />出力方法</label>
+      <div className="export-method-vert">
+        <label className="radio-label">
+          <input type="radio" name="exportMode" checked={exportMode === 'copy'} onChange={() => setExportMode('copy')} />
+          <span className="radio-ico"><CopyIcon size={16} /></span>
+          コピー
+          <span className="radio-description">元ファイルを残す</span>
+        </label>
+        <label className="radio-label">
+          <input type="radio" name="exportMode" checked={exportMode === 'move'} onChange={() => setExportMode('move')} />
+          <span className="radio-ico"><ReplaceIcon size={16} /></span>
+          移動
+          <span className="radio-description">元ファイルを整理</span>
+        </label>
+        <button type="button" className="radio-label export-method-btn" onClick={() => { setWizardStepKey('split'); setWizardOpen(true); }}>
+          <span className="radio-ico"><ScissorsIcon size={16} /></span>
+          分割
+          <span className="radio-description">{splitDesc}</span>
+        </button>
+      </div>
+    </div>
+  ) : (
+    <div className="form-group">
+      <label className="section-heading"><ExportIcon size={15} />{convertToJpg ? 'JPEG' : 'TIFF'}の出力方法</label>
+      <div className="export-method-vert">
+        <button type="button" className="radio-label export-method-btn" onClick={() => { setWizardStepKey('settings'); setWizardOpen(true); }}>
+          <span className="radio-ico"><PencilIcon size={16} /></span>
+          設定
+          <span className="radio-description">{convertToJpg ? '品質・リサイズ' : 'サイズ統一・アクション'}</span>
+        </button>
+        <button type="button" className="radio-label export-method-btn" onClick={() => { setWizardStepKey('split'); setWizardOpen(true); }}>
+          <span className="radio-ico"><ScissorsIcon size={16} /></span>
+          分割
+          <span className="radio-description">{splitDesc}</span>
+        </button>
+      </div>
+    </div>
+  );
+
+  // 出力設定ウィザードのステップ（JPEG/TIFF: 設定→分割 / 原本: 分割のみ）。EPUB作成のように「次へ」で進む。
+  const wizardSteps: { key: 'settings' | 'split'; label: string }[] =
+    (convertToJpg || convertToTiff)
+      ? [{ key: 'settings', label: convertToJpg ? 'JPEG設定' : 'TIFF設定' }, { key: 'split', label: '分割' }]
+      : [{ key: 'split', label: '分割' }];
+  const wizardIdx = Math.max(0, wizardSteps.findIndex((s) => s.key === wizardStepKey));
+  const wizardCurKey = wizardSteps[wizardIdx].key;
+  const wizardIsLast = wizardIdx >= wizardSteps.length - 1;
+
   const { shouldRender, isClosing } = useModalAnimation(isOpen);
   if (!embedded && !shouldRender) return null;
 
@@ -326,7 +522,25 @@ export function ExportModal({
             </h2>
           </div>
         )}
-        <div className="modal-body">
+        <div className={`modal-body${embedded ? ' export-body-with-tree' : ''}`}>
+          {/* 左: 保存先ディレクトリのマーメイド風フォルダ構成図（出力タブ＝embedded時のみ） */}
+          {embedded && (
+            <OutputFolderTree
+              outputPath={outputPath}
+              outputFormat={outputFormat}
+              exportMode={exportMode}
+              renameMode={renameMode}
+              splitRanges={splitRanges}
+              splitAlsoWhole={splitAlsoWhole}
+              prefix={prefix}
+              startNumber={startNumber}
+              digits={digits}
+              chapters={chapters}
+              perChapterSettings={perChapterSettings}
+            />
+          )}
+          {/* 右: 出力設定フォーム本体 */}
+          <div className="export-form-main">
           {/* 出力形式: 中サイズカードで選ぶ（全幅） */}
           <div className="form-group export-fullrow export-format-group">
             <label className="section-heading"><ExportIcon size={15} />出力形式</label>
@@ -371,220 +585,8 @@ export function ExportModal({
 
           <div className="export-grid">
           <div className="export-col">
-            {convertToJpg && (
-              <div className="form-group">
-                <div className="quality-slider">
-                  <label>品質: {jpgQuality}%</label>
-                  <input
-                    type="range"
-                    min="70"
-                    max="100"
-                    value={jpgQuality}
-                    onChange={(e) => setJpgQuality(parseInt(e.target.value))}
-                  />
-                  <div className="quality-labels">
-                    <span>小さめ</span>
-                    <span>高画質</span>
-                  </div>
-                </div>
-                <div className="resize-settings">
-                  <label className="resize-label">リサイズ</label>
-                  <select
-                    className="select-full"
-                    value={resizeMode}
-                    onChange={(e) => setResizeMode(e.target.value as ResizeMode)}
-                  >
-                    <option value="none">なし（原寸）</option>
-                    <option value="percent">%指定</option>
-                    <option value="fixed">デフォルト（1280×1818）</option>
-                  </select>
-                  {resizeMode === 'percent' && (
-                    <div className="resize-percent-row">
-                      <input
-                        type="number"
-                        min={1}
-                        max={100}
-                        value={resizePercent}
-                        onChange={(e) => {
-                          const v = parseInt(e.target.value, 10);
-                          setResizePercent(Number.isNaN(v) ? 1 : Math.min(100, Math.max(1, v)));
-                        }}
-                      />
-                      <span>%</span>
-                    </div>
-                  )}
-                </div>
-                <label className="checkbox-label" style={{ marginTop: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={jpegBlurEnabled}
-                    onChange={(e) => setJpegBlurEnabled(e.target.checked)}
-                  />
-                  ぼかし（ガウス）を適用
-                  <span className="option-note"> - Photoshop不要・アプリ内で実行</span>
-                </label>
-                {jpegBlurEnabled && (
-                  <div className="action-settings">
-                    <div className="form-group">
-                      <label>ぼかし半径 (px)</label>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={jpegBlurRadiusText}
-                        onChange={(e) => setJpegBlurRadiusText(e.target.value.replace(/[^0-9.]/g, ''))}
-                        placeholder="例: 2.5"
-                      />
-                    </div>
-                    <label className="checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={jpegBlurBackgroundOnly}
-                        onChange={(e) => setJpegBlurBackgroundOnly(e.target.checked)}
-                      />
-                      テキストを保護（背景のみぼかす）
-                      <span className="option-note"> - PSDのテキストレイヤー（#text#/写植 等）を検出し文字をシャープに保つ。フチや背景はぼけます</span>
-                    </label>
-                    <div className="tiff-note">
-                      ※ ぼかしは原寸（断ち切り・リサイズ前）で適用されます。「テキストを保護」はPSDのみ有効で、検出できない場合は全体ぼかしになります。
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-          {/* コピー/移動は「そのままコピー（変換なし）」のときだけ意味を持つ */}
-          {outputFormat === 'copy' && (
-            <div className="form-group">
-              <label className="section-heading"><CopyIcon size={15} />出力方法</label>
-              <div className="radio-group">
-                <label className="radio-label">
-                  <input
-                    type="radio"
-                    name="exportMode"
-                    checked={exportMode === 'copy'}
-                    onChange={() => setExportMode('copy')}
-                  />
-                  <span className="radio-ico"><CopyIcon size={16} /></span>
-                  コピー
-                  <span className="radio-description">元ファイルを残す</span>
-                </label>
-                <label className="radio-label">
-                  <input
-                    type="radio"
-                    name="exportMode"
-                    checked={exportMode === 'move'}
-                    onChange={() => setExportMode('move')}
-                  />
-                  <span className="radio-ico"><ReplaceIcon size={16} /></span>
-                  移動
-                  <span className="radio-description">元ファイルを整理</span>
-                </label>
-              </div>
-            </div>
-          )}
-
-          {/* TIFF変換オプション（0602由来: サイズ統一・背景ぼかし・Photoshopアクション実行） */}
-          {convertToTiff && (
-            <div className="form-group">
-              <label className="section-heading">TIFF変換オプション</label>
-              <div className="tiff-options">
-                <div className="tiff-note">
-                  ※ LZW圧縮、レイヤー統合で出力（カラーモードは元ファイルを維持）
-                </div>
-                <label className="checkbox-label" style={{ marginTop: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={tiffResizeEnabled}
-                    onChange={(e) => {
-                      setTiffResizeEnabled(e.target.checked);
-                      // サイズ統一とアクションは同時に使えない（アクションが保存・閉じるを行いアプリ処理を奪うため）
-                      if (e.target.checked) setRunAction(false);
-                    }}
-                  />
-                  サイズを統一（指定ピクセルに自動リサイズ＋自動保存）
-                  <span className="option-note"> - 全ページを同じ寸法に揃えてアプリが自動保存（推奨）</span>
-                </label>
-                {tiffResizeEnabled && (
-                  <div className="action-settings">
-                    <div className="form-row">
-                      <div className="form-group">
-                        <label>幅 (px)</label>
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          value={tiffWidthText}
-                          onChange={(e) => setTiffWidthText(e.target.value.replace(/[^0-9]/g, ''))}
-                          placeholder="例: 1280"
-                        />
-                      </div>
-                      <div className="form-group">
-                        <label>高さ (px)</label>
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          value={tiffHeightText}
-                          onChange={(e) => setTiffHeightText(e.target.value.replace(/[^0-9]/g, ''))}
-                          placeholder="例: 1818"
-                        />
-                      </div>
-                    </div>
-                    <div className="tiff-note">
-                      ※ 全ページを指定した幅×高さ(px)に拡大縮小して揃えます（縦横比が異なるページは指定寸法に合わせて変形します）。
-                    </div>
-                  </div>
-                )}
-                <label className={`checkbox-label ${tiffResizeEnabled ? 'disabled' : ''}`} style={{ marginTop: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={runAction && !tiffResizeEnabled}
-                    disabled={tiffResizeEnabled}
-                    onChange={(e) => {
-                      setRunAction(e.target.checked);
-                      if (e.target.checked) setTiffResizeEnabled(false);
-                    }}
-                  />
-                  処理の途中でPhotoshopアクションを実行（任意）
-                  <span className="option-note">
-                    {tiffResizeEnabled
-                      ? ' - 「サイズを統一」と同時には使えません（アクションが保存・閉じるを行いアプリの保存・リサイズを奪うため）'
-                      : ' - ぼかし等の加工用。ただし保存・閉じるを含むアクションはアプリの自動保存と競合します'}
-                  </span>
-                </label>
-                {runAction && (
-                  <div className="action-settings">
-                    <div className="form-group">
-                      <label>実行するアクション（「断ち切り」タブで設定）</label>
-                      {tabActionName ? (
-                        <div className="tiff-note">
-                          {tabActionName}{tabActionSetPath ? `（${tabActionSetPath.split(/[\\/]/).pop()}）` : ''}
-                        </div>
-                      ) : (
-                        <div className="tiff-note" style={{ color: 'var(--color-error, #dc2626)' }}>
-                          アクションが未選択です。「断ち切り」タブで方式を「アクション…」にして .atn とアクション名を選んでください。
-                        </div>
-                      )}
-                    </div>
-                    <label className="checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={stripActionSaveClose}
-                        onChange={(e) => setStripActionSaveClose(e.target.checked)}
-                      />
-                      アクションの「保存」「閉じる」を無視してアプリの出力先に保存（推奨）
-                      <span className="option-note"> - .atnに焼き込まれた保存先（別PCのパス等）を使わず、上で指定した出力フォルダに一律で保存します</span>
-                    </label>
-                    <div className="tiff-note">
-                      {stripActionSaveClose
-                        ? '※ アクション内の「保存」「閉じる」を自動で無効化し、加工（ぼかし・切り抜き等）だけを実行します。保存・サイズ統一・TIFF化はアプリが行い、すべて上の出力フォルダに集約されます（.atnの元データは変更しません）。'
-                        : '※ オフの場合、アクションに「保存」「閉じる」が含まれていると、.atnに焼き込まれた保存先へ保存され、保存ダイアログが出ることがあります。'}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+            {/* 出力方法（縦3ボタン）: 原本=コピー/移動/分割、JPEG/TIFF=設定/分割/同時作成 */}
+            {outputMethodNode}
 
           {(convertToTiff || convertToJpg) && (
             <div className="form-group">
@@ -807,6 +809,7 @@ export function ExportModal({
               </button>
             </div>
           </div>
+          </div>
         </div>
         <div className="modal-footer">
           {!embedded && (
@@ -822,6 +825,75 @@ export function ExportModal({
             {isExporting ? '生成中...' : '生成'}
           </button>
         </div>
+
+        {/* 出力設定ウィザード（EPUB設定と同じ左レール構成。各縦ボタンから該当ステップで開く） */}
+        {wizardOpen && (
+          <div className="modal-overlay epub-wizard-overlay" style={{ zIndex: 10001 }} onClick={() => setWizardOpen(false)}>
+            <div className="epub-wizard export-wizard" onClick={(e) => e.stopPropagation()}>
+              {/* 左: 進行レール */}
+              <aside className="epub-wizard-rail">
+                <div className="epub-wizard-rail-head">
+                  <ExportIcon size={18} />
+                  <span>出力設定</span>
+                </div>
+                <ol className="epub-wizard-steps">
+                  {wizardSteps.map((s, i) => (
+                    <li
+                      key={s.key}
+                      className={`epub-wizard-step ${wizardIdx === i ? 'current' : ''} ${i < wizardIdx ? 'done' : ''}`}
+                      onClick={() => setWizardStepKey(s.key)}
+                    >
+                      <span className="epub-wizard-step-no">{i < wizardIdx ? <CheckIcon2 /> : i + 1}</span>
+                      <span className="epub-wizard-step-label">{s.label}</span>
+                    </li>
+                  ))}
+                </ol>
+              </aside>
+              {/* 右: 本体 */}
+              <div className="epub-wizard-main">
+                <header className="epub-wizard-header">
+                  <div>
+                    <div className="epub-wizard-step-counter">ステップ {wizardIdx + 1} / {wizardSteps.length}</div>
+                    <h2 className="epub-wizard-title">{wizardSteps[wizardIdx].label}</h2>
+                  </div>
+                </header>
+                <div className="epub-wizard-body">
+                  {wizardCurKey === 'settings' && (convertToJpg ? jpegSettingsNode : tiffSettingsNode)}
+                  {wizardCurKey === 'split' && (
+                    <>
+                      {splitAlsoWholeCheckbox}
+                      <SplitRangeGrid pages={orderedPages} ranges={splitRanges} onChange={setSplitRanges} />
+                    </>
+                  )}
+                </div>
+                <div className="modal-footer">
+                  {wizardIdx > 0 && (
+                    <button
+                      type="button"
+                      className="btn-secondary btn-small"
+                      onClick={() => setWizardStepKey(wizardSteps[wizardIdx - 1].key)}
+                    >
+                      戻る
+                    </button>
+                  )}
+                  {!wizardIsLast ? (
+                    <button
+                      type="button"
+                      className="btn-primary btn-small"
+                      onClick={() => setWizardStepKey(wizardSteps[wizardIdx + 1].key)}
+                    >
+                      次へ
+                    </button>
+                  ) : (
+                    <button type="button" className="btn-primary btn-small" onClick={() => setWizardOpen(false)}>
+                      完了
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
     </>
   );
 

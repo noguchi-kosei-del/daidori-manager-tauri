@@ -131,7 +131,7 @@ fn tachimi_supports_pdf_job(p: &Path) -> bool {
     }
 
     // ジョブごとに一意なフォルダ（固定名による衝突/予測・並行実行干渉を回避）。
-    let check_dir = std::env::temp_dir()
+    let check_dir = crate::security::temp_subdir("work")
         .join("daidori_tachimi_capability_check")
         .join(uuid::Uuid::new_v4().simple().to_string());
     let _ = fs::remove_dir_all(&check_dir);
@@ -352,7 +352,8 @@ async fn prepare_pages_for_pdf(
     mut chapters: Vec<TachimiPdfChapter>,
 ) -> Result<Vec<TachimiPdfChapter>, String> {
     // 1. 画像ファイルを持つ全ページ（PSD/JPEG/PNG/TIFF 区別なし）を収集
-    let output_dir = std::env::temp_dir()
+    // セキュリティ(§6): 中間JPEGは pdf カテゴリ配下へ（ACL強化済・共有%TEMP%直下の固定名を避ける）。
+    let output_dir = crate::security::temp_subdir("pdf")
         .join("daidori_tachimi_pdf_jpeg")
         .to_string_lossy()
         .to_string();
@@ -379,6 +380,7 @@ async fn prepare_pages_for_pdf(
                 output_name: format!("c{:03}_p{:04}.jpg", ci + 1, pi + 1),
                 // 断ち切り設定（未指定はデフォルト=断ち切りなし）
                 options: opts,
+                extra_outputs: Vec::new(),
             });
             tasks.push((ci, pi));
         }
@@ -602,7 +604,7 @@ fn generate_tachimi_merged_pdf_job(
             let _ = fs::remove_dir_all(&self.0);
         }
     }
-    let staging_root = std::env::temp_dir()
+    let staging_root = crate::security::temp_subdir("work")
         .join("daidori_tachimi_pdf_jobs")
         .join(uuid::Uuid::new_v4().simple().to_string());
     let _staging_guard = StagingGuard(staging_root.clone());

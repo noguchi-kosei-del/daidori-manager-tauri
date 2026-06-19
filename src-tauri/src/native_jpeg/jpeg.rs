@@ -7,6 +7,7 @@ use mozjpeg::{ColorSpace as MozColorSpace, Compress};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
+use tiff::encoder::{colortype, Compression, TiffEncoder};
 
 /// MozJPEGでRGB画像をエンコード（高効率圧縮）
 pub fn encode_jpeg_mozjpeg(
@@ -45,6 +46,30 @@ pub fn write_jpeg_mozjpeg_to_file<P: AsRef<Path>>(
 
     let mut file = File::create(path).map_err(|e| format!("ファイル作成に失敗: {}", e))?;
     file.write_all(&jpeg_data)
+        .map_err(|e| format!("ファイル書き込みに失敗: {}", e))?;
+    Ok(())
+}
+
+/// RGB画像をTIFF（imageクレート）でファイルに書き出し。
+///
+/// EPUB生成時の「TIFF併産」用（印刷控え/入稿向け）。EPUB本体はJPEGのままで、
+/// この関数は出力名の拡張子が .tif/.tiff のときに save_image から呼ばれる。
+pub fn write_tiff_to_file<P: AsRef<Path>>(
+    rgb_data: &[u8],
+    width: u32,
+    height: u32,
+    path: P,
+) -> Result<(), String> {
+    let file = File::create(path).map_err(|e| format!("ファイル作成に失敗: {}", e))?;
+    let mut writer = BufWriter::new(file);
+    // LZW圧縮で書き出す（可逆。非圧縮だと漫画原寸で1枚100MB超になりディスクI/Oが重いため）。
+    let mut tiff = TiffEncoder::new(&mut writer)
+        .map_err(|e| format!("TIFFエンコーダ作成に失敗: {}", e))?
+        .with_compression(Compression::Lzw);
+    tiff.write_image::<colortype::RGB8>(width, height, rgb_data)
+        .map_err(|e| format!("TIFF書き込みに失敗: {}", e))?;
+    writer
+        .flush()
         .map_err(|e| format!("ファイル書き込みに失敗: {}", e))?;
     Ok(())
 }

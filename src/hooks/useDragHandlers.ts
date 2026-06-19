@@ -5,6 +5,7 @@ import {
   DragStartEvent,
   PointerSensor,
   closestCenter,
+  pointerWithin,
   useSensor,
   useSensors,
   CollisionDetection,
@@ -79,7 +80,20 @@ export function useDragHandlers({
       });
     }
 
-    // ページドラッグ時は通常のclosestCenter
+    // ページドラッグ時はポインタ位置で判定（チャプター跨ぎ・空チャプターへの移動を確実にする）。
+    // 優先: ph(プレースホルダ) > ページ > チャプター枠(chapter-drop)。
+    const pointer = pointerWithin(args);
+    if (pointer.length > 0) {
+      const ph = pointer.filter((c) => String(c.id).startsWith('ph:'));
+      if (ph.length) return ph;
+      const pageHits = pointer.filter((c) => {
+        const id = String(c.id);
+        return !id.startsWith('ph:') && !id.startsWith('chapter-drop:');
+      });
+      if (pageHits.length) return pageHits;
+      const chap = pointer.filter((c) => String(c.id).startsWith('chapter-drop:'));
+      if (chap.length) return chap;
+    }
     return closestCenter(args);
   };
 
@@ -115,6 +129,17 @@ export function useDragHandlers({
     }
 
     const overIdStr = String(over.id);
+
+    // チャプター枠の上にホバー（空チャプター含む）: そのチャプターの末尾へ移動（即ロック）
+    if (overIdStr.startsWith('chapter-drop:')) {
+      if (activeDragType === 'page') {
+        const chapterId = overIdStr.slice('chapter-drop:'.length);
+        setDropTarget({ type: 'chapter-end', chapterId, locked: true });
+      } else {
+        setDropTarget(null);
+      }
+      return;
+    }
 
     // プレースホルダー上にホバー: 位置をロック（実線表示・ドロップで並べ替え確定）
     if (overIdStr.startsWith('ph:')) {
@@ -188,12 +213,16 @@ export function useDragHandlers({
         insertType = activeCenterX < overCenterX ? 'page-before' : 'page-after';
       }
 
-      // サイドバーは従来通り即ロック（ドロップで確定）。リスト表示は点線プレースホルダー上にホバーするまでロックしない
+      // サイドバーは従来通り即ロック（ドロップで確定）。
+      // リスト表示でも「チャプターを跨ぐ移動」は即ロックして、別チャプターのページ上に
+      // ドロップするだけで移動できるようにする（薄い点線プレースホルダーを狙わなくてよい）。
+      // 同一チャプター内の並べ替えだけは従来どおりプレースホルダー上ホバーでロック（誤操作防止）。
+      const isCrossChapter = activePage.chapter.id !== overPage.chapter.id;
       setDropTarget({
         type: insertType,
         chapterId: overPage.chapter.id,
         pageId: actualOverId,
-        locked: isSidebarDrag,
+        locked: isSidebarDrag || isCrossChapter,
       });
     } else {
       setDropTarget(null);
@@ -201,10 +230,41 @@ export function useDragHandlers({
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
-    const { active } = event;
+    const { active, over } = event;
+
+    // dropTarget(React state)はドラッグ中の更新ラグで、リリース時に null になっていることが
+    // ある（特に遠いチャプターへ運ぶ間に over が一瞬外れた場合）。そのため event.over から
+    // 直接ターゲットを補完し、別チャプター／空チャプターへの移動を取りこぼさないようにする。
+    let dt = dropTarget;
+    if (activeDragType === 'page' && over) {
+      const aId = String(active.id);
+      const isSb = aId.startsWith(SIDEBAR_PREFIX);
+      const actualA = isSb ? aId.replace(SIDEBAR_PREFIX, '') : aId;
+      const aPage = allPages.find((p) => p.page.id === actualA);
+      const overId = String(over.id);
+      // dropTarget が無い/未ロックのときだけ補完（プレースホルダー上の確定など既存挙動は尊重）
+      if (!dt || !dt.locked) {
+        if (overId.startsWith('chapter-drop:')) {
+          dt = { type: 'chapter-end', chapterId: overId.slice('chapter-drop:'.length), locked: true };
+        } else if (overId.startsWith('ph:')) {
+          const parts = overId.split(':');
+          const pos = parts[1];
+          const pid = parts.slice(2).join(':');
+          const oPage = allPages.find((p) => p.page.id === pid);
+          if (oPage) dt = { type: pos === 'before' ? 'page-before' : 'page-after', chapterId: oPage.chapter.id, pageId: pid, locked: true };
+        } else {
+          const oId = overId.startsWith(SIDEBAR_PREFIX) ? overId.replace(SIDEBAR_PREFIX, '') : overId;
+          const oPage = allPages.find((p) => p.page.id === oId);
+          // 別チャプターのページ上 → そのチャプター末尾へ移動（確実に確定）
+          if (oPage && aPage && oPage.chapter.id !== aPage.chapter.id) {
+            dt = { type: 'chapter-end', chapterId: oPage.chapter.id, locked: true };
+          }
+        }
+      }
+    }
 
     // dropTargetがない場合は何もしない
-    if (!dropTarget) {
+    if (!dt) {
       setActiveId(null);
       setActiveDragType(null);
       setDropTarget(null);
@@ -223,13 +283,13 @@ export function useDragHandlers({
         return;
       }
 
-      if (dropTarget.type === 'chapter-before' || dropTarget.type === 'chapter-after') {
-        const targetIndex = chapters.findIndex((c) => c.id === dropTarget.chapterId);
+      if (dt.type === 'chapter-before' || dt.type === 'chapter-after') {
+        const targetIndex = chapters.findIndex((c) => c.id === dt.chapterId);
         if (targetIndex !== -1) {
           // dnd-kit 標準パターン: over.id の位置に active を移動（splice ベースの reorderChapters と整合）
           // 'chapter-after' の場合のみ +1 する。reorderChapters は from を抜いた後の配列に対して to で挿入するので
           // 自分より後ろへの移動のオフセット補正は不要（splice(from,1) で一旦抜く実装のため）。
-          let newIndex = dropTarget.type === 'chapter-after' ? targetIndex + 1 : targetIndex;
+          let newIndex = dt.type === 'chapter-after' ? targetIndex + 1 : targetIndex;
           // newIndex が oldIndex より後ろの場合、抜いた分だけ index を1つ前にずらす
           if (newIndex > oldIndex) newIndex -= 1;
           if (newIndex !== oldIndex) {
@@ -262,14 +322,14 @@ export function useDragHandlers({
       const isMultiDrag = draggedPageIds.length > 1;
 
       // 通常のページ移動（page-before / page-after）
-      // dropTarget.locked が false の場合は確定せずキャンセル（点線プレースホルダー上にホバーしていない状態でリリースされた）
-      if ((dropTarget.type === 'page-before' || dropTarget.type === 'page-after') && dropTarget.pageId && dropTarget.locked) {
-        const toChapterId = dropTarget.chapterId;
+      // dt.locked が false の場合は確定せずキャンセル（点線プレースホルダー上にホバーしていない状態でリリースされた）
+      if ((dt.type === 'page-before' || dt.type === 'page-after') && dt.pageId && dt.locked) {
+        const toChapterId = dt.chapterId;
         const targetChapter = chapters.find(c => c.id === toChapterId);
 
         if (targetChapter) {
-          const targetPageIndex = targetChapter.pages.findIndex(p => p.id === dropTarget.pageId);
-          let newIndex = dropTarget.type === 'page-after' ? targetPageIndex + 1 : targetPageIndex;
+          const targetPageIndex = targetChapter.pages.findIndex(p => p.id === dt.pageId);
+          let newIndex = dt.type === 'page-after' ? targetPageIndex + 1 : targetPageIndex;
 
           if (isMultiDrag) {
             // 複数ページ移動
@@ -302,8 +362,8 @@ export function useDragHandlers({
       }
 
       // チャプター末尾へのドロップ
-      if (dropTarget.type === 'chapter-end') {
-        const toChapterId = dropTarget.chapterId;
+      if (dt.type === 'chapter-end') {
+        const toChapterId = dt.chapterId;
         const targetChapter = chapters.find(c => c.id === toChapterId);
         if (targetChapter) {
           if (isMultiDrag) {

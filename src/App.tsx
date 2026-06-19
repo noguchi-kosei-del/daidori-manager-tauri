@@ -77,6 +77,7 @@ import {
   DragOverlaySidebarItem,
   DragOverlayChapterItem,
   DropPlaceholder,
+  ChapterDropZone,
 } from './components/dnd';
 import { UpdateDialog, SplitFoldersDialog } from './components/modals';
 import type { SplitFolderEntry, SplitFoldersDialogResult, ExportOptions } from './components/modals';
@@ -493,6 +494,9 @@ function App() {
     selectPageRange,
     clearPageSelection,
     removeSelectedPages,
+    // 取り消し / やり直し
+    undo,
+    redo,
     // ファイル検証
     updatePagesValidation,
     // プロジェクト管理
@@ -1722,6 +1726,8 @@ function App() {
     handleSaveProject,
     handleSaveProjectAs,
     setIsViewerMode,
+    undo,
+    redo,
   });
 
   const {
@@ -2143,16 +2149,31 @@ function App() {
   };
 
   // EPUB生成ハンドラ
-  const handleEpubGenerate = async (metadata: EpubMetadata, outputPath: string, splitSettings?: EpubSplitSettings) => {
-    // 保存時はプロジェクトと一緒に保存: EPUB生成に合わせてプロジェクトも保存（既定は 台割\Project）。
+  const handleEpubGenerate = async (metadata: EpubMetadata, outputPath: string, splitSettings?: EpubSplitSettings, outputJpeg = false, workFolderNameOverride?: string) => {
+    // 出力を「作品タイトル」フォルダ配下に集約: <保存先>/<作品名>/{TIFF, 分割, 1冊版, Project}
+    const epubSlash = Math.max(outputPath.lastIndexOf('/'), outputPath.lastIndexOf('\\'));
+    const epubFileName = epubSlash >= 0 ? outputPath.slice(epubSlash + 1) : outputPath;
+    const epubSaveDir = epubSlash >= 0 ? outputPath.slice(0, epubSlash) : '';
+    const epubBaseName = epubFileName.replace(/\.epub$/i, '') || DEFAULT_PROJECT_NAME;
+    // 作品フォルダ名は確認ステップで編集可能（未指定なら .epub ファイル名から導出）
+    const workFolderName = sanitizeFileName(workFolderNameOverride?.trim() || epubBaseName);
+    const workDir = epubSaveDir ? await join(epubSaveDir, workFolderName) : workFolderName;
+    const singleEpubDir = await join(workDir, '1冊版');
+    const splitEpubDir = await join(workDir, '分割');
+    // EPUB・プロジェクトのファイル名も作品フォルダ名に合わせて統一する
+    const epubFileNameFinal = `${workFolderName}.epub`;
+    const singleEpubPath = await join(singleEpubDir, epubFileNameFinal);
+    const splitTemplatePath = await join(splitEpubDir, epubFileNameFinal);
+    const tiffDir = await join(workDir, 'TIFF');
+    const jpegDir = await join(workDir, 'JPEG');
+    const projectDir = await join(workDir, 'Project');
+    // 保存時はプロジェクトと一緒に保存: EPUB生成に合わせてプロジェクトも保存（作品フォルダ配下 Project）。
     try {
       if (currentProjectPath) {
         await saveProjectToPath(currentProjectPath, true);
       } else {
-        const desktopForProj = await desktopDir();
-        const projDir = await join(desktopForProj, 'Script_Output', '台割', 'Project');
-        await invoke('ensure_dir', { path: projDir }).catch(() => {});
-        const projPath = await join(projDir, `${sanitizeFileName(projectName || DEFAULT_PROJECT_NAME)}.${PROJECT_FILE_EXTENSION}`);
+        await invoke('ensure_dir', { path: projectDir }).catch(() => {});
+        const projPath = await join(projectDir, `${workFolderName}.${PROJECT_FILE_EXTENSION}`);
         await saveProjectToPath(projPath);
       }
     } catch (e) {
@@ -2171,182 +2192,95 @@ function App() {
           .map((p) => [p.originalPageId!, p])
       );
 
-      // === PSDが含まれていれば自動的にJPEG化（Photoshop経由） ===
-      const psdToJpegMap = new Map<string, string>();
-      // 19.3: 実際に使った変換エンジン（preNormalized 付与・完了ダイアログの注記に使用）
-      let psdEngineUsed: 'native' | 'photoshop' = 'native';
-      let psdEngineFellBack = false;
-      const psdSourcePaths: string[] = [];
-      // 断ち切り(内蔵比率クロップ)用に、各ユニークPSDが最初に現れたチャプター種別/ID/カラーモードを記録
-      const psdChapterInfo = new Map<string, { type: string; id: string; color?: string }>();
-      for (const chapter of chapters) {
-        for (const page of chapter.pages) {
-          if (page.fileType === 'psd' && page.filePath) {
-            // 同一PSDが複数ページから参照される可能性もあるので、ユニーク化
-            if (!psdSourcePaths.includes(page.filePath)) {
-              psdSourcePaths.push(page.filePath);
-              psdChapterInfo.set(page.filePath, { type: chapter.type, id: chapter.id, color: page.imageColorMode });
-            }
-          }
-        }
-      }
-
-      // 断ち切りは「断ち切り」タブ(bleedStore)に一本化。range/action-ratio/json いずれも
-      // getBleedSettings() が「範囲＋ぼかし半径」を持つ BleedRegion を返し、比率方式で実サイズに追従。
-      // アクション/JSONは数値（断ち切り範囲＋ぼかし半径）を引くだけで、適用はアプリが行う。
+      // === 全ファイルページを TIFF 化し、それを EPUB ソースにする ===
+      // PSD は image クレートで直接読めないため、TIFF を EPUB ソースに使う（ビルダが TIFF→JPG に
+      // 色処理付きで変換）。これで (C)PSDデコードは1回 / 中間JPEGは作らない / (D)控えTIFFも同時取得。
+      // ぼかしは native（PSDのテキストレイヤーをマスクして背景のみ）。
+      const psdToJpegMap = new Map<string, string>(); // PSD元パス → 生成TIFFパス（EPUBソース兼控え）
       const bleedState = useBleedStore.getState();
       const epubBleedSettings = bleedState.getBleedSettings();
-      const regionForPsd = (srcPath: string) => {
-        if (!epubBleedSettings) return null;
-        const info = psdChapterInfo.get(srcPath);
-        if (!info) return null;
-        return resolveBleedRegion(epubBleedSettings, info.type, info.id);
-      };
-      const cropBoundsForPsd = (srcPath: string) => {
-        const region = regionForPsd(srcPath);
-        if (!region || region.tachikiriType === 'none') return undefined;
-        return {
-          left: Math.max(0, Math.round(region.left)),
-          top: Math.max(0, Math.round(region.top)),
-          right: Math.max(0, Math.round(region.right)),
-          bottom: Math.max(0, Math.round(region.bottom)),
-          refWidth: Math.round(region.refWidth),
-          refHeight: Math.round(region.refHeight),
-          isProportional: true,
-        };
-      };
-      // ぼかし半径(px): アクション/JSON由来。カラー原稿の0化はバックエンドが
-      // 実際の色内容(R≈G≈B)で自動判定する（RGBモードの白黒原稿はぼかし対象）。
-      const blurForPsd = (srcPath: string) => {
-        const info = psdChapterInfo.get(srcPath);
-        if (info?.color === 'RGB' || info?.color === 'CMYK') return 0;
-        const region = regionForPsd(srcPath);
-        const r = region?.blurRadius ?? 0;
-        return r > 0 ? r : 0;
-      };
-
-      if (psdSourcePaths.length > 0) {
-        // モーダルへPSD変換フェーズを通知（タイマー込みで listener 起動を待つ）
-        await new Promise<void>((resolve) => setTimeout(resolve, 50));
-        await emit('epub-progress', { phase: 'psd-to-jpeg', current: 0, total: psdSourcePaths.length });
-
-        // 中間JPEGは台割ベース配下に出力（同名フォルダが既にあれば Rust 側で連番付与）
-        const desktop = await desktopDir();
-        const epubJpegDir = await join(desktop, 'Script_Output', '台割', `EPUB用JPEG_${projectName || '台割'}`);
-
-        // 19.3 実験: 変換エンジンを選択。
-        //  - 'photoshop': Photoshopの「プロファイル変換」で厳密にsRGB化（高品質）
-        //  - 'native'(既定): image クレートで高速変換（ICC埋め込みのみ）
-        // Photoshop未インストール時はネイティブにフォールバック。
-        const wantPhotoshop = metadata.colorEngine === 'photoshop';
-        const photoshopAvailable = wantPhotoshop
-          ? await invoke<boolean>('check_photoshop_installed').catch(() => false)
-          : false;
-        const usePhotoshop = wantPhotoshop && photoshopAvailable;
-        psdEngineUsed = usePhotoshop ? 'photoshop' : 'native';
-        psdEngineFellBack = wantPhotoshop && !photoshopAvailable;
-
-        let convertResponse: {
-          results: { fileName: string; success: boolean; outputPath?: string; error?: string }[];
-          outputDir: string;
-        };
-        try {
-          if (usePhotoshop) {
-            // Photoshop: プロファイル変換(sRGB / 相対比色＋黒点補正) → JPEG
-            const psConfig = {
-              files: psdSourcePaths.map((path, i) => ({
-                path,
-                outputPath: epubJpegDir,
-                outputName: `psd_${String(i).padStart(4, '0')}.jpg`,
-                // 内蔵・比率方式の断ち切り範囲（tachikiriMode==='bleed' 時のみ）
-                ...(cropBoundsForPsd(path) ? { cropBounds: cropBoundsForPsd(path) } : {}),
-              })),
-              // jpegQuality 11: Photoshop の最高画質帯（10-12 は 4:4:4 サブサンプリング）。
-              // preNormalized コピー経路ではこれが最終EPUB画質になるため、
-              // q12 だと容量が倍近くなる一方で画質差はわずか → 11 をバランス点とする。
-              // dither / maxPixels は Rust 側の既定（true / 5.6MP）を使用。
-              globalSettings: {
-                jpegQuality: 11,
-                intent: 'relative',
-                blackPointCompensation: true,
-              },
-            };
-            convertResponse = await invoke('run_photoshop_srgb_convert', {
-              config: psConfig,
-              outputDir: epubJpegDir,
-            });
-          } else {
-            // ネイティブ: 比率断ち切り＋ぼかし（アクション/JSON由来の数値）を適用・原寸・高品質（Photoshop不要）
-            const config = {
-              files: psdSourcePaths.map((path, i) => {
-                const cb = cropBoundsForPsd(path);
-                const blur = blurForPsd(path);
-                return {
-                  path,
-                  outputPath: epubJpegDir,
-                  outputName: `psd_${String(i).padStart(4, '0')}.jpg`,
-                  options: {
-                    cropLeft: cb ? cb.left : 0,
-                    cropTop: cb ? cb.top : 0,
-                    cropRight: cb ? cb.right : 0,
-                    cropBottom: cb ? cb.bottom : 0,
-                    tachikiriType: cb ? 'crop_only' : 'none',
-                    strokeColor: 'black',
-                    fillColor: 'white',
-                    fillOpacity: 50,
-                    referenceWidth: cb ? cb.refWidth : 0,
-                    referenceHeight: cb ? cb.refHeight : 0,
-                    resizeMode: 'none',
-                    resizePercent: 50,
-                    jpegQuality: 95,
-                    applyBlur: blur > 0,
-                    blurRadius: blur,
-                    blurBackgroundOnly: true,
-                    blurSkipIfColor: false,
-                  },
-                };
-              }),
-            };
-            convertResponse = await invoke('run_native_jpeg_convert', {
-              config,
-              outputDir: epubJpegDir,
-            });
-          }
-        } catch (e) {
-          setExportResultDialog({
-            show: true,
-            title: 'PSD→JPEG変換失敗',
-            message: `PSDのJPEG変換中にエラーが発生しました: ${e}`,
-            isError: true,
-          });
-          return;
-        }
-
-        const failedResults = convertResponse.results.filter((r) => !r.success);
-        if (failedResults.length > 0) {
-          const errMsg = failedResults.map((r) => `${r.fileName}: ${r.error ?? '不明なエラー'}`).join('\n');
-          setExportResultDialog({
-            show: true,
-            title: 'PSD→JPEG変換失敗',
-            message: `${failedResults.length}件のPSDをJPEGに変換できませんでした`,
-            details: errMsg,
-            isError: true,
-          });
-          return;
-        }
-
-        // マップ構築（PSD元パス → 生成されたJPEGパス）
-        psdSourcePaths.forEach((srcPath, i) => {
-          const result = convertResponse.results[i];
-          if (result?.success) {
-            const jpegPath = result.outputPath ?? `${convertResponse.outputDir}\\psd_${String(i).padStart(4, '0')}.jpg`;
-            psdToJpegMap.set(srcPath, jpegPath);
-          }
-        });
-
-        // フェーズをEPUB側に戻す
-        await emit('epub-progress', { phase: 'images', current: 0, total: 0 });
+      if (outputJpeg) {
+        await invoke('ensure_dir', { path: jpegDir }).catch(() => {});
       }
+      {
+        const tiffFiles: { path: string; outputPath: string; outputName: string; options: Record<string, unknown>; extraOutputs?: string[] }[] = [];
+        const tiffPageRefs: { origPath: string; isPsd: boolean }[] = [];
+        let tiffIdx = 0;
+        for (const chapter of chapters) {
+          for (const page of chapter.pages) {
+            if (!page.filePath || !page.fileType) continue; // 白紙・特殊ページは除外
+            tiffIdx += 1;
+            const region = epubBleedSettings
+              ? resolveBleedRegion(epubBleedSettings, chapter.type, chapter.id)
+              : null;
+            const cb = region && region.tachikiriType !== 'none'
+              ? {
+                  left: Math.max(0, Math.round(region.left)),
+                  top: Math.max(0, Math.round(region.top)),
+                  right: Math.max(0, Math.round(region.right)),
+                  bottom: Math.max(0, Math.round(region.bottom)),
+                  refWidth: Math.round(region.refWidth),
+                  refHeight: Math.round(region.refHeight),
+                }
+              : null;
+            const tiffBlur = page.imageColorMode === 'RGB' || page.imageColorMode === 'CMYK'
+              ? 0
+              : region?.blurRadius ?? 0;
+            tiffFiles.push({
+              path: page.filePath,
+              outputPath: tiffDir,
+              outputName: `${String(tiffIdx).padStart(4, '0')}.tif`,
+              options: {
+                cropLeft: cb ? cb.left : 0,
+                cropTop: cb ? cb.top : 0,
+                cropRight: cb ? cb.right : 0,
+                cropBottom: cb ? cb.bottom : 0,
+                tachikiriType: cb ? 'crop_only' : 'none',
+                strokeColor: 'black',
+                fillColor: 'white',
+                fillOpacity: 50,
+                referenceWidth: cb ? cb.refWidth : 0,
+                referenceHeight: cb ? cb.refHeight : 0,
+                resizeMode: 'none',
+                resizePercent: 100,
+                jpegQuality: 95,
+                // JPEG併産時は同一デコードから .jpg も書き出す（ベースライン高速エンコード）。TIFFには影響しない。
+                fastJpeg: true,
+                applyBlur: tiffBlur > 0,
+                blurRadius: tiffBlur,
+                blurBackgroundOnly: true,
+                blurSkipIfColor: false,
+              },
+              // JPEG生成チェック時: 1回のデコードからTIFF＋JPEGを同時出力（<作品名>/JPEG へ）
+              ...(outputJpeg ? { extraOutputs: [`${jpegDir}\\${String(tiffIdx).padStart(4, '0')}.jpg`] } : {}),
+            });
+            tiffPageRefs.push({ origPath: page.filePath, isPsd: page.fileType === 'psd' });
+          }
+        }
+        if (tiffFiles.length > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 50));
+          await emit('epub-progress', { phase: 'tiff', current: 0, total: tiffFiles.length });
+          let tiffResp: { results: { success: boolean; outputPath?: string; error?: string }[]; outputDir: string };
+          try {
+            tiffResp = await invoke('run_native_jpeg_convert', { config: { files: tiffFiles }, outputDir: tiffDir });
+          } catch (e) {
+            setExportResultDialog({ show: true, title: 'TIFF変換失敗', message: `画像のTIFF変換中にエラーが発生しました: ${e}`, isError: true });
+            return;
+          }
+          const failed = tiffResp.results.filter((r) => !r.success);
+          if (failed.length > 0) {
+            setExportResultDialog({ show: true, title: 'TIFF変換失敗', message: `${failed.length}件の画像をTIFFに変換できませんでした`, details: failed.map((r) => r.error ?? '不明なエラー').join('\n'), isError: true });
+            return;
+          }
+          // PSDページ: 元パス → 生成TIFFパス（最初の出現を採用。EPUBはこれをソースにする）
+          tiffPageRefs.forEach((ref, i) => {
+            const out = tiffResp.results[i]?.outputPath;
+            if (ref.isPsd && out && !psdToJpegMap.has(ref.origPath)) psdToJpegMap.set(ref.origPath, out);
+          });
+          await emit('epub-progress', { phase: 'images', current: 0, total: 0 });
+        }
+      }
+
 
       // ページ情報を構築
       const epubGeneratePages: EpubPage[] = [];
@@ -2472,9 +2406,11 @@ function App() {
             isColophon,
             isBlank: isBlankPage,
             sourceColorMode: page.imageColorMode,
-            imageProfileOverride: previewPage?.imageProfileOverride,
+            // カスタム: チャプター種別ごとの指定を反映（ページ個別の上書きが最優先）
+            imageProfileOverride:
+              previewPage?.imageProfileOverride ?? metadata.customChapterProfiles?.[chapter.type],
             // 19.3: Photoshopエンジンで sRGB 変換済みのページは builder の再エンコードを回避
-            preNormalized: isPsdConverted && psdEngineUsed === 'photoshop' ? true : undefined,
+            preNormalized: undefined,
           });
 
           if (!isCover && !isColophon) {
@@ -2493,12 +2429,11 @@ function App() {
         return;
       }
 
-      // 19.3: Photoshopエンジン指定だが未インストールでフォールバックした場合の注記
-      const engineNote = psdEngineFellBack
-        ? '\n\n※Photoshopが見つからなかったため、PSD変換は高速（ネイティブ）エンジンで実行しました'
-        : '';
+      // PSD変換はネイティブ固定（TIFFをEPUBソースに使用）。エンジン注記は不要。
+      const engineNote = '';
 
       if (splitSettings?.enabled) {
+        await invoke('ensure_dir', { path: splitEpubDir }).catch(() => {});
         const splitMetadata: EpubMetadata = {
           ...generateMetadata,
           allowMissingColophon: true,
@@ -2524,7 +2459,7 @@ function App() {
             continue;
           }
 
-          const volumeOutputPath = buildSplitOutputPath(outputPath, splitSettings, i);
+          const volumeOutputPath = buildSplitOutputPath(splitTemplatePath, { ...splitSettings, baseName: workFolderName }, i);
           const volumeTitle = splitSettings.titles?.[i]?.trim() || splitMetadata.title;
           const volumeTitleFileAs =
             splitSettings.titleFileAsList?.[i]?.trim() ||
@@ -2590,6 +2525,40 @@ function App() {
           if (internal.failed) hasCheckIssue = true;
         }
 
+        // 「両方作成」: 分割版に加えて 1冊版も同じ作品フォルダ内に生成（TIFF/Projectは共有・重複しない）
+        if (splitSettings.alsoWhole) {
+          await invoke('ensure_dir', { path: singleEpubDir }).catch(() => {});
+          const wholeResp = await invoke<EpubGenerateResponse>('generate_epub', {
+            metadata: generateMetadata,
+            pages: epubGeneratePages,
+            outputPath: singleEpubPath,
+            customCss: null,
+          });
+          if (wholeResp.success) {
+            outputs.push(wholeResp.outputPath || singleEpubPath);
+            totalFileSize += wholeResp.fileSize;
+            totalPageCount += wholeResp.pageCount;
+            try {
+              await emit('epub-progress', { phase: 'epubcheck', current: 0, total: 0 });
+              const wholeCheck = await invoke<EpubCheckResult>('validate_epub_with_epubcheck', {
+                epubPath: wholeResp.outputPath || singleEpubPath,
+              });
+              const m = buildEpubCheckMessage(wholeCheck);
+              const d = formatEpubCheckDetails(wholeCheck);
+              checkSummaries.push(`1冊版: ${m}${d ? `\n${d}` : ''}`);
+              if (!wholeCheck.isValid || !wholeCheck.available) hasCheckIssue = true;
+            } catch (e) {
+              hasCheckIssue = true;
+              checkSummaries.push(`1冊版: EPUBCheckを実行できませんでした\n${e}`);
+            }
+            const wholeInternal = await runInternalVerify(wholeResp.outputPath || singleEpubPath);
+            checkSummaries.push(`1冊版: ${wholeInternal.summary}`);
+            if (wholeInternal.failed) hasCheckIssue = true;
+          } else {
+            failures.push(`1冊版: ${wholeResp.error || 'EPUB生成中にエラーが発生しました'}`);
+          }
+        }
+
         // 巻情報を永続化（今回使った巻を優先しつつ、過去の未使用キーも温存して範囲編集に備える）
         {
           const prevState = useStore.getState().epubState;
@@ -2622,7 +2591,7 @@ function App() {
             title: outputs.length > 0 ? '分割EPUB生成完了（一部失敗）' : '分割EPUB生成失敗',
             message: `${outputs.length}件のEPUBを生成しました / ${failures.length}件失敗しました`,
             details: [`失敗:\n${failures.join('\n')}`, checkDetailsText, outputDetailsText].filter(Boolean).join('\n\n') || undefined,
-            outputDir: outputs[0],
+            outputDir: workDir,
             isError: true,
           });
           return;
@@ -2634,17 +2603,18 @@ function App() {
           title: hasCheckIssue ? '分割EPUB生成完了（チェック要確認）' : '分割EPUB生成完了',
           message: `${outputs.length}件のEPUBを生成しました\n合計 ${totalPageCount}ページ / ${fileSizeMB}MB${engineNote}`,
           details: [checkDetailsText, outputDetailsText].filter(Boolean).join('\n\n') || undefined,
-          outputDir: outputs[0],
+          outputDir: workDir,
           isError: hasCheckIssue,
         });
         return;
       }
 
-      // EPUB生成
+      // EPUB生成（1冊版フォルダへ）
+      await invoke('ensure_dir', { path: singleEpubDir }).catch(() => {});
       const response = await invoke<EpubGenerateResponse>('generate_epub', {
         metadata: generateMetadata,
         pages: epubGeneratePages,
-        outputPath,
+        outputPath: singleEpubPath,
         customCss: null,
       });
 
@@ -2664,7 +2634,7 @@ function App() {
         try {
           await emit('epub-progress', { phase: 'epubcheck', current: 0, total: 0 });
           const epubCheckResult = await invoke<EpubCheckResult>('validate_epub_with_epubcheck', {
-            epubPath: response.outputPath || outputPath,
+            epubPath: response.outputPath || singleEpubPath,
           });
           epubCheckMessage = `\n\n${buildEpubCheckMessage(epubCheckResult)}`;
           epubCheckDetails = formatEpubCheckDetails(epubCheckResult);
@@ -2675,7 +2645,7 @@ function App() {
           epubCheckFailed = false;
         }
         // 自前の内部整合性チェック（OPF/XHTML参照とZIP実体の突き合わせ）
-        const internal = await runInternalVerify(response.outputPath || outputPath);
+        const internal = await runInternalVerify(response.outputPath || singleEpubPath);
         if (internal.failed) epubCheckFailed = true;
         const details = [profileWarnings, epubCheckDetails, internal.summary].filter(Boolean).join('\n\n');
         setExportResultDialog({
@@ -2683,7 +2653,7 @@ function App() {
           title: epubCheckFailed ? 'EPUB生成完了（チェック要確認）' : 'EPUB生成完了',
           message: `EPUBを生成しました\n${response.pageCount}ページ / ${fileSizeMB}MB${profileMessage}${engineNote}${epubCheckMessage}`,
           details: details || undefined,
-          outputDir: response.outputPath || outputPath,
+          outputDir: workDir,
           isError: epubCheckFailed,
         });
       } else {
@@ -3566,7 +3536,7 @@ function App() {
                                   const pagesToShow = isCollapsed ? (firstPage ? [firstPage] : []) : group.pages;
 
                                   return (
-                                    <div key={group.chapter.id} className="chapter-flow-group">
+                                    <ChapterDropZone key={group.chapter.id} chapterId={group.chapter.id} className={`chapter-flow-group${group.pages.length === 0 ? ' chapter-flow-group-box' : ''}`}>
                                       {/* ページなしの場合 */}
                                       {group.pages.length === 0 ? (
                                         <div className="chapter-page-wrapper">
@@ -3720,7 +3690,7 @@ function App() {
                                           );
                                         });
                                       })()}
-                                    </div>
+                                    </ChapterDropZone>
                                   );
                                 })}
                               </div>
@@ -3879,9 +3849,9 @@ function App() {
                 chapters={chapters}
                 projectName={projectName}
                 onExportImages={handleExportImages}
-                onGenerateEpub={async (metadata, outputPath, splitSettings) => {
+                onGenerateEpub={async (metadata, outputPath, splitSettings, outputJpeg, workFolderName) => {
                   if (blockIfCmyk('epub')) return;
-                  await handleEpubGenerate(metadata, outputPath, splitSettings);
+                  await handleEpubGenerate(metadata, outputPath, splitSettings, outputJpeg, workFolderName);
                 }}
                 onGeneratePdf={handleGeneratePdf}
                 zoom={spreadZoom}

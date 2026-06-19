@@ -28,6 +28,9 @@ interface UseKeyboardShortcutsOptions {
   handleSaveProject: () => void;
   handleSaveProjectAs: () => void;
   setIsViewerMode: (value: boolean | ((prev: boolean) => boolean)) => void;
+  // 取り消し / やり直し（チャプター・ページ操作の可逆化）
+  undo: () => void;
+  redo: () => void;
 }
 
 /**
@@ -51,6 +54,8 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
     handleSaveProject,
     handleSaveProjectAs,
     setIsViewerMode,
+    undo,
+    redo,
   } = options;
 
   useEffect(() => {
@@ -102,6 +107,18 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
         } else {
           handleSaveProject();
         }
+        return;
+      }
+
+      // Ctrl+Z: 取り消し / Ctrl+Y・Ctrl+Shift+Z: やり直し（チャプター跨ぎ移動なども戻せる）
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        if (e.shiftKey) { redo(); } else { undo(); }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        redo();
         return;
       }
 
@@ -190,5 +207,7 @@ export function useKeyboardShortcuts(options: UseKeyboardShortcutsOptions): void
     handleSaveProject,
     handleSaveProjectAs,
     setIsViewerMode,
+    undo,
+    redo,
   ]);
 }

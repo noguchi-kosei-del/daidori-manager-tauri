@@ -27,6 +27,45 @@ pub fn app_temp_dir() -> PathBuf {
     std::env::temp_dir().join(APP_NAME)
 }
 
+/// 一時データのカテゴリ別サブフォルダを返す（無ければ作成）。
+/// 例: `update`(更新インストーラ) / `convert`(Photoshop連携) / `pdf`(PDF中間) / `work`(EPUB・Tachimi作業)。
+/// 一時ファイルを分類して管理しやすくするための区分け。
+pub fn temp_subdir(category: &str) -> PathBuf {
+    let dir = app_temp_dir().join(category);
+    let _ = fs::create_dir_all(&dir);
+    dir
+}
+
+/// 起動時に前回セッションの残存一時ファイルを掃除（best-effort・使用中はスキップ）。
+/// `%TEMP%\daidori-manager` 配下は再生成可能な一時データのみのため全削除して問題ない
+/// （サムネイル/ pdfium キャッシュは %LOCALAPPDATA% 側で対象外）。掃除後にカテゴリdirを作り直す。
+pub fn cleanup_temp_on_startup() {
+    let root = app_temp_dir();
+    let _ = fs::create_dir_all(&root);
+    if let Ok(entries) = fs::read_dir(&root) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                let _ = fs::remove_dir_all(&p);
+            } else {
+                let _ = fs::remove_file(&p);
+            }
+        }
+    }
+    // 旧バージョンで %TEMP% 直下に散在していた作業dirを後始末（best-effort）
+    let t = std::env::temp_dir();
+    for old in [
+        "daidori_tachimi_pdf_jobs",
+        "daidori_tachimi_capability_check",
+        "daidori_tachimi_pdf_jpeg",
+    ] {
+        let _ = fs::remove_dir_all(t.join(old));
+    }
+    for c in ["update", "convert", "pdf", "work"] {
+        let _ = fs::create_dir_all(root.join(c));
+    }
+}
+
 pub fn harden_temp_dir() {
     static DONE: OnceLock<()> = OnceLock::new();
     let _ = DONE.get_or_init(|| {

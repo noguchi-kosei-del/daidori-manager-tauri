@@ -38,8 +38,8 @@ interface OutputTabProps {
   projectName: string;
   // 画像出力（JPEG / TIFF / コピー&リネーム）。断ち切りは呼び出し側で bleedStore から注入する。
   onExportImages: (options: ExportOptions) => void | Promise<void>;
-  // EPUB 生成（CMYK ガードは呼び出し側で適用）
-  onGenerateEpub: (metadata: EpubMetadata, outputPath: string, splitSettings?: EpubSplitSettings) => void | Promise<void>;
+  // EPUB 生成（CMYK ガードは呼び出し側で適用）。outputJpeg=true で JPEG も同時書き出し。workFolderName で作品フォルダ名を上書き。
+  onGenerateEpub: (metadata: EpubMetadata, outputPath: string, splitSettings?: EpubSplitSettings, outputJpeg?: boolean, workFolderName?: string) => void | Promise<void>;
   // PDF 生成（断ち切りは bleedStore から注入）
   onGeneratePdf: () => void | Promise<void>;
   // EPUB プレビュー操作

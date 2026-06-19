@@ -173,8 +173,8 @@ pub fn copy_script_with_bom(script_path: &str, temp_script_name: &str) -> Result
         .ok_or_else(|| "スクリプト名を取得できません".to_string())?;
     crate::integrity::verify_script(script_name, std::path::Path::new(script_path))?;
 
-    let temp_dir = std::env::temp_dir();
-    let temp_script = temp_dir.join(temp_script_name);
+    // セキュリティ(§6): 実行される一時 JSX は convert カテゴリ配下に置く（ACL強化済・差し替え防止）。
+    let temp_script = crate::security::temp_subdir("convert").join(temp_script_name);
 
     let script_content = fs::read_to_string(script_path)
         .map_err(|e| format!("スクリプトの読み込みに失敗: {} (元: {})", e, script_path))?;

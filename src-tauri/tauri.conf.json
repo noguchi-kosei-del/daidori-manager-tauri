@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Daiwari Manager",
-  "version": "1.8.2",
+  "version": "1.9.0",
   "identifier": "com.daidori.manager",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -37,7 +37,7 @@
       "endpoints": [
         "https://updates.invalid/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNFRUM1ODVDM0NEMDU2OUYKUldTZlZ0QThYRmpzUHY1bCsyd1hUZzd0d2FXT3M5QWU1VUJZVHY2S2ZnMEFTTi9jZ3g3d0FKQ0wK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ1N0Y2RTQ4NDRFMjEwMDEKUldRQkVPSkVTRzUvMWVWbHA1MVlxRnZUWmkrdmt0cUFLc3RVQUlsTnZkYVZaVTRLVnBtOEJsbmMK"
     }
   },
   "bundle": {
@@ -55,6 +55,7 @@
       "scripts/",
       "resources/kadokawa_css/",
       "resources/hybrid_legacy_css/",
+      "resources/color/",
       "resources/daidori-project.ico",
       "binaries/pdfium.dll"
     ],

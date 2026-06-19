@@ -9,4 +9,8 @@
     WriteRegStr SHELL_CONTEXT "Software\Classes\$0\DefaultIcon" "" "$\"$INSTDIR\resources\daidori-project.ico$\",0"
   ${EndIf}
   !insertmacro UPDATEFILEASSOC
+
+  ; アップデート(サイレントインストール)後にアプリを自動で再起動する
+  IfSilent 0 +2
+    Exec '"$INSTDIR\${MAINBINARYNAME}.exe"'
 !macroend

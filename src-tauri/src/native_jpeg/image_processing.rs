@@ -7,19 +7,29 @@ use ::image::{DynamicImage, GenericImageView, RgbaImage};
 use std::path::Path;
 
 use super::image_loader::load_image;
-use super::jpeg::{write_jpeg_baseline_to_file, write_jpeg_mozjpeg_to_file};
+use super::jpeg::{write_jpeg_baseline_to_file, write_jpeg_mozjpeg_to_file, write_tiff_to_file};
 use super::types::{
     color_to_rgb, color_to_rgba, ProcessOptions, TARGET_RESIZE_HEIGHT, TARGET_RESIZE_WIDTH,
 };
 
-/// JPEG保存（fast_jpeg=true ならベースライン高速エンコード、false なら MozJPEG）
-fn save_jpeg(
+/// 出力保存。出力パスの拡張子が .tif/.tiff なら TIFF、それ以外は JPEG で書き出す。
+/// （EPUB生成の「TIFF併産」は output_name を .tif にしてこの分岐で TIFF を得る）
+fn save_image(
     rgb: &[u8],
     width: u32,
     height: u32,
     options: &ProcessOptions,
     output_path: &Path,
 ) -> Result<(), String> {
+    let is_tiff = output_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("tif") || e.eq_ignore_ascii_case("tiff"))
+        .unwrap_or(false);
+    if is_tiff {
+        return write_tiff_to_file(rgb, width, height, output_path);
+    }
+    // JPEG保存（fast_jpeg=true ならベースライン高速エンコード、false なら MozJPEG）
     if options.fast_jpeg {
         write_jpeg_baseline_to_file(rgb, width, height, options.jpeg_quality, output_path)
     } else {
@@ -145,12 +155,12 @@ pub fn predict_output_dims(src_w: u32, src_h: u32, options: &ProcessOptions) -> 
     resize_dims(bw, bh, options).unwrap_or((bw, bh))
 }
 
-/// 単一画像を処理（読込 → 断ち切り → リサイズ → MozJPEG保存）
-pub fn process_single_image(
+/// 単一画像を処理して最終RGBを返す（読込 → ぼかし → 断ち切り → リサイズ）。
+/// 1回のデコードから複数形式（TIFF/JPEG）を書き出すため、保存とは分離している。
+pub fn process_image_to_rgb(
     input_path: &Path,
-    output_path: &Path,
     options: &ProcessOptions,
-) -> Result<(), String> {
+) -> Result<::image::RgbImage, String> {
     let img = load_image(input_path)?;
 
     // ぼかし（ガウス）は断ち切り/リサイズより前（原寸）で適用する。
@@ -173,19 +183,11 @@ pub fn process_single_image(
 
     let (orig_width, orig_height) = img.dimensions();
 
-    // タチキリタイプが "none" なら断ち切り処理なしでリサイズ→保存
+    // タチキリタイプが "none" なら断ち切り処理なしでリサイズ
     if options.tachikiri_type == "none" {
         let result = img.to_rgba8();
         let final_image = apply_resize(DynamicImage::ImageRgba8(result), options);
-        let rgb_image = final_image.to_rgb8();
-        save_jpeg(
-            rgb_image.as_raw(),
-            rgb_image.width(),
-            rgb_image.height(),
-            options,
-            output_path,
-        )?;
-        return Ok(());
+        return Ok(final_image.to_rgb8());
     }
 
     // クロップ矩形（基準サイズスケーリング込み）
@@ -250,17 +252,32 @@ pub fn process_single_image(
     // リサイズ処理
     let final_image = apply_resize(DynamicImage::ImageRgba8(result), options);
 
-    // JPEG保存（fast_jpeg で MozJPEG/ベースラインを選択）
-    let rgb_image = final_image.to_rgb8();
-    save_jpeg(
+    Ok(final_image.to_rgb8())
+}
+
+/// 処理済みRGBを1ファイルに保存（拡張子で TIFF/JPEG を分岐）。
+pub fn save_processed_rgb(
+    rgb_image: &::image::RgbImage,
+    options: &ProcessOptions,
+    output_path: &Path,
+) -> Result<(), String> {
+    save_image(
         rgb_image.as_raw(),
         rgb_image.width(),
         rgb_image.height(),
         options,
         output_path,
-    )?;
+    )
+}
 
-    Ok(())
+/// 単一画像を処理して1ファイルに保存（読込 → 断ち切り → リサイズ → 保存）。
+pub fn process_single_image(
+    input_path: &Path,
+    output_path: &Path,
+    options: &ProcessOptions,
+) -> Result<(), String> {
+    let rgb_image = process_image_to_rgb(input_path, options)?;
+    save_processed_rgb(&rgb_image, options, output_path)
 }
 
 /// リサイズ処理を適用

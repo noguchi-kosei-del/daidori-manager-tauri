@@ -52,7 +52,9 @@ export const useBleedStore = create<BleedStoreState>((set, get) => ({
   coverRegion: null,
   bodyRegion: null,
   perChapterRegions: {},
-  method: 'region',
+  // 既定は「方式なし」（断ち切りなし）。表紙含め初期状態は断ち切りしない。
+  // 断ち切りたい場合は方式を 手動/アクション/JSON に切り替える。
+  method: 'none',
   actionSetPath: '',
   actionName: '',
 
@@ -78,19 +80,19 @@ export const useBleedStore = create<BleedStoreState>((set, get) => ({
       coverRegion: null,
       bodyRegion: null,
       perChapterRegions: {},
-      method: 'region',
+      method: 'none',
       actionSetPath: '',
       actionName: '',
     }),
 
   getBleedSettings: () => {
-    const { method, mode, coverRegion, bodyRegion, perChapterRegions } = get();
-    // 'region' / 'action-ratio' / 'json' はいずれも「範囲＋ぼかし半径」を持つ BleedRegion を
-    // 断ち切りに使う（action-ratio は .atn、json は CLLENN JSON から範囲を初期化）。
-    if (method !== 'region' && method !== 'action-ratio' && method !== 'json') return undefined;
-    const hasAny =
-      coverRegion || bodyRegion || Object.keys(perChapterRegions).length > 0;
-    if (!hasAny) return undefined;
+    const { mode, coverRegion, bodyRegion, perChapterRegions } = get();
+    // 方式は区分ごとに異なる（本文=手動／表紙=なし 等）ため、出力は「実際に断ち切る
+    // 範囲（tachikiriType !== 'none'）が1つでもあるか」で判定する。
+    // 各 BleedRegion は手動/アクション/JSON いずれの方式でも最終的な範囲＋ぼかし半径を持つ。
+    const all = [coverRegion, bodyRegion, ...Object.values(perChapterRegions)];
+    const hasBleed = all.some((r) => r != null && r.tachikiriType !== 'none');
+    if (!hasBleed) return undefined;
     return {
       enabled: true,
       mode,

@@ -1,8 +1,31 @@
+import type { ReactNode, CSSProperties } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import {
   CHAPTER_REORDER_DROP_ZONE_START_ID,
   CHAPTER_REORDER_DROP_ZONE_END_ID,
 } from '../../constants/dnd';
+
+// グリッドのチャプター枠（チャプター単位のドロップ先）。ページをここに落とすと
+// そのチャプターの末尾へ移動する（空チャプター＝ページなしへも移動可能）。
+// pointerWithin 判定により、内側のページ／プレースホルダーが優先される。
+export function ChapterDropZone({
+  chapterId,
+  className,
+  style,
+  children,
+}: {
+  chapterId: string;
+  className?: string;
+  style?: CSSProperties;
+  children: ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `chapter-drop:${chapterId}` });
+  return (
+    <div ref={setNodeRef} className={`${className ?? ''}${isOver ? ' chapter-drop-over' : ''}`} style={style}>
+      {children}
+    </div>
+  );
+}
 
 // 挿入ラインコンポーネント（ドロップ位置を示す）
 export function InsertionLine() {

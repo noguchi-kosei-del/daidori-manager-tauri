@@ -8,9 +8,8 @@ import { LockIcon, UnlockIcon, ResetIcon, AlertTriangleIcon } from '../../icons'
 import { useModalAnimation } from '../../hooks';
 import { useBleedStore, type BleedMethod } from '../../bleedStore';
 
-// 6モードカード定義（Tachimi準拠）
+// 処理タイプカード（Tachimi準拠）。「なし」は方式「なし」と重複するため持たない。
 const TACHIKIRI_CARDS: { value: TachikiriType; label: string }[] = [
-  { value: 'none', label: 'なし' },
   { value: 'crop_only', label: '切抜' },
   { value: 'crop_and_stroke', label: '切+線' },
   { value: 'stroke_only', label: '線のみ' },
@@ -32,6 +31,22 @@ const BLEED_METHOD_CARDS: { value: BleedMethod; label: string; badge: string }[]
   { value: 'action-ratio', label: 'アクション', badge: '%' },
   { value: 'json', label: 'JSON', badge: '{}' },
 ];
+
+// 手動（ガイド）断ち切りの縦横比。出力 1280×1818 に合わせる。
+const BLEED_TARGET_W = 1280;
+const BLEED_TARGET_H = 1818;
+// 縦(height)を基準に、1280:1818 の比率で横(width)を決める。横は左側を基点に右へ伸ばす。
+function lockBleedAspect(
+  left: number,
+  top: number,
+  bottom: number,
+  maxWidth: number | null,
+): { left: number; top: number; right: number; bottom: number } {
+  const height = Math.max(0, bottom - top);
+  let right = left + (height * BLEED_TARGET_W) / BLEED_TARGET_H;
+  if (maxWidth != null && right > maxWidth) right = maxWidth;
+  return { left, top, right, bottom };
+}
 
 function hexToRgba(hex: string, opacityPercent: number): string {
   const clean = hex.replace('#', '');
@@ -61,6 +76,12 @@ interface BleedEditorModalProps {
   // 断ち切りタブからの再利用時にボタン文言と初期値を差し替える（既定は従来のエクスポート用途）
   applyLabel?: string;
   initialRegion?: BleedRegion | null;
+  // 新規設定時（initialRegion 無し）の処理タイプ初期値。表紙は 'none' を渡す。
+  defaultTachikiriType?: TachikiriType;
+  // 新規設定時のぼかし初期ON/OFF。区切りのカラー情報で決定（カラー=false / モノクロ=true）。
+  defaultBlurEnabled?: boolean;
+  // 区分ごとの方式デフォルト（本文='region'＝手動 / それ以外='none'）。開いた時に適用。
+  defaultMethod?: BleedMethod;
   // 断ち切りタブ内で中央＋右パネルとしてインライン表示する（全画面モーダルにしない）
   embedded?: boolean;
   // 同一対象の別ページへのページ送り（黒ベタ等でトンボが見えない時用）。1件のみなら未指定
@@ -83,6 +104,9 @@ export function BleedEditorModal({
   onCancel,
   applyLabel = 'エクスポート',
   initialRegion = null,
+  defaultTachikiriType = 'crop_only',
+  defaultBlurEnabled = true,
+  defaultMethod = 'none',
   embedded = false,
   pageNav,
 }: BleedEditorModalProps) {
@@ -203,6 +227,8 @@ export function BleedEditorModal({
   const [jsonRangeIdx, setJsonRangeIdx] = useState(0);
   const [jsonError, setJsonError] = useState('');
   const [jsonSearch, setJsonSearch] = useState('');
+  // レーベルをまたいだ検索用に、全レーベルの作品(.json)を集約したリスト
+  const [allJsonWorks, setAllJsonWorks] = useState<{ label: string; name: string; path: string }[]>([]);
 
   // json 方式選択時: 固定フォルダのパスとレーベル一覧を取得
   useEffect(() => {
@@ -220,6 +246,24 @@ export function BleedEditorModal({
     })();
     return () => { cancelled = true; };
   }, [method]);
+
+  // レーベルをまたいで検索できるよう、全レーベルの作品(.json)を集約しておく
+  useEffect(() => {
+    if (method !== 'json' || jsonLabels.length === 0) { setAllJsonWorks([]); return; }
+    let cancelled = false;
+    (async () => {
+      const all: { label: string; name: string; path: string }[] = [];
+      for (const label of jsonLabels) {
+        try {
+          const works = await invoke<{ name: string; path: string }[]>('list_cllenn_works', { label });
+          if (cancelled) return;
+          for (const w of works) all.push({ label, name: w.name, path: w.path });
+        } catch { /* このレーベルはスキップ */ }
+      }
+      if (!cancelled) setAllJsonWorks(all);
+    })();
+    return () => { cancelled = true; };
+  }, [method, jsonLabels]);
 
   // レーベル選択 → 作品一覧
   useEffect(() => {
@@ -257,14 +301,36 @@ export function BleedEditorModal({
   );
   const normalizedJsonSearch = jsonSearch.trim().toLowerCase();
   const filteredJsonLabels = useMemo(() => {
-    const filtered = normalizedJsonSearch
+    const narrowed = normalizedJsonSearch
       ? jsonLabels.filter((label) => label.toLowerCase().includes(normalizedJsonSearch))
       : jsonLabels;
+    // ファイル名検索時はレーベル名にヒットせず候補が空になりがち。その場合は全レーベルを残し、
+    // レーベルを選んだうえで「作品」をファイル名で絞り込めるようにする（検索欄が機能しない問題の対策）。
+    const filtered = normalizedJsonSearch && narrowed.length === 0 ? jsonLabels : narrowed;
     return jsonLabel && !filtered.includes(jsonLabel) ? [jsonLabel, ...filtered] : filtered;
   }, [jsonLabels, jsonLabel, normalizedJsonSearch]);
+  // 検索欄の下に表示する「レーベル横断」の検索結果（作品名・JSONファイル名・レーベル名でヒット）
+  const crossLabelResults = useMemo(() => {
+    if (!normalizedJsonSearch) return [];
+    const jsonFileName = (p: string) => (p.split(/[\\/]/).pop() ?? '').toLowerCase();
+    return allJsonWorks
+      .filter(
+        (w) =>
+          w.name.toLowerCase().includes(normalizedJsonSearch) ||
+          jsonFileName(w.path).includes(normalizedJsonSearch) ||
+          w.label.toLowerCase().includes(normalizedJsonSearch),
+      )
+      .slice(0, 100);
+  }, [allJsonWorks, normalizedJsonSearch]);
   const filteredJsonWorks = useMemo(() => {
+    // 作品名に加えて「JSONのファイル名」（path のベース名）でも検索できるようにする
+    const jsonFileName = (p: string) => (p.split(/[\\/]/).pop() ?? '').toLowerCase();
     const filtered = normalizedJsonSearch
-      ? jsonWorks.filter((work) => work.name.toLowerCase().includes(normalizedJsonSearch))
+      ? jsonWorks.filter(
+          (work) =>
+            work.name.toLowerCase().includes(normalizedJsonSearch) ||
+            jsonFileName(work.path).includes(normalizedJsonSearch),
+        )
       : jsonWorks;
     const current = jsonWorks.find((work) => work.path === jsonWorkPath);
     return current && !filtered.some((work) => work.path === current.path) ? [current, ...filtered] : filtered;
@@ -390,16 +456,29 @@ export function BleedEditorModal({
         setGuidesLocked(false);
         setSelection(null);
         setAutoDetected(false);
-        setTachikiriType('crop_only');
+        setTachikiriType(defaultTachikiriType);
         setStrokeColor('black');
         setFillColor('white');
         setFillOpacity(50);
-        setBlurEnabled(true);
+        setBlurEnabled(defaultBlurEnabled);
         setBlurRadiusText(String(DEFAULT_BLUR_RADIUS));
       }
     }
     // originalFilePath は依存に入れない（ページ送りで選択・設定がリセットされないように）
-  }, [isOpen, initialRegion]);
+  }, [isOpen, initialRegion, defaultTachikiriType, defaultBlurEnabled]);
+
+  // 区分ごとの方式デフォルトを開いた時に適用（本文=手動 / それ以外=なし）。
+  // 既存設定の再編集時は、断ち切り範囲があれば手動、無ければ なし に合わせる。
+  useEffect(() => {
+    if (!isOpen) return;
+    if (initialRegion) {
+      setMethod(initialRegion.tachikiriType !== 'none' ? 'region' : 'none');
+    } else {
+      setMethod(defaultMethod);
+    }
+    // setMethod は zustand のため安定
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, initialRegion, defaultMethod]);
 
   // 元画像サイズ取得
   useEffect(() => {
@@ -463,7 +542,7 @@ export function BleedEditorModal({
   // ヒント更新
   useEffect(() => {
     if (!isOpen) return;
-    if (tachikiriType === 'none') {
+    if (method === 'none' || tachikiriType === 'none') {
       setHint('断ち切りなし — 原寸（またはリサイズのみ）でJPEG出力します');
     } else if (selection && autoDetected) {
       setHint('ガイドから自動検出しました — 画像上をドラッグして調整も可能です');
@@ -476,7 +555,7 @@ export function BleedEditorModal({
     } else {
       setHint('ガイドを配置したら「ガイドを確定」ボタンを押してください');
     }
-  }, [isOpen, guides.length, guidesLocked, selection, autoDetected, tachikiriType]);
+  }, [isOpen, guides.length, guidesLocked, selection, autoDetected, tachikiriType, method]);
 
   // マウス座標 → 元画像ピクセル座標
   const clientToImageCoord = useCallback((clientX: number, clientY: number): { ix: number; iy: number } | null => {
@@ -563,12 +642,20 @@ export function BleedEditorModal({
         const ic = clientToImageCoord(e.clientX, e.clientY);
         if (ic) {
           const snapped = snapToGuides(ic.ix, ic.iy);
-          setSelection({
-            left: Math.min(dragStartImg.current.x, snapped.ix),
-            top: Math.min(dragStartImg.current.y, snapped.iy),
-            right: Math.max(dragStartImg.current.x, snapped.ix),
-            bottom: Math.max(dragStartImg.current.y, snapped.iy),
-          });
+          const left = Math.min(dragStartImg.current.x, snapped.ix);
+          const top = Math.min(dragStartImg.current.y, snapped.iy);
+          const bottom = Math.max(dragStartImg.current.y, snapped.iy);
+          if (method === 'region') {
+            // 手動: 縦(height)を基準に 1280:1818 比率で横(width)を左基点で決める
+            setSelection(lockBleedAspect(left, top, bottom, originalSize ? originalSize.width : null));
+          } else {
+            setSelection({
+              left,
+              top,
+              right: Math.max(dragStartImg.current.x, snapped.ix),
+              bottom,
+            });
+          }
         }
       }
     };
@@ -595,7 +682,7 @@ export function BleedEditorModal({
       window.removeEventListener('mousemove', handleMove);
       window.removeEventListener('mouseup', handleUp);
     };
-  }, [isOpen, rulerDrag, guideDrag, guidesLocked, clientToImageCoord, clientToDisplayCoord, snapToGuides, originalSize]);
+  }, [isOpen, rulerDrag, guideDrag, guidesLocked, clientToImageCoord, clientToDisplayCoord, snapToGuides, originalSize, method]);
 
   // 方向キーでプレビューページを送る（capture フェーズでグローバルの矢印キー処理＝選択移動を抑止）
   useEffect(() => {
@@ -679,7 +766,14 @@ export function BleedEditorModal({
       // ロック開始時: ガイドが十分あれば自動で選択範囲を検出
       const hGuides = guides.filter(g => g.type === 'h').sort((a, b) => a.position - b.position);
       const vGuides = guides.filter(g => g.type === 'v').sort((a, b) => a.position - b.position);
-      if (hGuides.length >= 2 && vGuides.length >= 2) {
+      // 手動(region): 縦2本＋左1本のガイドがあれば、縦を基準に横を1280:1818比率で左基点に決める。
+      if (method === 'region' && hGuides.length >= 2 && vGuides.length >= 1) {
+        const top = hGuides[0].position;
+        const bottom = hGuides[hGuides.length - 1].position;
+        const left = vGuides[0].position;
+        setSelection(lockBleedAspect(left, top, bottom, originalSize ? originalSize.width : null));
+        setAutoDetected(true);
+      } else if (hGuides.length >= 2 && vGuides.length >= 2) {
         setSelection({
           left: vGuides[0].position,
           top: hGuides[0].position,
@@ -696,13 +790,25 @@ export function BleedEditorModal({
       setSelection(null);
       setAutoDetected(false);
     }
-  }, [guidesLocked, guides]);
+  }, [guidesLocked, guides, method, originalSize]);
 
   const hasValidSelection = selection != null && selection.right > selection.left && selection.bottom > selection.top;
 
   // BleedRegion 計算（選択範囲は元画像ピクセル絶対座標）
   const region: BleedRegion | null = (() => {
     if (!originalSize) return null;
+    // 方式「なし」= 断ち切りなし（処理タイプの“なし”は廃止し方式に一本化）
+    if (method === 'none' || tachikiriType === 'none') {
+      return {
+        left: 0, top: 0, right: 0, bottom: 0,
+        refWidth: originalSize.width,
+        refHeight: originalSize.height,
+        tachikiriType: 'none',
+        strokeColor,
+        fillColor,
+        fillOpacity,
+      };
+    }
     const base = {
       refWidth: originalSize.width,
       refHeight: originalSize.height,
@@ -710,11 +816,8 @@ export function BleedEditorModal({
       strokeColor,
       fillColor,
       fillOpacity,
-      blurRadius: tachikiriType !== 'none' && effectiveBlurRadius > 0 ? effectiveBlurRadius : undefined,
+      blurRadius: effectiveBlurRadius > 0 ? effectiveBlurRadius : undefined,
     };
-    if (tachikiriType === 'none') {
-      return { left: 0, top: 0, right: 0, bottom: 0, ...base };
-    }
     if (!hasValidSelection || !selection) return null;
     return {
       left: Math.max(0, selection.left),
@@ -725,8 +828,8 @@ export function BleedEditorModal({
     };
   })();
 
-  // エクスポート可否: 'none' は選択不要、それ以外は有効な選択が必要
-  const canApply = tachikiriType === 'none' || hasValidSelection;
+  // 保存可否: 方式「なし」/処理タイプ「なし」は選択不要、それ以外は有効な選択が必要
+  const canApply = method === 'none' || tachikiriType === 'none' || hasValidSelection;
 
   const referencePanel = isActionMethod ? (
     <div className="bleed-reference-panel">
@@ -802,8 +905,28 @@ export function BleedEditorModal({
                 type="text"
                 value={jsonSearch}
                 onChange={(e) => setJsonSearch(e.target.value)}
-                placeholder="作品名を検索"
+                placeholder="作品名・JSONファイル名で検索"
               />
+              {jsonSearch.trim() && (
+                <div className="bleed-json-results">
+                  {crossLabelResults.length === 0 ? (
+                    <div className="bleed-json-results-empty">該当なし</div>
+                  ) : (
+                    crossLabelResults.map((w) => (
+                      <button
+                        key={w.path}
+                        type="button"
+                        className={`bleed-json-result ${jsonWorkPath === w.path ? 'active' : ''}`}
+                        onClick={() => { setJsonLabel(w.label); setJsonWorkPath(w.path); setSelection(null); }}
+                        title={`${w.label} / ${w.name}`}
+                      >
+                        <span className="bleed-json-result-name">{w.name}</span>
+                        <span className="bleed-json-result-label">{w.label}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
             <div className="form-group">
               <label>レーベル</label>

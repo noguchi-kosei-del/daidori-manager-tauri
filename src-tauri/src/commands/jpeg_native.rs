@@ -9,7 +9,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 
-use crate::native_jpeg::{process_single_image, ProcessOptions};
+use crate::native_jpeg::{process_image_to_rgb, save_processed_rgb, ProcessOptions};
 
 use super::photoshop::create_unique_output_dir;
 
@@ -27,6 +27,10 @@ pub struct NativeJpegFile {
     pub output_name: String,
     /// 断ち切り・リサイズ・品質設定（cover/body/本文ごとに別値）
     pub options: ProcessOptions,
+    /// 追加出力先（絶対パス）。1回のデコードから別形式も書き出す（拡張子で TIFF/JPEG 判定）。
+    /// 例: TIFF併産時に EPUB用 JPEG を同時生成する用途。
+    #[serde(default)]
+    pub extra_outputs: Vec<String>,
 }
 
 /// 変換設定全体
@@ -90,6 +94,10 @@ pub async fn run_native_jpeg_convert(
         if Path::new(&f.path).exists() {
             crate::security::ensure_read_path(&f.path)?;
         }
+        // 追加出力先（別形式の同時書き出し）も許可リストへ
+        for ex in &f.extra_outputs {
+            let _ = crate::security::grant_user_path(ex);
+        }
     }
 
     // 出力ディレクトリ: 既存の場合は連番で新規作成
@@ -118,6 +126,10 @@ pub async fn run_native_jpeg_convert(
             .map(|(idx, file)| {
                 let input = Path::new(&file.path);
                 let dest = out_base.join(&file.output_name);
+                // output_name に分割サブフォルダ（例 "01/0001.jpg"）が含まれる場合に備えて親を作成
+                if let Some(parent) = dest.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
 
                 let result = if !input.exists() {
                     NativeJpegResult {
@@ -127,13 +139,37 @@ pub async fn run_native_jpeg_convert(
                         error: Some(format!("入力ファイルが存在しません: {}", file.path)),
                     }
                 } else {
-                    match process_single_image(input, &dest, &file.options) {
-                        Ok(()) => NativeJpegResult {
-                            file_name: file.output_name.clone(),
-                            success: true,
-                            output_path: Some(dest.to_string_lossy().to_string()),
-                            error: None,
-                        },
+                    // 1回のデコードから主出力＋追加出力（別形式）を書き出す
+                    match process_image_to_rgb(input, &file.options) {
+                        Ok(rgb) => {
+                            let mut write_res = save_processed_rgb(&rgb, &file.options, &dest);
+                            if write_res.is_ok() {
+                                for extra in &file.extra_outputs {
+                                    let ep = Path::new(extra);
+                                    if let Some(parent) = ep.parent() {
+                                        let _ = std::fs::create_dir_all(parent);
+                                    }
+                                    if let Err(e) = save_processed_rgb(&rgb, &file.options, ep) {
+                                        write_res = Err(e);
+                                        break;
+                                    }
+                                }
+                            }
+                            match write_res {
+                                Ok(()) => NativeJpegResult {
+                                    file_name: file.output_name.clone(),
+                                    success: true,
+                                    output_path: Some(dest.to_string_lossy().to_string()),
+                                    error: None,
+                                },
+                                Err(e) => NativeJpegResult {
+                                    file_name: file.output_name.clone(),
+                                    success: false,
+                                    output_path: None,
+                                    error: Some(e),
+                                },
+                            }
+                        }
                         Err(e) => NativeJpegResult {
                             file_name: file.output_name.clone(),
                             success: false,
