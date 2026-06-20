@@ -5,6 +5,7 @@ pub mod epubcheck;
 pub mod export;
 pub mod folder;
 pub mod jpeg_native;
+pub mod kenban;
 pub mod open_file;
 pub mod pdf;
 pub mod photoshop;

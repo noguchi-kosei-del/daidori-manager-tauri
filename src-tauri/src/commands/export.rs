@@ -1,7 +1,6 @@
 use crate::image_utils::validate_dimensions;
 use crate::types::ExportPage;
 use image::codecs::jpeg::JpegEncoder;
-use image::DynamicImage;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
@@ -41,32 +40,6 @@ fn get_image_dimensions(path: &Path) -> Result<(u32, u32), String> {
     Ok((width, height))
 }
 
-// 白紙画像を生成
-fn create_blank_image(width: u32, height: u32, output_path: &Path) -> Result<(), String> {
-    let ext = output_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("png")
-        .to_lowercase();
-
-    let img = image::RgbImage::from_pixel(width, height, image::Rgb([255, 255, 255]));
-    let dynamic_img = DynamicImage::ImageRgb8(img);
-
-    match ext.as_str() {
-        "jpg" | "jpeg" => {
-            let mut file = fs::File::create(output_path).map_err(|e| e.to_string())?;
-            let encoder = JpegEncoder::new_with_quality(&mut file, 95);
-            dynamic_img
-                .write_with_encoder(encoder)
-                .map_err(|e| e.to_string())?;
-        }
-        _ => {
-            dynamic_img.save(output_path).map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(())
-}
-
 // エクスポートタスク（並列実行用）
 enum ExportTask {
     CopyFile {
@@ -78,16 +51,9 @@ enum ExportTask {
         dest: PathBuf,
         quality: u8,
     },
-    GenerateBlank {
-        width: u32,
-        height: u32,
+    // 白紙ページは固定仕様（1280×1818 / 600ppi / モノクロ）で生成する。
+    GenerateFixedBlank {
         dest: PathBuf,
-    },
-    GenerateBlankJpg {
-        width: u32,
-        height: u32,
-        dest: PathBuf,
-        quality: u8,
     },
 }
 
@@ -182,9 +148,6 @@ fn export_pages_sync(
         }
     }
 
-    let reference_size = dim_cache.values().next().copied();
-    let default_size = reference_size.unwrap_or((1654, 2339)); // A5 350dpi
-
     // フェーズ2: エクスポートタスクを収集（逐次、計算のみ）
     let mut tasks: Vec<ExportTask> = Vec::with_capacity(pages.len());
     let mut move_sources: Vec<PathBuf> = Vec::new();
@@ -229,35 +192,36 @@ fn export_pages_sync(
                 }
             }
             "blank" => {
-                // キャッシュからサイズを取得（前後のページを探索）
-                let mut size = default_size;
+                // 白紙ページのサイズは固定（1280×1818 / 600ppi / モノクロ）なので
+                // 隣接ページのサイズは参照しない。出力拡張子のみ隣接ページから決める。
                 let mut ext = reference_ext.clone();
+                let mut found = false;
 
                 // 前のページから
                 for j in (0..i).rev() {
                     if let Some(ref prev_path) = pages[j].source_path {
-                        if let Some(&dims) = dim_cache.get(prev_path) {
-                            size = dims;
-                            let prev_source = Path::new(prev_path);
-                            if let Some(e) = prev_source.extension().and_then(|e| e.to_str()) {
+                        if dim_cache.contains_key(prev_path) {
+                            if let Some(e) = Path::new(prev_path).extension().and_then(|e| e.to_str())
+                            {
                                 let e_lower = e.to_lowercase();
                                 if e_lower != "psd" {
                                     ext = e_lower;
                                 }
                             }
+                            found = true;
                             break;
                         }
                     }
                 }
 
                 // 後のページから（前がなければ）
-                if size == default_size {
+                if !found {
                     for next_page in &pages[i + 1..] {
                         if let Some(ref next_path) = next_page.source_path {
-                            if let Some(&dims) = dim_cache.get(next_path) {
-                                size = dims;
-                                let next_source = Path::new(next_path);
-                                if let Some(e) = next_source.extension().and_then(|e| e.to_str()) {
+                            if dim_cache.contains_key(next_path) {
+                                if let Some(e) =
+                                    Path::new(next_path).extension().and_then(|e| e.to_str())
+                                {
                                     let e_lower = e.to_lowercase();
                                     if e_lower != "psd" {
                                         ext = e_lower;
@@ -278,21 +242,7 @@ fn export_pages_sync(
                     ext
                 };
                 let dest = page_output_dir.join(format!("{}.{}", page.output_name, final_ext));
-
-                if final_ext == "jpg" || final_ext == "jpeg" {
-                    tasks.push(ExportTask::GenerateBlankJpg {
-                        width: size.0,
-                        height: size.1,
-                        dest,
-                        quality,
-                    });
-                } else {
-                    tasks.push(ExportTask::GenerateBlank {
-                        width: size.0,
-                        height: size.1,
-                        dest,
-                    });
-                }
+                tasks.push(ExportTask::GenerateFixedBlank { dest });
             }
             _ => {}
         }
@@ -319,26 +269,7 @@ fn export_pages_sync(
                 img.write_with_encoder(encoder).map_err(|e| e.to_string())?;
                 Ok(())
             })(),
-            ExportTask::GenerateBlank {
-                width,
-                height,
-                dest,
-            } => create_blank_image(*width, *height, dest),
-            ExportTask::GenerateBlankJpg {
-                width,
-                height,
-                dest,
-                quality,
-            } => (|| {
-                let img = image::RgbImage::from_pixel(*width, *height, image::Rgb([255, 255, 255]));
-                let dynamic_img = DynamicImage::ImageRgb8(img);
-                let mut file = fs::File::create(dest).map_err(|e| e.to_string())?;
-                let encoder = JpegEncoder::new_with_quality(&mut file, *quality);
-                dynamic_img
-                    .write_with_encoder(encoder)
-                    .map_err(|e| e.to_string())?;
-                Ok(())
-            })(),
+            ExportTask::GenerateFixedBlank { dest } => crate::blank_page::generate_blank(dest),
         };
         if let Err(e) = result {
             errors.lock().unwrap().push(e);

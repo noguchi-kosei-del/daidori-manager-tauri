@@ -183,22 +183,6 @@ fn create_unique_output_file(requested_path: &Path) -> Result<(PathBuf, File), S
     }
 }
 
-/// 非白紙ページの幅×高さで最頻値（最頻サイズ）を返す
-fn majority_size_of_non_blank(pages: &[EpubPage]) -> Option<(u32, u32)> {
-    use std::collections::HashMap;
-    let mut counts: HashMap<(u32, u32), usize> = HashMap::new();
-    for page in pages {
-        if page.is_blank {
-            continue;
-        }
-        if page.width == 0 || page.height == 0 {
-            continue;
-        }
-        *counts.entry((page.width, page.height)).or_insert(0) += 1;
-    }
-    counts.into_iter().max_by_key(|(_, c)| *c).map(|(s, _)| s)
-}
-
 use super::templates::{
     generate_container_xml, generate_nav_xhtml, generate_ncx, generate_opf, generate_page_xhtml,
     get_css_files_for_format, image_filename, image_folder, opf_filename, page_id, root_folder,
@@ -216,19 +200,15 @@ pub struct EpubBuilder {
 impl EpubBuilder {
     /// 新しいビルダーを作成
     pub fn new(mut config: EpubGenerateConfig) -> Self {
-        // 白紙ページのサイズは非白紙ページの多数派サイズに揃える
-        let majority = majority_size_of_non_blank(&config.pages);
-
         let normalizes_all_images =
             config.metadata.image_color_policy != EpubImageColorPolicy::PreserveOriginal;
 
         for page in &mut config.pages {
-            // 白紙ページは多数派サイズで白JPEGを生成する
+            // 白紙ページは固定仕様（1280×1818 / 600ppi / グレースケール白）で生成する。
+            // 多数派サイズや隣接ページサイズは参照しない。
             if page.is_blank {
-                if let Some((mw, mh)) = majority {
-                    page.width = mw;
-                    page.height = mh;
-                }
+                page.width = crate::blank_page::BLANK_WIDTH;
+                page.height = crate::blank_page::BLANK_HEIGHT;
                 page.filename = replace_filename_ext(&page.filename, "jpg");
                 continue;
             }
@@ -419,16 +399,10 @@ impl EpubBuilder {
 
                 let mut summary = ImageCopyResult::default();
                 let result = if page.is_blank {
-                    generate_blank_jpeg(
-                        page.width,
-                        page.height,
-                        &dest,
-                        target,
-                        page.is_cover,
-                        srgb_profile.as_deref(),
-                        adobe_rgb_profile.as_deref(),
-                        dot_gain_profile.as_deref(),
-                    )
+                    // 白紙ページは出力フォーマット設定によらず固定仕様
+                    // （1280×1818 / 600ppi / グレースケール白）で生成する。
+                    // Dot Gain プロファイルがあればモノクロ用 ICC として埋め込む。
+                    crate::blank_page::write_blank_jpeg(&dest, dot_gain_profile.as_deref())
                 } else {
                     let src = Path::new(&page.source_path);
                     if !src.exists() {
@@ -465,7 +439,13 @@ impl EpubBuilder {
                     }
                 };
                 result?;
-                match target {
+                // 白紙ページは常にグレースケール白で生成したため、集計上もモノクロ扱いにする。
+                let count_target = if page.is_blank {
+                    EpubImageTarget::GrayscaleDotGain
+                } else {
+                    target
+                };
+                match count_target {
                     EpubImageTarget::RgbSrgb => summary.rgb_srgb_count += 1,
                     EpubImageTarget::RgbAdobe => summary.adobe_rgb_count += 1,
                     EpubImageTarget::GrayscaleDotGain => {
@@ -483,12 +463,12 @@ impl EpubBuilder {
                 }
                 // 事前正規化コピーは Photoshop が埋め込んだ sRGB ICC をそのまま保持するため、
                 // システムの sRGB プロファイル未検出の警告は対象外。
-                if target == EpubImageTarget::RgbSrgb && srgb_profile.is_none() && !copy_pre_normalized {
+                if count_target == EpubImageTarget::RgbSrgb && srgb_profile.is_none() && !copy_pre_normalized {
                     summary.warnings.push(
                         "sRGB ICC profile was not found; RGB JPEGs were written without embedded sRGB ICC.".to_string(),
                     );
                 }
-                if target == EpubImageTarget::RgbAdobe && adobe_rgb_profile.is_none() {
+                if count_target == EpubImageTarget::RgbAdobe && adobe_rgb_profile.is_none() {
                     summary.warnings.push(
                         "Adobe RGB ICC profile was not found; RGB JPEGs were written without embedded Adobe RGB ICC.".to_string(),
                     );
@@ -1125,42 +1105,6 @@ fn convert_via_image_crate_to_jpeg(
     let img =
         image::open(src).map_err(|e| format!("Failed to decode image {}: {}", src.display(), e))?;
     write_rgb_jpeg(img, dest, srgb_profile)
-}
-
-fn generate_blank_jpeg(
-    width: u32,
-    height: u32,
-    dest: &Path,
-    target: EpubImageTarget,
-    is_cover: bool,
-    srgb_profile: Option<&[u8]>,
-    adobe_rgb_profile: Option<&[u8]>,
-    dot_gain_profile: Option<&[u8]>,
-) -> Result<(), String> {
-    let w = width.max(1);
-    let h = height.max(1);
-    match target {
-        EpubImageTarget::GrayscaleDotGain => {
-            let img = image::GrayImage::from_pixel(w, h, image::Luma([255]));
-            let img = resize_for_apple_books(DynamicImage::ImageLuma8(img), is_cover);
-            write_grayscale_jpeg(img, dest, dot_gain_profile)
-        }
-        EpubImageTarget::RgbAdobe => {
-            let img = image::RgbImage::from_pixel(w, h, image::Rgb([255, 255, 255]));
-            let img = resize_for_apple_books(DynamicImage::ImageRgb8(img), is_cover);
-            write_rgb_jpeg(img, dest, adobe_rgb_profile)
-        }
-        EpubImageTarget::NoIcc => {
-            let img = image::RgbImage::from_pixel(w, h, image::Rgb([255, 255, 255]));
-            let img = resize_for_apple_books(DynamicImage::ImageRgb8(img), is_cover);
-            write_rgb_jpeg(img, dest, None)
-        }
-        _ => {
-            let img = image::RgbImage::from_pixel(w, h, image::Rgb([255, 255, 255]));
-            let img = resize_for_apple_books(DynamicImage::ImageRgb8(img), is_cover);
-            write_rgb_jpeg(img, dest, srgb_profile)
-        }
-    }
 }
 
 /// Apple Books 向けリサイズのスケール係数を計算（1.0 なら等倍＝リサイズ不要）

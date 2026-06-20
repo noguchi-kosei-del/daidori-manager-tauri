@@ -810,7 +810,7 @@ dependencies = [
 
 [[package]]
 name = "daidori-manager-tauri"
-version = "1.9.0"
+version = "1.9.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -823,6 +823,7 @@ dependencies = [
  "mozjpeg",
  "natord",
  "pdfium-render",
+ "png 0.17.16",
  "psd",
  "rayon",
  "reqwest 0.12.28",

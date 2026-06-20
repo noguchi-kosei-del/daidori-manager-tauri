@@ -125,18 +125,23 @@ pub async fn run_photoshop_tiff_convert(
     let final_dir_fwd = final_output_dir.replace('\\', "/");
 
     for file_config in &mut config_with_output.files {
-        // outputPathを書き換え
+        // outputPathを書き換え。
+        // 検索文字列(output_dir_fwd)はフォワードスラッシュなので、対象側もフォワードに
+        // 正規化してから置換する。フロントから来る output_path はバックスラッシュのため、
+        // 正規化しないと一致せず final_output_dir(ユニーク化後)へ反映されず、
+        // JSXが元ディレクトリに書き込んで response.output_dir と実体がズレる。
         file_config.output_path = file_config
             .output_path
+            .replace('\\', "/")
             .replace(&output_dir_fwd, &final_dir_fwd);
 
-        // jpgOutputPathも書き換え
+        // jpgOutputPathも書き換え（同様にスラッシュ正規化してから置換）
         if let (Some(ref orig_jpg), Some(ref final_jpg)) = (&jpg_output_dir, &final_jpg_output_dir)
         {
             if let Some(ref mut jpg_path) = file_config.jpg_output_path {
                 let orig_fwd = orig_jpg.replace('\\', "/");
                 let final_fwd = final_jpg.replace('\\', "/");
-                *jpg_path = jpg_path.replace(&orig_fwd, &final_fwd);
+                *jpg_path = jpg_path.replace('\\', "/").replace(&orig_fwd, &final_fwd);
             }
         }
     }

@@ -1,6 +1,6 @@
 [package]
 name = "daidori-manager-tauri"
-version = "1.9.0"
+version = "1.9.1"
 description = "漫画の台割管理・入稿データ生成ツール"
 authors = ["you"]
 edition = "2021"
@@ -34,6 +34,8 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 image = { version = "0.25", features = ["jpeg", "png", "tiff"] }
 # TIFF併産(EPUB)用にLZW圧縮で書き出す（image クレートのTIFFは非圧縮のため直接 tiff を使用）
 tiff = "0.11"
+# 白紙ページPNGに解像度(pHYs)を埋め込むため直接 png を使用（image が依存する版に揃える）
+png = "0.17"
 psd = "0.3"
 memmap2 = "0.9"
 mozjpeg = "0.10"

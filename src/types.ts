@@ -407,6 +407,8 @@ export interface SavedEpubState {
   /** 19.3: PSD変換エンジン（高速ネイティブ/高品質Photoshop）も保存・復元の対象にする */
   colorEngine?: EpubColorEngine;
   pageOverrides?: SavedEpubPageOverride[];
+  /** 1冊版のファイルベース名（=作品名sumafo_ep話数）。分冊版の split.baseName とは独立。 */
+  singleBaseName?: string;
   split?: SavedEpubSplitState;
 }
 

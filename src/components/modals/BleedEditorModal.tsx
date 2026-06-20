@@ -48,6 +48,15 @@ function lockBleedAspect(
   return { left, top, right, bottom };
 }
 
+// 断ち切り範囲は出力（1280×1818＝640:909）と同じ縦横比でなければリサイズ時に歪む。
+// 範囲を描く方式（なし以外）では、選択範囲がこの比率でなければ保存＝書き出しさせない。
+const BLEED_ASPECT_TOLERANCE = 0.01; // 比率の許容誤差（座標の丸めを吸収）
+function matchesBleedAspect(width: number, height: number): boolean {
+  if (width <= 0 || height <= 0) return false;
+  const target = BLEED_TARGET_H / BLEED_TARGET_W; // 1818/1280 = 909/640
+  return Math.abs(height / width - target) / target <= BLEED_ASPECT_TOLERANCE;
+}
+
 function hexToRgba(hex: string, opacityPercent: number): string {
   const clean = hex.replace('#', '');
   const value = clean.length === 3
@@ -335,14 +344,12 @@ export function BleedEditorModal({
     const current = jsonWorks.find((work) => work.path === jsonWorkPath);
     return current && !filtered.some((work) => work.path === current.path) ? [current, ...filtered] : filtered;
   }, [jsonWorks, jsonWorkPath, normalizedJsonSearch]);
-  const filteredJsonRanges = useMemo(() => {
-    const indexed = jsonRanges.map((range, index) => ({ range, index }));
-    const filtered = normalizedJsonSearch
-      ? indexed.filter(({ range }) => range.label.toLowerCase().includes(normalizedJsonSearch))
-      : indexed;
-    const current = indexed.find(({ index }) => index === jsonRangeIdx);
-    return current && !filtered.some(({ index }) => index === current.index) ? [current, ...filtered] : filtered;
-  }, [jsonRanges, jsonRangeIdx, normalizedJsonSearch]);
+  // 検索欄は「作品名・JSONファイル名」専用。範囲（ラベル）には適用しない。
+  // （作品検索で絞ると範囲まで巻き込まれ、複数登録されていても1件しか出ない不具合になるため）
+  const filteredJsonRanges = useMemo(
+    () => jsonRanges.map((range, index) => ({ range, index })),
+    [jsonRanges],
+  );
 
   // 選択中の JSON 範囲を、この画像サイズに合わせた選択範囲(元画像px)へ変換
   const computeJsonSelection = useCallback(() => {
@@ -544,6 +551,11 @@ export function BleedEditorModal({
     if (!isOpen) return;
     if (method === 'none' || tachikiriType === 'none') {
       setHint('断ち切りなし — 原寸（またはリサイズのみ）でJPEG出力します');
+    } else if (
+      selection && selection.right > selection.left && selection.bottom > selection.top &&
+      !matchesBleedAspect(selection.right - selection.left, selection.bottom - selection.top)
+    ) {
+      setHint('縦横比が 640:909（1280:1818）ではありません — この比率でないと保存・書き出しできません');
     } else if (selection && autoDetected) {
       setHint('ガイドから自動検出しました — 画像上をドラッグして調整も可能です');
     } else if (selection) {
@@ -793,6 +805,12 @@ export function BleedEditorModal({
   }, [guidesLocked, guides, method, originalSize]);
 
   const hasValidSelection = selection != null && selection.right > selection.left && selection.bottom > selection.top;
+  // 範囲を描く方式（なし以外）では、選択範囲の縦横比が 640:909（=1280:1818）と一致している必要がある
+  const aspectRequired = method !== 'none' && tachikiriType !== 'none';
+  const aspectOk = hasValidSelection && selection != null
+    ? matchesBleedAspect(selection.right - selection.left, selection.bottom - selection.top)
+    : false;
+  const aspectWarning = aspectRequired && hasValidSelection && !aspectOk;
 
   // BleedRegion 計算（選択範囲は元画像ピクセル絶対座標）
   const region: BleedRegion | null = (() => {
@@ -828,8 +846,8 @@ export function BleedEditorModal({
     };
   })();
 
-  // 保存可否: 方式「なし」/処理タイプ「なし」は選択不要、それ以外は有効な選択が必要
-  const canApply = method === 'none' || tachikiriType === 'none' || hasValidSelection;
+  // 保存可否: 方式「なし」/処理タイプ「なし」は選択不要。それ以外は有効な選択かつ 640:909 比率が必須。
+  const canApply = !aspectRequired || (hasValidSelection && aspectOk);
 
   const referencePanel = isActionMethod ? (
     <div className="bleed-reference-panel">
@@ -1058,7 +1076,7 @@ export function BleedEditorModal({
             <h2>{label}の断ち切り範囲設定</h2>
             {pageNavControl}
           </div>
-          <div className="bleed-editor-hint">{hint}</div>
+          <div className="bleed-editor-hint" style={aspectWarning ? { color: 'var(--color-error, #dc2626)' } : undefined}>{hint}</div>
         </div>
 
         <div className="bleed-editor-body">
@@ -1129,6 +1147,7 @@ export function BleedEditorModal({
                     top: imageBounds.offsetY + selectionDisplay.top,
                     width: selectionDisplay.width, height: selectionDisplay.height,
                     ...selectionPreviewStyle,
+                    ...(aspectWarning ? { borderColor: 'var(--color-error, #dc2626)', boxShadow: '0 0 0 1px rgba(220, 38, 38, 0.55)' } : {}),
                   }} />
                 </>
               )}
@@ -1175,8 +1194,20 @@ export function BleedEditorModal({
           <div className="bleed-editor-panel">
             <div className="bleed-editor-panel-head">
               <div className="bleed-editor-panel-title">断ち切り設定</div>
-              {originalSize && (
-                <div className="bleed-editor-image-size">元画像 {originalSize.width} x {originalSize.height}</div>
+              {(originalSize || (aspectRequired && hasValidSelection && selection)) && (
+                <div className="bleed-editor-size-group">
+                  {originalSize && (
+                    <div className="bleed-editor-image-size">元画像 {originalSize.width} x {originalSize.height}</div>
+                  )}
+                  {aspectRequired && hasValidSelection && selection && (
+                    <div
+                      className="bleed-editor-image-size"
+                      style={aspectWarning ? { color: 'var(--color-error, #dc2626)' } : undefined}
+                    >
+                      選択 {Math.round(selection.right - selection.left)} x {Math.round(selection.bottom - selection.top)}（{aspectOk ? '640:909 ✓' : '比率不一致'}）
+                    </div>
+                  )}
+                </div>
               )}
             </div>
             {/* 断ち切り方式（全出力共通・断ち切りタブに一本化） */}
@@ -1398,7 +1429,12 @@ export function BleedEditorModal({
               <button className="btn-secondary bleed-editor-panel-action-btn" onClick={() => setShowCancelConfirm(true)}>
                 キャンセル
               </button>
-              <button className="btn-primary bleed-editor-panel-action-btn" onClick={() => region && onApply(region)} disabled={!region || !canApply}>
+              <button
+                className="btn-primary bleed-editor-panel-action-btn"
+                onClick={() => region && canApply && onApply(region)}
+                disabled={!region || !canApply}
+                title={aspectWarning ? '断ち切り範囲の縦横比が 640:909（1280:1818）ではないため保存できません' : undefined}
+              >
                 {applyLabel}
               </button>
             </div>

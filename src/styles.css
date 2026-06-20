@@ -2726,6 +2726,17 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
   font-size: 13px;
   font-weight: 600;
   color: var(--color-text-primary);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.bleed-editor-size-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+  text-align: right;
 }
 
 .bleed-editor-image-size {
@@ -2982,7 +2993,8 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
   right: 12px;
   bottom: 12px;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 10px;
   padding: 10px;
   border: 1px solid rgba(255, 255, 255, 0.18);
@@ -2994,7 +3006,8 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
 
 .bleed-guide-floating .bleed-lock-btn,
 .bleed-guide-floating .bleed-reset-btn {
-  width: auto;
+  width: 100%;
+  justify-content: center;
   min-height: 60px;
   padding: 14px 22px;
   gap: 10px;
@@ -3298,6 +3311,20 @@ body.light-mode .color-mode-badge.color-mode-badge-warning.active {
 
 .input-with-button { display: flex; gap: var(--spacing-sm); }
 .input-with-button input { flex: 1; }
+
+/* テキスト入力 + 固定サフィックス（例: ファイル名 + 「.epub」） */
+.input-with-suffix { display: flex; align-items: center; gap: var(--spacing-xs); }
+.input-with-suffix input { flex: 1; min-width: 0; }
+.input-suffix { color: var(--color-text-secondary); font-size: var(--font-size-sm); white-space: nowrap; }
+
+/* EPUBファイル名の合成入力（作品名 + 固定 sumafo_ep + 話数 [+ -分冊番号] + .epub） */
+.epub-filename-compose { display: flex; align-items: center; gap: var(--spacing-xs); flex-wrap: wrap; }
+.epub-filename-compose + .epub-filename-compose { margin-top: var(--spacing-xs); }
+.epub-filename-compose input { min-width: 0; }
+.epub-filename-compose > input:first-of-type { flex: 1 1 120px; }
+.epub-filename-compose .epub-filename-episode { flex: 0 1 96px; }
+.epub-filename-fixed { color: var(--color-text-secondary); font-size: var(--font-size-sm); white-space: nowrap; }
+.epub-filename-rowlabel { flex: 0 0 auto; min-width: 3.5em; color: var(--color-text-secondary); font-size: var(--font-size-xs); font-weight: 600; }
 
 .btn-small { padding: var(--spacing-xs) var(--spacing-sm); font-size: var(--font-size-xs); border-radius: 8px; }
 .btn-danger { background: linear-gradient(135deg, var(--color-error) 0%, #d45050 100%); color: white; }

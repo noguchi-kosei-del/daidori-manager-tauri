@@ -1,3 +1,4 @@
+mod blank_page;
 mod cache;
 // commands/epub/types は統合テスト（tests/）から参照するため pub
 pub mod commands;
@@ -91,6 +92,7 @@ use commands::epubcheck::validate_epub_with_epubcheck;
 use commands::export::export_pages;
 use commands::folder::{ensure_dir, get_folder_contents};
 use commands::jpeg_native::run_native_jpeg_convert;
+use commands::kenban::{detect_kenban_exe, launch_kenban_diff};
 use commands::open_file::open_file_with_default_app;
 use commands::pdf::rasterize_pdf;
 use commands::project::{
@@ -233,6 +235,8 @@ pub fn run() {
             verify_epub_internal,
             detect_tachimi_exe,
             generate_tachimi_chapter_pdfs,
+            detect_kenban_exe,
+            launch_kenban_diff,
             rasterize_pdf,
             security::register_paths,
             updater_local::check_local_update,

@@ -1,5 +1,6 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import type { Chapter, Page } from '../types';
 import type { ExportOptions, BleedRegion, BleedSettings } from '../components/modals/ExportModal';
 
@@ -7,6 +8,20 @@ interface AllPageItem {
   page: Page;
   chapter: Chapter;
   globalIndex: number;
+}
+
+export type KenbanBounds = { left: number; top: number; right: number; bottom: number };
+
+// KENBAN（差分比較ツール）連携用ペイロード。
+// JPEG/TIFF 生成成功時に「原稿(PSD)→出力」のペアと断ち切り範囲を保持し、
+// 完了ダイアログの「KENBANで差分比較」ボタンから launch_kenban_diff へ渡す。
+// 各ペアが自分のクロップ範囲(bounds)を持つ（ページ別bounds対応）。表紙と本文で範囲が違っても
+// 各ページが自分の範囲で正しくトリミング比較される。
+export interface KenbanHandoff {
+  outputDir: string;
+  pairs: { sourcePath: string; outputPath: string; bounds: KenbanBounds }[];
+  // 代表範囲（後方互換: per-page 非対応の KENBAN でも selectionRanges として使う）
+  bounds: KenbanBounds | null;
 }
 
 interface ExportResultDialog {
@@ -17,6 +32,71 @@ interface ExportResultDialog {
   outputDir?: string;
   isError?: boolean;
   exportedPages?: { filename: string; pageType: string; chapterName?: string; label?: string }[];
+  kenbanHandoff?: KenbanHandoff;
+}
+
+// 原稿が PSD/PSB か（KENBAN psd-tiff 比較は原稿=PSD が対象）
+function isPsdSourcePath(path: string): boolean {
+  return /\.(psd|psb)$/i.test(path);
+}
+
+// KENBAN（検版）の送信対象判定用に、ページ自身のチャプターへ「明示設定」された断ち切り範囲を返す。
+// resolveBleedRegion と違い、本文ごとモードのフォールバック（未設定チャプターへ先頭話の設定を流用）は
+// 行わない。これにより「断ち切りを設定したファイルのみ」を厳密に判定し、未設定チャプターのページは
+// 検版へ送らない（出力処理側は従来どおり resolveBleedRegion を使い、全本文へ断ち切りを適用する）。
+function explicitBleedRegion(
+  bleedSettings: BleedSettings | undefined,
+  chapterType: string,
+  chapterId: string
+): BleedRegion | null {
+  if (!bleedSettings?.enabled) return null;
+  if (chapterType === 'cover') return bleedSettings.cover ?? null;
+  if (bleedSettings.mode === 'per-chapter') {
+    // フォールバックしない: そのチャプターに明示設定された範囲のみ
+    return bleedSettings.perChapter?.[chapterId] ?? null;
+  }
+  return bleedSettings.body ?? null;
+}
+
+// ページが属するチャプターの断ち切りが「クロップ系」(crop_only / crop_and_stroke) として
+// 明示設定されているとき、そのクロップ範囲を返す。
+// none / fill / stroke / 未設定（フォールバック含む）は null（＝検版に送らない）。
+// KENBAN psd-tiff は cropBounds でPSDをトリミングして比較するため、クロップ系のみが対象。
+function cropBoundsOf(
+  bleedSettings: BleedSettings | undefined,
+  chapterType: string,
+  chapterId: string
+): KenbanBounds | null {
+  const region = explicitBleedRegion(bleedSettings, chapterType, chapterId);
+  if (!region) return null;
+  if (region.tachikiriType !== 'crop_only' && region.tachikiriType !== 'crop_and_stroke') return null;
+  return {
+    left: Math.max(0, Math.round(region.left)),
+    top: Math.max(0, Math.round(region.top)),
+    right: Math.max(0, Math.round(region.right)),
+    bottom: Math.max(0, Math.round(region.bottom)),
+  };
+}
+
+// 送るページ群のクロップ範囲から代表を1つ選ぶ（KENBAN は1範囲のみ受け付ける）。
+// 最多数の範囲を採用。範囲が混在する場合、少数派ページはトリミングが厳密一致しない可能性がある。
+function pickRepresentativeBounds(boundsList: KenbanBounds[]): KenbanBounds | null {
+  const tally = new Map<string, { bounds: KenbanBounds; count: number }>();
+  for (const b of boundsList) {
+    const key = `${b.left},${b.top},${b.right},${b.bottom}`;
+    const e = tally.get(key);
+    if (e) e.count += 1;
+    else tally.set(key, { bounds: b, count: 1 });
+  }
+  let rep: KenbanBounds | null = null;
+  let max = 0;
+  for (const e of tally.values()) {
+    if (e.count > max) {
+      max = e.count;
+      rep = e.bounds;
+    }
+  }
+  return rep;
 }
 
 // 断ち切り適用: chapterType/chapterId から該当 BleedRegion を取得
@@ -169,6 +249,29 @@ function buildChapterTiffFileName(
 
 export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
   const [exportResultDialog, setExportResultDialog] = useState<ExportResultDialog>({ show: false, title: '', message: '' });
+
+  // JPEG生成（run_native_jpeg_convert）の進捗。直接JPEGエクスポート中のみ表示する。
+  // 同じ jpeg-convert-progress イベントは PDF生成/EPUB生成の内部変換でも発火するため、
+  // activeRef で「直接JPEGエクスポート中」に限定して取りこぼし/誤表示を防ぐ。
+  const [jpegProgress, setJpegProgress] = useState<{ current: number; total: number } | null>(null);
+  const jpegProgressActiveRef = useRef(false);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let mounted = true;
+    listen<{ phase: string; current: number; total: number }>('jpeg-convert-progress', (event) => {
+      if (!mounted || !jpegProgressActiveRef.current) return;
+      const { phase, current, total } = event.payload;
+      setJpegProgress({ current: phase === 'done' ? total : current, total });
+    }).then((fn) => {
+      if (mounted) unlisten = fn;
+      else fn();
+    }).catch((err) => console.warn('[useExport] JPEG progress listener failed:', err));
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, []);
 
   const handleExport = useCallback(async (options: ExportOptions) => {
     const { outputPath, exportMode, convertToJpg, jpgQuality, convertToTiff, renameTiffAndSave, renameMode, startNumber, digits, prefix, perChapterSettings, bleedSettings, runAction, actionSetPath, actionName, stripActionSaveClose, tiffResizeEnabled, tiffTargetWidth, tiffTargetHeight } = options;
@@ -394,6 +497,25 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
         const totalPages = successResults.length + nonConvertiblePages.length;
         const message = `${totalPages}ページのエクスポートが完了しました`;
 
+        // KENBAN 連携: 原稿PSD → 出力TIFF のペアを収集。
+        // 「断ち切り(クロップ)を設定したページのみ」送る（未設定ページは除外）。各ペアに自分のクロップ範囲を付与。
+        // TIFF応答には outputPath が無いため、出力先＝response.outputDir(+分割サブフォルダ)+outputName で再構成する。
+        const kenbanPairs: { sourcePath: string; outputPath: string; bounds: KenbanBounds }[] = [];
+        for (const p of convertiblePages) {
+          if (!isPsdSourcePath(p.path)) continue;
+          const crop = cropBoundsOf(bleedSettings, p.chapterType, p.chapterId);
+          if (!crop) continue; // 断ち切り(クロップ)未設定は送らない
+          kenbanPairs.push({
+            sourcePath: p.path,
+            outputPath: `${response.outputDir}\\${p.splitFolder ? `${p.splitFolder}\\` : ''}${p.outputName}`,
+            bounds: crop,
+          });
+        }
+        const kenbanHandoff: KenbanHandoff | undefined =
+          successResults.length > 0 && kenbanPairs.length > 0
+            ? { outputDir: response.outputDir, pairs: kenbanPairs, bounds: pickRepresentativeBounds(kenbanPairs.map((p) => p.bounds)) }
+            : undefined;
+
         setExportResultDialog({
           show: true,
           title: errorResults.length > 0 ? 'エクスポート完了（一部エラー）' : 'エクスポート完了',
@@ -402,6 +524,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
           outputDir: response.outputDir,
           isError: errorResults.length > 0,
           exportedPages,
+          kenbanHandoff,
         });
       } catch (error) {
         setExportResultDialog({
@@ -473,6 +596,9 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
         };
 
         console.log('ネイティブJPEG変換開始:', { fileCount: config.files.length, outputDir: outputPath });
+        // 進捗バー表示を開始（jpeg-convert-progress を受け付ける）
+        jpegProgressActiveRef.current = true;
+        setJpegProgress({ current: 0, total: config.files.length });
         const response = await invoke<{ results: { fileName: string; success: boolean; outputPath?: string; error?: string }[]; outputDir: string }>('run_native_jpeg_convert', {
           config,
           outputDir: outputPath,
@@ -548,6 +674,25 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
         const totalPages = successResults.length + nonFilePages.length;
         const message = `${totalPages}ページのエクスポートが完了しました`;
 
+        // KENBAN 連携: 原稿PSD → 出力JPEG のペアを収集。
+        // 「断ち切り(クロップ)を設定したページのみ」送る（未設定ページは除外）。各ペアに自分のクロップ範囲を付与。
+        // results は入力順（convertiblePages 順）で outputPath を返すため index で対応付けできる。
+        const kenbanPairs: { sourcePath: string; outputPath: string; bounds: KenbanBounds }[] = [];
+        for (let i = 0; i < convertiblePages.length; i++) {
+          const cp = convertiblePages[i];
+          if (!isPsdSourcePath(cp.path)) continue;
+          const crop = cropBoundsOf(bleedSettings, cp.chapterType, cp.chapterId);
+          if (!crop) continue; // 断ち切り(クロップ)未設定は送らない
+          const r = response.results[i];
+          if (r && r.success && r.outputPath) {
+            kenbanPairs.push({ sourcePath: cp.path, outputPath: r.outputPath, bounds: crop });
+          }
+        }
+        const kenbanHandoff: KenbanHandoff | undefined =
+          kenbanPairs.length > 0
+            ? { outputDir: response.outputDir, pairs: kenbanPairs, bounds: pickRepresentativeBounds(kenbanPairs.map((p) => p.bounds)) }
+            : undefined;
+
         setExportResultDialog({
           show: true,
           title: errorResults.length > 0 ? 'エクスポート完了（一部エラー）' : 'エクスポート完了',
@@ -556,6 +701,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
           outputDir: response.outputDir,
           isError: errorResults.length > 0,
           exportedPages,
+          kenbanHandoff,
         });
       } catch (error) {
         setExportResultDialog({
@@ -564,6 +710,10 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
           message: String(error),
           isError: true,
         });
+      } finally {
+        // 進捗バーを閉じる（結果ダイアログと重ならないよう成功/失敗どちらでもクリア）
+        jpegProgressActiveRef.current = false;
+        setJpegProgress(null);
       }
       return;
     }
@@ -664,6 +814,7 @@ export function useExport(chapters: Chapter[], allPages: AllPageItem[]) {
   return {
     // State
     exportResultDialog,
+    jpegProgress,
     // Actions
     handleExport,
     setExportResultDialog,

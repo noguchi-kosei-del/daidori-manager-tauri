@@ -284,14 +284,10 @@ fn get_source_dimensions(path: &Path) -> Result<(u32, u32), String> {
     }
 }
 
-fn create_blank_jpeg(width: u32, height: u32, dest: &Path) -> Result<(), String> {
-    let img = image::RgbImage::from_pixel(width, height, image::Rgb([255, 255, 255]));
-    let dynamic_img = image::DynamicImage::ImageRgb8(img);
-    let mut file = fs::File::create(dest).map_err(|e| e.to_string())?;
-    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 95);
-    dynamic_img
-        .write_with_encoder(encoder)
-        .map_err(|e| e.to_string())
+fn create_blank_jpeg(_width: u32, _height: u32, dest: &Path) -> Result<(), String> {
+    // 白紙ページは固定仕様（1280×1818 / 600ppi / グレースケール白）で生成する。
+    // 隣接ページのサイズ（_width/_height）は参照しない。
+    crate::blank_page::write_blank_jpeg(dest, None)
 }
 
 fn link_or_copy_file(src: &Path, dest: &Path) -> Result<(), String> {

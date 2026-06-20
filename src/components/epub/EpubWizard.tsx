@@ -2,7 +2,6 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { save } from '@tauri-apps/plugin-dialog';
 import { desktopDir, join } from '@tauri-apps/api/path';
 import {
   EpubMetadata,
@@ -48,6 +47,14 @@ const FORMAT_PRESETS: { value: EpubFormat; label: string; sub: string; recommend
 
 const STEPS = ['本の情報', '表紙・奥付', '仕上がり', '分割', '確認して書き出し'];
 
+// EPUBファイル名として使えるよう Windows 禁止文字・末尾の空白/ドットを除去する
+function sanitizeEpubFileName(name: string): string {
+  const cleaned = (name.trim() || 'output')
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/[. ]+$/g, '');
+  return cleaned || 'output';
+}
+
 interface EpubWizardProps {
   isOpen: boolean;
   onClose: () => void;
@@ -74,8 +81,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
   const [colorMode, setColorMode] = useState<'auto' | 'custom'>('auto');
   // 確認ステップ: EPUBと同時に JPEG（全ページ）も <作品名>/JPEG へ書き出すか
   const [outputJpeg, setOutputJpeg] = useState(false);
-  // 作品フォルダ名（確認ステップで編集可能。空のときは .epub ファイル名から導出）
-  const [workFolderName, setWorkFolderName] = useState('');
+  // 作品フォルダ名はタイトルと同一にするため、独立した状態は持たない（effectiveWorkName で算出）。
   // カスタム: チャプター種別ごとのプロファイル指定（未指定は 'auto'）
   const [customChapterProfiles, setCustomChapterProfiles] = useState<Partial<Record<ChapterType, EpubPageImageProfileOverride>>>({});
   const [hybridCssProfile, setHybridCssProfile] = useState<HybridCssProfile>('current');
@@ -91,7 +97,9 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
 
   // 識別子・出力
   const [bookUuid, setBookUuid] = useState('');
+  // 出力先は固定フォルダ（Script_Output/台割出力）。ファイル名（primaryBaseName）から自動導出する。
   const [outputPath, setOutputPath] = useState('');
+  const [defaultEpubDir, setDefaultEpubDir] = useState('');
 
   // カスタムで表示する「登録済みチャプター種別」（台割に存在する種別のみ・規定順）
   const presentChapterTypes = useMemo<ChapterType[]>(() => {
@@ -106,10 +114,21 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
   const [splitAlsoWhole, setSplitAlsoWhole] = useState(false);
   const [splitRanges, setSplitRanges] = useState<{ startIndex: number; endIndex: number }[]>([]);
   const [splitSelectingStart, setSplitSelectingStart] = useState<number | null>(null);
-  const [splitBaseName, setSplitBaseName] = useState('');
-  const [splitSuffixStart, setSplitSuffixStart] = useState(1);
-  const [splitSuffixDigits, setSplitSuffixDigits] = useState(3);
-  const [splitSuffixSeparator, setSplitSuffixSeparator] = useState('_');
+  // ファイル名は「作品名 + sumafo_ep + 話数」で構成（"sumafo_ep" は固定）。
+  // 作品名は1冊版/分冊版で独立。話数（ep）は両者で連動（共通の状態を使う）。
+  const [epubWorkName, setEpubWorkName] = useState('');     // 1冊版の作品名
+  const [splitWorkName, setSplitWorkName] = useState('');   // 分冊版の作品名
+  const [episode, setEpisode] = useState('');               // 話数（ep）：1冊版・分冊版で共通
+  // 分冊版の連番は「-1, -2, …」固定（区切り '-' / 開始 1 / 桁数 1）。
+  const [splitSuffixStart] = useState(1);
+  const [splitSuffixDigits] = useState(1);
+  const [splitSuffixSeparator] = useState('-');
+
+  // 合成ファイルベース名（"sumafo_ep" は固定リテラル、話数は共通）。作品名は1冊版/分冊版で独立。
+  const singleBaseName = `${epubWorkName.trim()}sumafo_ep${episode.trim()}`;
+  const splitBaseName = `${splitWorkName.trim()}sumafo_ep${episode.trim()}`;
+  // 保存ファイル名（outputPath）の基準: 分冊版のみのときは分冊版名、それ以外は1冊版名。
+  const primaryBaseName = splitEnabled && !splitAlsoWhole ? splitBaseName : singleBaseName;
   // 巻ごとのタイトル・読み仮名（rangesと同じindexで対応）
   const [splitTitles, setSplitTitles] = useState<string[]>([]);
   const [splitTitleFileAsList, setSplitTitleFileAsList] = useState<string[]>([]);
@@ -120,7 +139,41 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
   // 作品フォルダ名: 未入力時は保存先 .epub のファイル名から導出（プレビュー/既定表示用）
   const epubBaseForUi =
     (outputPath.split(/[\\/]/).pop() || '').replace(/\.epub$/i, '') || projectName || '新規プロジェクト';
-  const effectiveWorkName = workFolderName.trim() || epubBaseForUi;
+  // 作品フォルダ名はタイトルと同一にする（タイトル未入力時のみファイル名ベースにフォールバック）。
+  const effectiveWorkName = title.trim() || epubBaseForUi;
+
+  // ファイル名プレビュー（1冊版＝<名前>.epub / 分冊版＝<名前>-1.epub …）
+  const fileBaseSanitized = sanitizeEpubFileName(splitBaseName.trim() || projectName || 'output');
+  const splitSuffixPreview = `${splitSuffixSeparator}${String(splitSuffixStart).padStart(splitSuffixDigits, '0')}`;
+
+  // EPUBファイル名の合成入力行（作品名 + 固定 sumafo_ep + 話数 [+ -分冊番号] + .epub）。
+  // 作品名は行ごとに独立、話数（ep）は共通の state（episode）を編集＝1冊版/分冊版で連動。
+  const renderFilenameRow = (
+    workName: string,
+    setWorkName: (v: string) => void,
+    withVolumeSuffix: boolean,
+    label?: string,
+  ) => (
+    <div className="epub-filename-compose">
+      {label && <span className="epub-filename-rowlabel">{label}</span>}
+      <input
+        type="text"
+        value={workName}
+        onChange={(e) => setWorkName(e.target.value)}
+        placeholder="作品名"
+      />
+      <span className="epub-filename-fixed">sumafo_ep</span>
+      <input
+        type="text"
+        className="epub-filename-episode"
+        value={episode}
+        onChange={(e) => setEpisode(e.target.value)}
+        placeholder="話数"
+      />
+      {withVolumeSuffix && <span className="epub-filename-fixed">-分冊番号</span>}
+      <span className="input-suffix">.epub</span>
+    </div>
+  );
 
   // store（表紙/奥付・プレビューページ）
   const epubPages = useStore((s) => s.epubPages);
@@ -177,15 +230,23 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     if (saved?.pageDirection) setPageDirection(saved.pageDirection);
     if (saved?.viewportWidth) setViewportWidth(saved.viewportWidth);
     if (saved?.viewportHeight) setViewportHeight(saved.viewportHeight);
+    if (saved?.singleBaseName) {
+      // 保存された1冊版「作品名sumafo_ep話数」を作品名/話数へ分解（固定の "sumafo_ep" で分割）
+      const m = saved.singleBaseName.match(/^(.*)sumafo_ep(.*)$/);
+      if (m) { setEpubWorkName(m[1]); setEpisode(m[2]); }
+      else { setEpubWorkName(saved.singleBaseName); }
+    }
     if (saved?.split) {
       const sp = saved.split;
       setSplitEnabled(sp.enabled);
       setSplitAlsoWhole(sp.alsoWhole ?? false);
       setSplitRanges(sp.ranges ?? []);
-      if (sp.baseName) setSplitBaseName(sp.baseName);
-      if (sp.suffixStart !== undefined) setSplitSuffixStart(sp.suffixStart);
-      if (sp.suffixDigits !== undefined) setSplitSuffixDigits(sp.suffixDigits);
-      if (sp.suffixSeparator !== undefined) setSplitSuffixSeparator(sp.suffixSeparator);
+      if (sp.baseName) {
+        // 保存された分冊版「作品名sumafo_ep話数」を作品名/話数へ分解（固定の "sumafo_ep" で分割）
+        const m = sp.baseName.match(/^(.*)sumafo_ep(.*)$/);
+        if (m) { setSplitWorkName(m[1]); setEpisode(m[2]); }
+        else { setSplitWorkName(sp.baseName); }
+      }
       // 巻ごとのタイトル・読みを安定キーで復元
       if (sp.ranges?.length) {
         const volumeAt = (i: number) => {
@@ -206,28 +267,42 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     // 既定名「新規プロジェクト」はタイトルに流し込まず、プレースホルダ（作品タイトル）を表示する
     const meaningfulName = projectName && projectName !== '新規プロジェクト' ? projectName : '';
     if (saved?.title === undefined && !title && meaningfulName) setTitle(meaningfulName);
-    if (!saved?.split?.baseName && !splitBaseName && meaningfulName) setSplitBaseName(meaningfulName);
+    if (!saved?.singleBaseName && meaningfulName) setEpubWorkName(meaningfulName);
+    if (!saved?.split?.baseName && meaningfulName) setSplitWorkName(meaningfulName);
     // UUID: 保存値があれば固定で再利用（同じ本の更新版で識別子を維持）。なければ新規発行。
     if (saved?.bookUuid) {
       setBookUuid(saved.bookUuid);
     } else if (!bookUuid) {
       invoke<string>('generate_book_uuid').then(setBookUuid).catch(() => {});
     }
-    if (!outputPath) {
+    if (!defaultEpubDir) {
       (async () => {
         try {
-          // 既定の保存先: <Desktop>\Script_Output\台割出力\<作品名>.epub（JPG/TIFFと同じ「台割出力」配下）
+          // 既定の保存先フォルダ: <Desktop>\Script_Output\台割出力（JPG/TIFFと同じ「台割出力」配下）
           const desktop = await desktopDir();
           const epubDir = await join(desktop, 'Script_Output', '台割出力');
           await invoke('ensure_dir', { path: epubDir }).catch(() => {});
-          const requestedPath = await join(epubDir, `${projectName || 'output'}.epub`);
-          setOutputPath(await resolveAvailableOutputPath(requestedPath));
+          setDefaultEpubDir(epubDir);
         } catch { /* ignore */ }
       })();
     }
     seededRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
+
+  // 出力先パスを基準ファイル名（primaryBaseName）＋既定フォルダから自動導出する。
+  // 保存ダイアログは廃止し、Script_Output/台割出力 に「<ファイル名>.epub」で保存する。
+  // 同名衝突時の (1) 付与は生成時（handleGenerate の resolveAvailableOutputPath）で処理する。
+  useEffect(() => {
+    if (!isOpen || !defaultEpubDir) return;
+    let cancelled = false;
+    (async () => {
+      const name = sanitizeEpubFileName(primaryBaseName.trim() || projectName || 'output');
+      const path = await join(defaultEpubDir, `${name}.epub`);
+      if (!cancelled) setOutputPath(path);
+    })();
+    return () => { cancelled = true; };
+  }, [isOpen, defaultEpubDir, primaryBaseName, projectName]);
 
   // フォームの変更をプロジェクト保存用の epubState に同期（入力した内容が保存・再生成で残るように）。
   // seededRef が立つまで（保存値の反映前）は書き込まない。volumes は handleEpubGenerate 管理なので維持する。
@@ -264,6 +339,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
       imageColorPolicy: colorMode === 'auto' ? 'auto' : imageColorPolicy,
       customChapterProfiles: colorMode === 'custom' ? customChapterProfiles : undefined,
       colorEngine,
+      singleBaseName,
       split: {
         enabled: splitEnabled,
         alsoWhole: splitAlsoWhole,
@@ -297,6 +373,7 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     colorEngine,
     splitEnabled,
     splitAlsoWhole,
+    singleBaseName,
     splitBaseName,
     splitSuffixStart,
     splitSuffixDigits,
@@ -361,15 +438,6 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
     setPublisherFileAs(opt.fileAs);
   };
 
-  const handleSelectOutput = async () => {
-    const selected = await save({
-      title: 'EPUBの保存先を選択',
-      defaultPath: outputPath || `${projectName || 'output'}.epub`,
-      filters: [{ name: 'EPUB', extensions: ['epub'] }],
-    });
-    if (selected) setOutputPath(await resolveAvailableOutputPath(selected));
-  };
-
   // UUID再生成（明示操作のみ。同期effectで epubState にも保存される）
   const regenerateUuid = async () => {
     try {
@@ -416,11 +484,17 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
   // 各ステップの未入力チェック
   const stepError = (s: number): string | null => {
     if (s === 0) {
+      // 作品名は作る対象ごとに必須（1冊版/分冊版で独立）。話数（ep）は共通で必須。
+      const needsSingle = !splitEnabled || splitAlsoWhole;
+      const needsSplit = splitEnabled;
+      if (needsSingle && !epubWorkName.trim()) return '1冊版の作品名を入力してください';
+      if (needsSplit && !splitWorkName.trim()) return '分冊版の作品名を入力してください';
+      if (!episode.trim()) return '話数を入力してください';
       if (!title.trim()) return 'タイトルを入力してください';
       if (authors.length === 0 || !authors[0].name.trim()) return '著者を1人以上入力してください';
     }
     if (s === 3 && splitEnabled && splitRanges.length === 0) return '分割範囲を1つ以上選択してください';
-    if (s === 4 && !outputPath) return '出力先を選んでください';
+    if (s === 4 && !outputPath) return '保存先フォルダを準備中です。少し待ってから再度お試しください';
     return null;
   };
   const currentError = stepError(step);
@@ -511,6 +585,28 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
           <div className="epub-wizard-body" key={step}>
             {step === 0 && (
               <div className="epub-wizard-form">
+                <p className="epub-wizard-lead">EPUBのファイル名・冊数を決めてから、ストアに表示される情報を入力します。</p>
+                <div className="form-group">
+                  <label>冊数</label>
+                  <div className="epub-wizard-seg epub-wizard-seg-wide">
+                    <button className={!splitEnabled ? 'active' : ''} onClick={() => { setSplitEnabled(false); setSplitAlsoWhole(false); }}>1冊版</button>
+                    <button className={splitEnabled && !splitAlsoWhole ? 'active' : ''} onClick={() => { setSplitEnabled(true); setSplitAlsoWhole(false); }}>分冊版（話ごと）</button>
+                    <button className={splitEnabled && splitAlsoWhole ? 'active' : ''} onClick={() => { setSplitEnabled(true); setSplitAlsoWhole(true); }}>両方作成</button>
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label>EPUBファイル名 <span className="req">必須</span></label>
+                  {splitEnabled && splitAlsoWhole ? (
+                    <>
+                      {renderFilenameRow(epubWorkName, setEpubWorkName, false, '1冊版')}
+                      {renderFilenameRow(splitWorkName, setSplitWorkName, true, '分冊版')}
+                    </>
+                  ) : splitEnabled ? (
+                    renderFilenameRow(splitWorkName, setSplitWorkName, true)
+                  ) : (
+                    renderFilenameRow(epubWorkName, setEpubWorkName, false)
+                  )}
+                </div>
                 <p className="epub-wizard-lead">電子書籍の表紙やストアに表示される情報です。</p>
                 <div className="form-group">
                   <label>タイトル <span className="req">必須</span></label>
@@ -689,14 +785,11 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
 
             {step === 3 && (
               <div className="epub-wizard-form">
-                <p className="epub-wizard-lead">1冊にまとめるか、話ごとに分けて複数のEPUBにするかを選びます。「両方作成」は分割版と1冊版を同時に書き出します。</p>
-                <div className="epub-wizard-seg epub-wizard-seg-wide">
-                  <button className={!splitEnabled ? 'active' : ''} onClick={() => { setSplitEnabled(false); setSplitAlsoWhole(false); }}>1冊にまとめる</button>
-                  <button className={splitEnabled && !splitAlsoWhole ? 'active' : ''} onClick={() => { setSplitEnabled(true); setSplitAlsoWhole(false); }}>話ごとに分ける</button>
-                  <button className={splitEnabled && splitAlsoWhole ? 'active' : ''} onClick={() => { setSplitEnabled(true); setSplitAlsoWhole(true); }}>両方作成</button>
-                </div>
-                {splitEnabled && (
+                {!splitEnabled ? (
+                  <div className="epub-wizard-split-guide">「本の情報」で「1冊版」が選択されています。分割範囲の指定は不要です（冊数は「本の情報」ステップで変更できます）。</div>
+                ) : (
                   <>
+                    <p className="epub-wizard-lead">分けたい範囲を指定します。各巻は「{fileBaseSanitized}{splitSuffixPreview}.epub」… と連番で保存されます。</p>
                     <div className="epub-wizard-split-guide">
                       {splitSelectingStart !== null
                         ? `開始: p${splitSelectingStart + 1} → 終了ページをクリック`
@@ -754,29 +847,6 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                         ))}
                       </div>
                     )}
-                    <details className="epub-advanced">
-                      <summary>ファイル名の設定</summary>
-                      <div className="form-row">
-                        <div className="form-group flex-grow">
-                          <label>ベース名</label>
-                          <input type="text" value={splitBaseName} onChange={(e) => setSplitBaseName(e.target.value)} />
-                        </div>
-                        <div className="form-group">
-                          <label>区切り</label>
-                          <input type="text" value={splitSuffixSeparator} onChange={(e) => setSplitSuffixSeparator(e.target.value)} />
-                        </div>
-                      </div>
-                      <div className="form-row">
-                        <div className="form-group">
-                          <label>開始番号</label>
-                          <input type="number" min={0} value={splitSuffixStart} onChange={(e) => setSplitSuffixStart(Number(e.target.value) || 0)} />
-                        </div>
-                        <div className="form-group">
-                          <label>桁数</label>
-                          <input type="number" min={1} max={5} value={splitSuffixDigits} onChange={(e) => setSplitSuffixDigits(Math.max(1, Math.min(5, Number(e.target.value) || 1)))} />
-                        </div>
-                      </div>
-                    </details>
                   </>
                 )}
               </div>
@@ -802,27 +872,16 @@ export function EpubWizard({ isOpen, onClose, onGenerate, chapters, projectName 
                   <dt>色</dt><dd>{colorMode === 'auto' ? 'おまかせ' : 'カスタム（種別ごと）'}</dd>
                   <dt>表紙 / 奥付</dt><dd>{coverPage ? `p${epubPages.indexOf(coverPage) + 1}` : '自動'} / {colophonPage ? `p${epubPages.indexOf(colophonPage) + 1}` : '自動'}</dd>
                   <dt>読む向き</dt><dd>{pageDirection === 'rtl' ? '右開き' : '左開き'}</dd>
-                  <dt>分割</dt><dd>{splitEnabled ? (splitAlsoWhole ? `両方作成（話ごと${splitRanges.length}冊＋1冊版）` : `話ごと（${splitRanges.length}冊）`) : '1冊にまとめる'}</dd>
+                  <dt>冊数</dt><dd>{splitEnabled ? (splitAlsoWhole ? `両方作成（分冊${splitRanges.length}冊＋1冊版）` : `分冊版（${splitRanges.length}冊）`) : '1冊版'}</dd>
                   <dt>ページ数</dt><dd>{totalPages}ページ</dd>
                 </dl>
                 <div className="form-group">
-                  <label>保存先 <span className="req">必須</span></label>
-                  <div className="input-with-button">
-                    <input type="text" value={outputPath} readOnly placeholder="保存先を選択..." />
-                    <button className="btn-secondary btn-small" onClick={handleSelectOutput}>参照</button>
-                  </div>
+                  <label>保存先（自動）</label>
+                  <input type="text" value={outputPath} readOnly />
                 </div>
                 <div className="form-group">
-                  <label>作品フォルダ名</label>
-                  <input
-                    type="text"
-                    value={workFolderName}
-                    onChange={(e) => setWorkFolderName(e.target.value)}
-                    placeholder={epubBaseForUi}
-                  />
-                  <div className="form-hint">
-                    この名前でフォルダ・EPUB・プロジェクトファイルが作成されます（配下に TIFF / JPEG / 分割 / 1冊版 / Project）。
-                  </div>
+                  <label>作品フォルダ名（タイトルと同一）</label>
+                  <input type="text" value={effectiveWorkName} readOnly />
                 </div>
                 <label className="checkbox-label epub-jpeg-option">
                   <input type="checkbox" checked={outputJpeg} onChange={(e) => setOutputJpeg(e.target.checked)} />

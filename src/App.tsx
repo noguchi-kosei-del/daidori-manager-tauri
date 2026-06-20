@@ -1083,6 +1083,7 @@ function App() {
 
   const {
     exportResultDialog,
+    jpegProgress,
     handleExport,
     setExportResultDialog,
     closeExportResultDialog,
@@ -1356,6 +1357,45 @@ function App() {
 
   // Tachimi 連携: 全チャプターのファイルを Tachimi に渡して PDF 化フローへ移行する
   const TACHIMI_EXE_STORAGE_KEY = 'daidori_tachimi_exe_path';
+  // KENBAN 連携: JPEG/TIFF生成完了後に原稿↔出力を差分比較ツールへ渡す
+  const KENBAN_EXE_STORAGE_KEY = 'daidori_kenban_exe_path';
+
+  // JPEG/TIFF生成の完了ダイアログから KENBAN（差分比較）へ遷移する。
+  // 完了時に useExport が収集した kenbanHandoff（原稿↔出力ペア＋断ち切り範囲）を渡す。
+  const handleLaunchKenbanDiff = useCallback(async () => {
+    const handoff = exportResultDialog.kenbanHandoff;
+    if (!handoff) return;
+    try {
+      const hint = localStorage.getItem(KENBAN_EXE_STORAGE_KEY);
+      const exe = await invoke<string | null>('detect_kenban_exe', { hint: hint ?? null }).catch(() => null);
+      if (exe) {
+        localStorage.setItem(KENBAN_EXE_STORAGE_KEY, exe);
+      } else {
+        localStorage.removeItem(KENBAN_EXE_STORAGE_KEY);
+        setExportResultDialog({
+          show: true,
+          title: 'KENBAN が見つかりません',
+          message: 'kenban.exe を自動検出できませんでした。KENBAN をインストールしてください。',
+          isError: true,
+        });
+        return;
+      }
+      await invoke('launch_kenban_diff', {
+        outputDir: handoff.outputDir,
+        pairs: handoff.pairs,
+        bounds: handoff.bounds,
+        exePath: exe,
+      });
+      closeExportResultDialog();
+    } catch (e) {
+      setExportResultDialog({
+        show: true,
+        title: 'KENBAN 起動エラー',
+        message: typeof e === 'string' ? e : (e instanceof Error ? e.message : String(e)),
+        isError: true,
+      });
+    }
+  }, [exportResultDialog.kenbanHandoff, setExportResultDialog, closeExportResultDialog]);
 
   // tachimi.exe を自動検出。前回成功パスを hint として優先し、無ければ既知の候補を探索する。
   const detectTachimiExe = useCallback(async (): Promise<string | null> => {
@@ -2150,18 +2190,21 @@ function App() {
 
   // EPUB生成ハンドラ
   const handleEpubGenerate = async (metadata: EpubMetadata, outputPath: string, splitSettings?: EpubSplitSettings, outputJpeg = false, workFolderNameOverride?: string) => {
-    // 出力を「作品タイトル」フォルダ配下に集約: <保存先>/<作品名>/{TIFF, 分割, 1冊版, Project}
+    // 出力を「<作品名>EPUB」フォルダ配下に集約: <保存先>/<作品名>EPUB/{TIFF, EPUB分冊版, EPUB1冊版, Project}
     const epubSlash = Math.max(outputPath.lastIndexOf('/'), outputPath.lastIndexOf('\\'));
     const epubFileName = epubSlash >= 0 ? outputPath.slice(epubSlash + 1) : outputPath;
     const epubSaveDir = epubSlash >= 0 ? outputPath.slice(0, epubSlash) : '';
     const epubBaseName = epubFileName.replace(/\.epub$/i, '') || DEFAULT_PROJECT_NAME;
     // 作品フォルダ名は確認ステップで編集可能（未指定なら .epub ファイル名から導出）
     const workFolderName = sanitizeFileName(workFolderNameOverride?.trim() || epubBaseName);
-    const workDir = epubSaveDir ? await join(epubSaveDir, workFolderName) : workFolderName;
-    const singleEpubDir = await join(workDir, '1冊版');
-    const splitEpubDir = await join(workDir, '分割');
-    // EPUB・プロジェクトのファイル名も作品フォルダ名に合わせて統一する
-    const epubFileNameFinal = `${workFolderName}.epub`;
+    // 作業フォルダ名は「<作品名>EPUB」。EPUB/プロジェクトのファイル名には EPUB を付けない（作品名のまま）。
+    const workDirName = `${workFolderName}EPUB`;
+    const workDir = epubSaveDir ? await join(epubSaveDir, workDirName) : workDirName;
+    const singleEpubDir = await join(workDir, 'EPUB1冊版');
+    const splitEpubDir = await join(workDir, 'EPUB分冊版');
+    // EPUBファイル名は「EPUBファイル名」入力（=outputPath のベース名）を使う。作品フォルダ名（=タイトル）とは別物。
+    // 分冊版は buildSplitOutputPath が splitSettings.baseName で上書きするため、ここのファイル名部分はディレクトリ用。
+    const epubFileNameFinal = `${sanitizeFileName(epubBaseName)}.epub`;
     const singleEpubPath = await join(singleEpubDir, epubFileNameFinal);
     const splitTemplatePath = await join(splitEpubDir, epubFileNameFinal);
     const tiffDir = await join(workDir, 'TIFF');
@@ -2459,7 +2502,10 @@ function App() {
             continue;
           }
 
-          const volumeOutputPath = buildSplitOutputPath(splitTemplatePath, { ...splitSettings, baseName: workFolderName }, i);
+          // 分冊版のファイル名は分冊版用のベース名（splitSettings.baseName）を使う。
+          // 1冊版（=作品フォルダ名）とは独立して命名できるようにする。
+          const splitFileBaseName = sanitizeFileName(splitSettings.baseName?.trim() || workFolderName);
+          const volumeOutputPath = buildSplitOutputPath(splitTemplatePath, { ...splitSettings, baseName: splitFileBaseName }, i);
           const volumeTitle = splitSettings.titles?.[i]?.trim() || splitMetadata.title;
           const volumeTitleFileAs =
             splitSettings.titleFileAsList?.[i]?.trim() ||
@@ -4031,6 +4077,15 @@ function App() {
                   出力タブへ
                 </button>
               )}
+              {!exportResultDialog.isError && exportResultDialog.kenbanHandoff && (
+                <button
+                  className="btn-secondary btn-small"
+                  onClick={handleLaunchKenbanDiff}
+                  title="原稿PSDと生成した画像をKENBANで差分比較します"
+                >
+                  KENBANで差分比較
+                </button>
+              )}
               <button
                 className="btn-primary btn-small"
                 onClick={closeExportResultDialog}
@@ -4115,6 +4170,38 @@ function App() {
                 )}
                 {isFetchPhase && (
                   <span className="output-path">{pdfRasterizeProgress.pdfName}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* JPEG生成進捗オーバーレイ */}
+      {jpegProgress && (() => {
+        const total = jpegProgress.total || 0;
+        const cur = jpegProgress.current || 0;
+        const isIndeterminate = total === 0;
+        const percent = isIndeterminate ? 0 : Math.min(100, Math.round((cur / total) * 100));
+        return (
+          <div className="modal-overlay epub-progress-overlay">
+            <div className="epub-progress-dialog">
+              <div className="epub-progress-title">JPEGを生成中</div>
+              <div className="epub-progress-phase">画像をJPEGに変換しています</div>
+              <div className="epub-progress-bar-track">
+                <div
+                  className={`epub-progress-bar-fill ${isIndeterminate ? 'indeterminate' : ''}`}
+                  style={isIndeterminate ? undefined : { width: `${percent}%` }}
+                />
+              </div>
+              <div className="epub-progress-meta">
+                {isIndeterminate ? (
+                  <span>準備中…</span>
+                ) : (
+                  <>
+                    <span>{cur} / {total} ページ</span>
+                    <span>{percent}%</span>
+                  </>
                 )}
               </div>
             </div>
