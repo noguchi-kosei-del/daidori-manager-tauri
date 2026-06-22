@@ -223,9 +223,23 @@ export function OutputTab({
     event.preventDefault();
   };
 
-  const handlePdfNavigationKey = useCallback((key: string, scrollTarget?: HTMLDivElement | null) => {
+  const handlePdfNavigationKey = useCallback((key: string, jumpToEdge: boolean, scrollTarget?: HTMLDivElement | null) => {
     const el = scrollTarget ?? pdfPreviewRef.current;
     if (!el) return false;
+    const maxScroll = Math.max(0, el.scrollWidth - el.clientWidth);
+
+    // Ctrl/Cmd + 横方向キー: 先頭/末尾のページへジャンプ（RTL: ←=進む→末尾, →=戻る→先頭）。
+    // 横方向キー以外の修飾は対象外（他のショートカットを潰さない）。
+    if (jumpToEdge) {
+      if (key === 'ArrowLeft') {
+        setPdfScrollDistance(el, 0, 'smooth'); // 末尾（最後のページ）
+        return true;
+      } else if (key === 'ArrowRight') {
+        setPdfScrollDistance(el, maxScroll, 'smooth'); // 先頭（最初のページ）
+        return true;
+      }
+      return false;
+    }
 
     if (key === 'ArrowLeft' || key === 'ArrowDown') {
       scrollPdfPreviewByPages(1);
@@ -251,7 +265,7 @@ export function OutputTab({
   }, [scrollPdfPreviewByPages, setPdfScrollDistance]);
 
   const handlePdfPreviewKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (handlePdfNavigationKey(event.key, event.currentTarget)) {
+    if (handlePdfNavigationKey(event.key, event.ctrlKey || event.metaKey, event.currentTarget)) {
       event.preventDefault();
     }
   };
@@ -344,7 +358,10 @@ export function OutputTab({
     if (target !== 'pdf' || totalPages === 0) return;
 
     const handleDocumentKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (event.altKey || event.shiftKey) return;
+      const jumpToEdge = event.ctrlKey || event.metaKey;
+      // 修飾キーは Ctrl/Cmd + 横方向キー（先頭/末尾ジャンプ）だけ許可。それ以外の修飾付きは他ショートカット優先。
+      if (jumpToEdge && event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
 
       const active = document.activeElement as HTMLElement | null;
       const isTyping =
@@ -355,7 +372,7 @@ export function OutputTab({
           active.isContentEditable);
       if (isTyping) return;
 
-      if (handlePdfNavigationKey(event.key)) {
+      if (handlePdfNavigationKey(event.key, jumpToEdge)) {
         event.preventDefault();
       }
     };

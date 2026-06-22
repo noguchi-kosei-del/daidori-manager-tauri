@@ -7502,8 +7502,10 @@ h3.section-heading {
 }
 .output-settings-body .export-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: var(--spacing-md) var(--spacing-xl);
+  /* 出力方法／リネーム設定を常に左右2カラムに固定（縦積みを防ぎ1画面に収める）。
+     幅が足りない時は 900px メディアクエリで1カラムへ戻す */
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-md) var(--spacing-lg);
   align-items: start;
 }
 .output-settings-body .export-col {
@@ -7567,8 +7569,8 @@ h3.section-heading {
    display:flex/column より詳細度を上げて上書きする） */
 .output-settings-body .export-modal-embedded .modal-body.export-body-with-tree {
   display: grid;
-  grid-template-columns: minmax(300px, 420px) 1fr;
-  gap: var(--spacing-xl);
+  grid-template-columns: minmax(260px, 380px) 1fr;
+  gap: var(--spacing-lg);
   align-items: stretch;
 }
 .export-form-main {
@@ -7581,8 +7583,28 @@ h3.section-heading {
   .output-settings-body .export-modal-embedded .modal-body.export-body-with-tree {
     grid-template-columns: 1fr;
   }
+  /* 幅が狭い時は出力方法／リネーム設定も1カラムへ戻す */
+  .output-settings-body .export-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
+/* 出力タブ左カラム: 上=フォルダ構成図（縦に伸縮）／下=出力先フォルダ。
+   出力先フォルダを構成図の下へ逃がすことで右カラムの縦を詰め、生成ボタンを1画面に収める */
+.export-tree-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+  min-width: 0;
+}
+.export-tree-col .export-folder-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.export-tree-col .export-dest-row {
+  flex: 0 0 auto;
+  margin: 0;
+}
 .export-folder-tree {
   display: flex;
   flex-direction: column;
@@ -7608,20 +7630,21 @@ h3.section-heading {
   line-height: 1.6;
 }
 .oft-tree, .oft-children { list-style: none; margin: 0; padding: 0; }
-.oft-children { margin-left: 9px; }
+.oft-children { margin-left: 9px; --oft-gap: 8px; }
 .oft-li { position: relative; }
-/* 子ノードの接続線（縦線＋エルボー）でツリーらしさを出す */
-.oft-children > .oft-li { padding-left: 18px; }
+/* 子ノードの接続線（縦線＋エルボー）でツリーらしさを出す。--oft-gap で各ノード間に縦の余白を空け、
+   接続線は gap 分だけ上へ伸ばして親ノードまで届かせる */
+.oft-children > .oft-li { padding-left: 18px; margin-top: var(--oft-gap); }
 .oft-children > .oft-li::before {
   content: '';
   position: absolute;
   left: 0;
-  top: 0;
+  top: calc(-1 * var(--oft-gap));
   bottom: 0;
   width: 1.5px;
   background: var(--color-border-accent, var(--color-border));
 }
-.oft-children > .oft-li:last-child::before { bottom: auto; height: 15px; }
+.oft-children > .oft-li:last-child::before { bottom: auto; height: calc(15px + var(--oft-gap)); }
 .oft-children > .oft-li::after {
   content: '';
   position: absolute;
@@ -7869,7 +7892,7 @@ h3.section-heading {
   flex-wrap: wrap;
   gap: var(--spacing-sm);
   width: 100%;
-  padding: 10px 14px;
+  padding: 7px 12px;
   border: 1px solid var(--color-border);
   border-radius: var(--border-radius);
   background: var(--color-bg-primary);
@@ -8398,7 +8421,7 @@ h3.section-heading {
 .epub-wizard {
   display: flex;
   width: min(1340px, 96vw);
-  height: min(680px, 88vh);
+  height: min(880px, 94vh);
   background: var(--color-bg-primary);
   border: 1px solid var(--color-border);
   border-radius: var(--border-radius-lg);

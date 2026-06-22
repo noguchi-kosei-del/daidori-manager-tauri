@@ -509,6 +509,26 @@ export function ExportModal({
   const wizardCurKey = wizardSteps[wizardIdx].key;
   const wizardIsLast = wizardIdx >= wizardSteps.length - 1;
 
+  // 出力先フォルダ選択。embedded（出力タブ）時は左のフォルダ構成図の下に置き、
+  // 右カラムの縦を詰めて「生成」ボタンを1画面内に収める。非embedded時は従来位置（生成ボタン直前）。
+  const outputDestNode = (
+    <div className="form-group export-fullrow export-dest-row">
+      <label className="section-heading"><FolderIcon size={15} />出力先フォルダ</label>
+      <div className="input-with-button">
+        <input
+          type="text"
+          value={outputPath}
+          onChange={(e) => setOutputPath(e.target.value)}
+          placeholder="フォルダを選択..."
+          readOnly
+        />
+        <button className="btn-secondary btn-small" onClick={handleSelectFolder}>
+          参照
+        </button>
+      </div>
+    </div>
+  );
+
   const { shouldRender, isClosing } = useModalAnimation(isOpen);
   if (!embedded && !shouldRender) return null;
 
@@ -523,21 +543,25 @@ export function ExportModal({
           </div>
         )}
         <div className={`modal-body${embedded ? ' export-body-with-tree' : ''}`}>
-          {/* 左: 保存先ディレクトリのマーメイド風フォルダ構成図（出力タブ＝embedded時のみ） */}
+          {/* 左: 保存先ディレクトリのマーメイド風フォルダ構成図（出力タブ＝embedded時のみ）。
+              構成図の下に出力先フォルダを置き、右カラムの空きを使って生成ボタンを画面内に収める。 */}
           {embedded && (
-            <OutputFolderTree
-              outputPath={outputPath}
-              outputFormat={outputFormat}
-              exportMode={exportMode}
-              renameMode={renameMode}
-              splitRanges={splitRanges}
-              splitAlsoWhole={splitAlsoWhole}
-              prefix={prefix}
-              startNumber={startNumber}
-              digits={digits}
-              chapters={chapters}
-              perChapterSettings={perChapterSettings}
-            />
+            <div className="export-tree-col">
+              <OutputFolderTree
+                outputPath={outputPath}
+                outputFormat={outputFormat}
+                exportMode={exportMode}
+                renameMode={renameMode}
+                splitRanges={splitRanges}
+                splitAlsoWhole={splitAlsoWhole}
+                prefix={prefix}
+                startNumber={startNumber}
+                digits={digits}
+                chapters={chapters}
+                perChapterSettings={perChapterSettings}
+              />
+              {outputDestNode}
+            </div>
           )}
           {/* 右: 出力設定フォーム本体 */}
           <div className="export-form-main">
@@ -793,22 +817,8 @@ export function ExportModal({
           </div>
           </div>
           </div>
-          {/* 出力先フォルダは最後（生成ボタンの直前）に */}
-          <div className="form-group export-fullrow export-dest-row">
-            <label className="section-heading"><FolderIcon size={15} />出力先フォルダ</label>
-            <div className="input-with-button">
-              <input
-                type="text"
-                value={outputPath}
-                onChange={(e) => setOutputPath(e.target.value)}
-                placeholder="フォルダを選択..."
-                readOnly
-              />
-              <button className="btn-secondary btn-small" onClick={handleSelectFolder}>
-                参照
-              </button>
-            </div>
-          </div>
+          {/* 出力先フォルダ: 非embedded（モーダル）時のみ生成ボタンの直前に。embedded時は左カラムへ移動済み */}
+          {!embedded && outputDestNode}
           </div>
         </div>
         <div className="modal-footer">
